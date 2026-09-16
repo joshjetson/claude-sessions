@@ -1,0 +1,6 @@
+/target
+/docs/
+.claude/
+.DS_Store
+*.swp
+*.swo

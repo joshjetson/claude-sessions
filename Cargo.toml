@@ -1,0 +1,21 @@
+[package]
+name = "claude-sessions"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "A live terminal dashboard for your Claude Code sessions — conversations, task board, QA pipelines, and deploys in one TUI"
+repository = "https://github.com/joshjetson/claude-sessions"
+homepage = "https://github.com/joshjetson/claude-sessions"
+readme = "README.md"
+keywords = ["claude-code", "tui", "dashboard", "ratatui", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = ["assets/", ".github/"]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+lto = true
+strip = true
