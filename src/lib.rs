@@ -9,5 +9,6 @@
 pub mod cli;
 pub mod config;
 pub mod paths;
+pub mod transcript;
 pub mod types;
 pub mod util;

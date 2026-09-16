@@ -116,7 +116,7 @@ pub struct ProgressData {
 /// The projection of a transcript's trailing entry that the status machine and
 /// the activity label need — nothing more.
 ///
-/// The parser (phase 2) builds these; keeping the view this narrow means status
+/// [`crate::transcript`] builds these; keeping the view this narrow means status
 /// detection can be exercised without a transcript on disk, and the daemon can
 /// hold one per session without pinning whole message bodies in memory.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ pub struct Prompt {
     pub timestamp: String,
 }
 
-/// Everything phase 2's parser reads out of one transcript file.
+/// Everything [`crate::transcript`] reads out of one transcript file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParsedSession {

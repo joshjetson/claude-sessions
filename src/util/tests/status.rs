@@ -1,8 +1,11 @@
 //! The status machine and the activity label — the two things the sessions tree
 //! reads off a transcript's trailing entry.
 
+use crate::transcript::fixtures::{name, transcripts};
+use crate::transcript::{parse_session_file, Entry};
 use crate::types::{Color, EntryKind, LastEntry, MessageRole, ProgressData, SessionStatus};
 use crate::util::{activity_label, detect_session_status};
+use std::collections::BTreeSet;
 use std::time::{Duration, SystemTime};
 
 /// A fixed "now" so every age in these tests is exact.
@@ -169,8 +172,93 @@ fn known_gap_modern_trailing_entry_types_fall_through_to_idle() {
             "{kind} no longer falls through to idle"
         );
     }
-    // The companion canary — "no live transcript ends with a user/assistant
-    // entry" — needs the scrubbed fixtures, and lands with the parser in phase 2.
+    // The companion canary, over real transcripts, is the test below.
+}
+
+#[test]
+fn known_gap_canary_no_real_transcript_ends_on_a_conversational_entry() {
+    // The proof that the gap above is real rather than theoretical: not one of
+    // the eight scrubbed sessions ends on a `user` or `assistant` line, so every
+    // one of them reports idle the moment it stops being freshly written — no
+    // matter what Claude was actually doing. Fixing the gap means teaching the
+    // machine about the bookkeeping types; when this test starts failing,
+    // Claude Code went back to ending transcripts on the conversation itself and
+    // the branches above became reachable again.
+    for path in transcripts() {
+        let file = name(&path);
+        let parsed = parse_session_file(&path).expect("fixture reads");
+        let last = parsed.last_entry.expect("a transcript has a last entry");
+        assert!(
+            !matches!(last.kind, EntryKind::User | EntryKind::Assistant),
+            "{file} now ends on a {} entry — the status machine can see the \
+             conversation again, so revisit the known gap",
+            last.kind.as_str()
+        );
+        assert_eq!(
+            detect_session_status(Some(&last), seconds_ago(30), now()),
+            SessionStatus::Idle,
+            "{file}: a real transcript reports something other than idle"
+        );
+    }
+}
+
+#[test]
+fn every_entry_type_in_the_fixtures_is_one_we_have_considered() {
+    // Claude Code emits far more entry types than the parser consumes. This says
+    // the ignoring is deliberate: a type that appears in regenerated fixtures and
+    // is on neither list fails here, so somebody decides whether the parser or
+    // the status machine should care before it is quietly dropped.
+    //
+    // Drives the status machine and the conversation pane:
+    const HANDLED: &[&str] = &["user", "assistant", "system", "progress"];
+    // Seen in real transcripts and deliberately ignored — bookkeeping that
+    // carries no conversation. Every one of these reaching the status machine as
+    // the trailing entry is the known gap above.
+    const IGNORED: &[&str] = &[
+        "summary",
+        "attachment",
+        "ai-title",
+        "last-prompt",
+        "mode",
+        "permission-mode",
+        "atis-latch",
+        "pr-link",
+        "queue-operation",
+        "file-history-snapshot",
+        "file-history-delta",
+        "agent-name",
+        "x-claude-md",
+    ];
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    for path in transcripts() {
+        let body = std::fs::read_to_string(&path).expect("fixture reads");
+        for line in body.lines() {
+            if let Some(entry) = Entry::parse_line(line) {
+                seen.insert(entry.last_entry().kind.as_str().to_string());
+            }
+        }
+    }
+
+    let unknown: Vec<&str> = seen
+        .iter()
+        .map(String::as_str)
+        .filter(|t| !t.is_empty() && !HANDLED.contains(t) && !IGNORED.contains(t))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "new transcript entry type(s): {} — decide whether the parser must handle \
+         them, then add them to HANDLED or IGNORED",
+        unknown.join(", ")
+    );
+    // And the reverse: the fixtures must still exercise the types we do handle,
+    // or the suite has stopped testing what it claims to.
+    for kind in ["user", "assistant", "system"] {
+        assert!(
+            seen.contains(kind),
+            "no {kind} entries left in the fixtures"
+        );
+    }
 }
 
 #[test]
@@ -239,8 +327,8 @@ fn activity_label_is_empty_for_unknown_and_missing_entries() {
 #[test]
 fn known_gap_progress_labels_still_work_but_are_unreachable() {
     // Current Claude Code emits no `progress` entries; the branch is kept
-    // working so the day they return the label is right. The fixture-wide canary
-    // that proves they are absent lands with the parser in phase 2.
+    // working so the day they return the label is right. The canary below is
+    // what proves they are absent.
     assert_eq!(
         activity_label(Some(&progress("bash_progress", None))),
         "running command"
@@ -265,4 +353,26 @@ fn known_gap_progress_labels_still_work_but_are_unreachable() {
         activity_label(Some(&progress("something_new", None))),
         "processing"
     );
+}
+
+#[test]
+fn known_gap_canary_no_real_transcript_carries_a_progress_entry() {
+    // Pairs with the label test above: the `progress` branches of both the label
+    // and the status machine are unreachable on current Claude Code. If this
+    // fails, progress entries are back — which also means `detect_session_status`
+    // will start reporting `working` from them again.
+    for path in transcripts() {
+        let file = name(&path);
+        let body = std::fs::read_to_string(&path).expect("fixture reads");
+        for (n, line) in body.lines().enumerate() {
+            let Some(entry) = Entry::parse_line(line) else {
+                continue;
+            };
+            assert!(
+                !matches!(entry.last_entry().kind, EntryKind::Progress),
+                "{file}:{} is a progress entry — the unreachable branches are live again",
+                n + 1
+            );
+        }
+    }
 }
