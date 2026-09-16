@@ -165,6 +165,29 @@ impl ConfigHandle {
         }
     }
 
+    /// The per-level notification sounds, with the system defaults filled in.
+    pub fn sounds(&self) -> crate::ui::actions::Sounds {
+        let block = self.config.sounds.as_ref();
+        if block.and_then(|block| block.enabled) == Some(false) {
+            return crate::ui::actions::Sounds {
+                success: None,
+                warn: None,
+                error: None,
+                info: None,
+            };
+        }
+        let default = crate::ui::actions::Sounds::default();
+        let pick = |configured: Option<&String>, fallback: Option<String>| {
+            configured.cloned().filter(|s| !s.is_empty()).or(fallback)
+        };
+        crate::ui::actions::Sounds {
+            success: pick(block.and_then(|b| b.success.as_ref()), default.success),
+            warn: pick(block.and_then(|b| b.warn.as_ref()), default.warn),
+            error: pick(block.and_then(|b| b.error.as_ref()), default.error),
+            info: pick(block.and_then(|b| b.info.as_ref()), default.info),
+        }
+    }
+
     pub fn board_hide_filter(&self) -> BoardHideFilter {
         let board = self.config.board.as_ref();
         let hide_states = match board.and_then(|b| b.hide_states.as_ref()) {

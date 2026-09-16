@@ -7,9 +7,16 @@
 //! the file by area; the dispatcher below is an enum, so a dialog that exists
 //! and is not handled will not compile.
 //!
-//! What is here is the sessions-view half: Phases 9b/10/11 add the board,
-//! deploy, pipeline and log dialogs as further variants and further modules.
+//! Split by area: [`session`] is the sessions tree's, [`board`] / [`folders`] /
+//! [`odoo`] / [`pipeline`] belong to the board tab, and Phase 10 adds the
+//! deploy ones the same way.
 
+pub mod board;
+pub mod folders;
+pub mod gates;
+pub mod odoo;
+pub mod pipeline;
+pub mod project_filter;
 pub mod session;
 pub mod settings;
 pub mod shutdown;
@@ -21,15 +28,43 @@ use ratatui::layout::Rect;
 use ratatui::Frame;
 
 use crate::config::ConfigHandle;
+use crate::ui::board::{SessionTarget, StartRequest};
 use crate::ui::state::{Action, Quit};
 
+pub use board::{ContextDialog, TaskAction, TaskMenu};
+pub use folders::{DirPicker, FolderManager, SavedDirPicker, TargetBranch};
+pub use gates::{AlreadyRunning, BlockedBy};
+pub use odoo::{NotifMenu, Remote, StagePicker};
+pub use pipeline::PipelineView;
+pub use project_filter::{ProjectFilter, ProjectPick};
 pub use session::{AddGroup, KillConfirm, Rename, Search};
 pub use settings::SettingsDialog;
 pub use shutdown::ShutdownConfirm;
 pub use viewer::{FileViewer, ViewerOutcome};
 pub use widgets::{InlineChoice, ListOutcome, PromptOutcome, SelectList, TextPrompt};
 
+pub use crate::ui::actions::BoardData;
+
+/// A folder the user picked, and the launch (if any) that was waiting for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PickedDir {
+    pub project: String,
+    pub dir: String,
+    pub request: Option<Box<StartRequest>>,
+}
+
+/// A task-menu entry that the board, not the dialog, knows how to carry out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskCommand {
+    pub task: Box<crate::types::Task>,
+    pub action: TaskAction,
+}
+
 /// What a dialog did with a key.
+///
+/// A channel rather than a `&mut AppState`: the dispatcher owns every state
+/// change, so a dialog cannot replace itself halfway through a key and leave
+/// the caller about to put the old one back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogOutcome {
     /// Keep the dialog open.
@@ -39,13 +74,39 @@ pub enum DialogOutcome {
     Act(Action),
     /// Close the dashboard.
     Quit(Quit),
+    /// Close and say something in the detail pane.
+    Flash(String),
+    /// Run this and/or say this, and KEEP the dialog open.
+    ///
+    /// The pipeline viewer is a workspace rather than a confirmation: `t`
+    /// writes the starter override and `e` opens an editor on it, and both
+    /// leave you looking at the flow they just changed.
+    Keep {
+        action: Option<Action>,
+        flash: Option<String>,
+    },
+    /// Close and run the shared start flow, which owns the two guards, the
+    /// folder resolution and the prompt assembly.
+    Start(Box<StartRequest>),
+    /// A folder was chosen: remember it, then continue whatever was waiting.
+    PickDir(Box<PickedDir>),
+    /// "Add another folder" from the saved-folder picker.
+    AddFolder(Box<StartRequest>),
+    /// A task-menu entry the board carries out.
+    Task(Box<TaskCommand>),
+    /// Close, switch to the sessions view and open this conversation.
+    GoTo(Box<SessionTarget>),
+    /// The board's project filter changed: what is on screen answers the old
+    /// one, so it is dropped and refetched.
+    FilterChanged,
 }
 
 /// What a dialog is allowed to reach while handling a key.
 ///
-/// Deliberately narrow: config (dialogs save nicknames, groups and chat
-/// settings) and nothing else. A dialog cannot spawn, signal or read the
-/// session list — those arrive as constructor arguments or leave as actions.
+/// Deliberately narrow: config, which dialogs legitimately edit (nicknames,
+/// groups, repo folders, target branches), and nothing else. A dialog cannot
+/// spawn, signal or read the session list — those arrive as constructor
+/// arguments or leave as a [`DialogOutcome`].
 pub struct DialogCtx<'a> {
     pub config: &'a mut ConfigHandle,
 }
@@ -59,6 +120,19 @@ pub enum Dialog {
     Settings(SettingsDialog),
     Shutdown(ShutdownConfirm),
     FileViewer(FileViewer),
+    // --- board ---
+    TaskMenu(TaskMenu),
+    Context(ContextDialog),
+    BlockedBy(BlockedBy),
+    AlreadyRunning(AlreadyRunning),
+    StagePicker(StagePicker),
+    NotifMenu(NotifMenu),
+    ProjectFilter(ProjectFilter),
+    DirPicker(DirPicker),
+    SavedDirPicker(SavedDirPicker),
+    FolderManager(FolderManager),
+    TargetBranch(TargetBranch),
+    Pipeline(PipelineView),
 }
 
 impl Dialog {
@@ -84,6 +158,29 @@ impl Dialog {
                     DialogOutcome::Act(Action::OpenEditor { path, line: 1 })
                 }
             },
+            Dialog::TaskMenu(dialog) => dialog.handle_key(key, ctx),
+            Dialog::Context(dialog) => dialog.handle_key(key, ctx),
+            Dialog::BlockedBy(dialog) => dialog.handle_key(key, ctx),
+            Dialog::AlreadyRunning(dialog) => dialog.handle_key(key, ctx),
+            Dialog::StagePicker(dialog) => dialog.handle_key(key, ctx),
+            Dialog::NotifMenu(dialog) => dialog.handle_key(key, ctx),
+            Dialog::ProjectFilter(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DirPicker(dialog) => dialog.handle_key(key, ctx),
+            Dialog::SavedDirPicker(dialog) => dialog.handle_key(key, ctx),
+            Dialog::FolderManager(dialog) => dialog.handle_key(key, ctx),
+            Dialog::TargetBranch(dialog) => dialog.handle_key(key, ctx),
+            Dialog::Pipeline(dialog) => dialog.handle_key(key, ctx),
+        }
+    }
+
+    /// Hand a dialog the data it asked for. `false` means the answer was not
+    /// this dialog's — a lookup that landed after the cursor moved on.
+    pub fn accept(&mut self, data: &BoardData) -> bool {
+        match self {
+            Dialog::BlockedBy(dialog) => dialog.accept(data),
+            Dialog::StagePicker(dialog) => dialog.accept(data),
+            Dialog::ProjectFilter(dialog) => dialog.accept(data),
+            _ => false,
         }
     }
 
@@ -101,6 +198,18 @@ impl Dialog {
                 dialog.reload_if_changed();
                 dialog.render(frame, area);
             }
+            Dialog::TaskMenu(dialog) => dialog.render(frame, area),
+            Dialog::Context(dialog) => dialog.render(frame, area),
+            Dialog::BlockedBy(dialog) => dialog.render(frame, area),
+            Dialog::AlreadyRunning(dialog) => dialog.render(frame, area),
+            Dialog::StagePicker(dialog) => dialog.render(frame, area),
+            Dialog::NotifMenu(dialog) => dialog.render(frame, area),
+            Dialog::ProjectFilter(dialog) => dialog.render(frame, area),
+            Dialog::DirPicker(dialog) => dialog.render(frame, area),
+            Dialog::SavedDirPicker(dialog) => dialog.render(frame, area),
+            Dialog::FolderManager(dialog) => dialog.render(frame, area),
+            Dialog::TargetBranch(dialog) => dialog.render(frame, area),
+            Dialog::Pipeline(dialog) => dialog.render(frame, area),
         }
     }
 
@@ -115,6 +224,18 @@ impl Dialog {
             Dialog::Settings(_) => "settings",
             Dialog::Shutdown(_) => "shutdown",
             Dialog::FileViewer(_) => "fileViewer",
+            Dialog::TaskMenu(_) => "taskMenu",
+            Dialog::Context(_) => "contextDialog",
+            Dialog::BlockedBy(_) => "blockedBy",
+            Dialog::AlreadyRunning(_) => "alreadyRunning",
+            Dialog::StagePicker(_) => "stagePicker",
+            Dialog::NotifMenu(_) => "notifMenu",
+            Dialog::ProjectFilter(_) => "projectFilter",
+            Dialog::DirPicker(_) => "dirPicker",
+            Dialog::SavedDirPicker(_) => "savedDirPicker",
+            Dialog::FolderManager(_) => "folderManager",
+            Dialog::TargetBranch(_) => "targetBranch",
+            Dialog::Pipeline(_) => "pipeline",
         }
     }
 }

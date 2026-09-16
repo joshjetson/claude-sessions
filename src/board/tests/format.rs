@@ -11,7 +11,7 @@ fn row_for(task: &Task, ctx: &BoardCtx<'_>) -> Vec<crate::board::Segment> {
     format_board_item(
         &BoardItem::Task {
             task,
-            project_name: "Beacon",
+            project_name: "Aurora",
             stage_name: "In Progress",
             sub_count: 0,
             sub_expanded: false,
@@ -141,7 +141,7 @@ fn every_badge_lands_in_its_slot() {
     let row = format_board_item(
         &BoardItem::Task {
             task: &decorated,
-            project_name: "Beacon",
+            project_name: "Aurora",
             stage_name: "In Progress",
             sub_count: 1,
             sub_expanded: false,
@@ -208,29 +208,29 @@ fn long_names_are_truncated_to_the_column() {
 fn project_and_stage_rows_count_what_they_hold() {
     let project = format_board_item(
         &BoardItem::Project {
-            name: "Beacon",
+            name: "Aurora",
             project_id: 3,
             task_count: 3,
             expanded: true,
         },
         &ctx(),
     );
-    assert_eq!(text(&project), "▼ 📋 Beacon  3 tasks");
+    assert_eq!(text(&project), "▼ 📋 Aurora  3 tasks");
 
     let single = format_board_item(
         &BoardItem::Project {
-            name: "Beacon",
+            name: "Aurora",
             project_id: 3,
             task_count: 1,
             expanded: false,
         },
         &ctx(),
     );
-    assert_eq!(text(&single), "▶ 📋 Beacon  1 task");
+    assert_eq!(text(&single), "▶ 📋 Aurora  1 task");
 
     let stage = format_board_item(
         &BoardItem::Stage {
-            project_name: "Beacon",
+            project_name: "Aurora",
             stage_name: "In Progress",
             stage_id: 2,
             count: 2,
@@ -261,8 +261,8 @@ fn notification(status: NotificationStatus, level: NotificationLevel) -> Notific
         id: "n1".to_string(),
         title: "Task 5944 finished".to_string(),
         message: "MR opened".to_string(),
-        cwd: "/dev/beacon".to_string(),
-        project: "Beacon".to_string(),
+        cwd: "/dev/aurora".to_string(),
+        project: "Aurora".to_string(),
         session_id: None,
         task_id: Some(5944),
         level,

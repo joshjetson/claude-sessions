@@ -57,19 +57,7 @@ pub fn body_area(area: Rect, state: &AppState) -> Rect {
 fn draw_list(frame: &mut Frame, state: &mut AppState, area: Rect) {
     match state.view {
         View::Sessions => draw_sessions(frame, state, area),
-        View::Board => render_list(
-            frame,
-            area,
-            " Tasks Board ",
-            placeholder_lines(&[
-                "The Odoo task board arrives with the board phase.",
-                "",
-                "It brings the notification feed, the project/stage/task",
-                "tree, and the task action menu.",
-            ]),
-            None,
-            state.focus == Pane::Tree,
-        ),
+        View::Board => draw_board(frame, state, area),
         View::Deploy => render_list(
             frame,
             area,
@@ -142,17 +130,42 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
 }
 
+/// The board tab's list. Only the window is formatted (brief §10 mandate #7);
+/// the blink phase is derived from the clock here rather than kept as state the
+/// loop has to remember to toggle.
+fn draw_board(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    let content_h = area.height.saturating_sub(2) as usize;
+    state.board.blink_on = Local::now().timestamp() % 2 == 0;
+    let label = crate::ui::board::label(&state.board);
+
+    // One walk of the row list: the window places itself from the scroll
+    // position it is handed, and only the visible rows are formatted.
+    let view = crate::ui::board::window(state, state.list_scroll, content_h);
+    state.list_scroll = view.top;
+    render_list(
+        frame,
+        area,
+        &label,
+        view.lines,
+        Some(view.selected.saturating_sub(view.top)),
+        state.focus == Pane::Tree,
+    );
+}
+
 fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let inner_w = area.width.saturating_sub(2) as usize;
     let content_h = area.height.saturating_sub(2) as usize;
     let focused = state.focus == Pane::Conversation;
 
-    let (label, lines): (&str, Vec<Line<'static>>) = match (&state.flash, state.view) {
+    // Owned rather than borrowed: the board's pane carries its own label (a
+    // task or a notification), and the scroll fields below are written to the
+    // same `state` the label would otherwise be borrowed out of.
+    let (label, lines): (String, Vec<Line<'static>>) = match (&state.flash, state.view) {
         (Some(flash), view) => (
             match view {
-                View::Board => " Task ",
-                View::Deploy => " Deploy ",
-                View::Sessions => " Conversation ",
+                View::Board => " Task ".to_string(),
+                View::Deploy => " Deploy ".to_string(),
+                View::Sessions => " Conversation ".to_string(),
             },
             flash
                 .split('\n')
@@ -160,18 +173,37 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
                 .collect(),
         ),
         (None, View::Sessions) => (
-            " Conversation ",
+            " Conversation ".to_string(),
             build_conversation_lines(
                 &state.conv.messages,
                 state.conv.meta.as_ref(),
                 state.config.chat(),
             ),
         ),
-        (None, View::Board) => (
-            " Task ",
-            placeholder_lines(&["Select a task (→) to preview.", "", "Board phase pending."]),
+        (None, View::Board) => match &state.board.detail {
+            Some(detail) => (
+                detail.label.clone(),
+                detail
+                    .rows
+                    .iter()
+                    .map(|row| crate::ui::spans::row_line(row))
+                    .collect(),
+            ),
+            None => (
+                " Task ".to_string(),
+                placeholder_lines(&[
+                    "Select a task (→) to preview, Enter for its action menu.",
+                    "",
+                    "s start   v revise   C resume chat   P pipeline   m stage",
+                    "g session   G terminal   o browser   S ssh",
+                    "f mine/all   p projects   x dismiss a notification",
+                ]),
+            ),
+        },
+        (None, View::Deploy) => (
+            " Deploy ".to_string(),
+            placeholder_lines(&["Deploy phase pending."]),
         ),
-        (None, View::Deploy) => (" Deploy ", placeholder_lines(&["Deploy phase pending."])),
     };
 
     let wrapped: Vec<Vec<ratatui::text::Span<'static>>> = lines
@@ -194,7 +226,7 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
         .take(content_h)
         .map(Line::from)
         .collect();
-    render_content(frame, area, label, window, focused);
+    render_content(frame, area, &label, window, focused);
 }
 
 fn draw_status(frame: &mut Frame, state: &AppState, area: Rect) {
@@ -228,7 +260,21 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
             }
             hints.push(("s", "settings"));
         }
-        View::Board => hints.push(("r", "refresh")),
+        View::Board => hints.extend([
+            ("←→", "expand"),
+            ("Enter", "menu"),
+            ("s", "start"),
+            ("v", "revise"),
+            ("C", "chat"),
+            ("P", "pipeline"),
+            ("m", "stage"),
+            ("g/G", "session"),
+            ("o", "browser"),
+            ("S", "ssh"),
+            ("f", "filter"),
+            ("p", "projects"),
+            ("r", "refresh"),
+        ]),
         View::Deploy => hints.push(("r", "refresh")),
     }
     hints.extend([("q", "quit"), ("Q", "stop all")]);

@@ -7,7 +7,7 @@ mod board;
 mod queries;
 mod rpc;
 mod stages;
-mod stub;
+pub(crate) mod stub;
 
 use std::time::Duration;
 

@@ -45,6 +45,9 @@ pub enum FeedEvent {
     },
     /// Phase 5/6 produce these; nothing does yet.
     Notification(Box<Notification>),
+    /// One Odoo board fetch, from whichever side made it — the daemon's `board`
+    /// event, or the in-process worker.
+    Board(Box<crate::ui::board::BoardUpdate>),
 }
 
 /// The contract the dashboard consumes. `Send` because the daemon client will
@@ -56,6 +59,14 @@ pub trait SessionFeed: Send {
     fn request_refresh(&self);
     /// A session was just launched — poll faster for a while.
     fn note_launch(&self);
+    /// The same, for a launch that belongs to a task: whatever owns the pending
+    /// queue registers it so the new session can be paired to its task. The
+    /// default is the plain fast-poll, which is all an embedded scan can do;
+    /// the daemon client overrides it with `POST /session/pending`.
+    fn note_task_launch(&self, request: crate::daemon::PendingRequest) {
+        let _ = request;
+        self.note_launch();
+    }
     /// Re-read the group list (a group was added or removed).
     fn set_groups(&self, group_paths: Vec<String>);
     /// Stop the engine behind this feed, for Shift-Q. Only the remote

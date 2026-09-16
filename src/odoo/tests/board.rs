@@ -18,11 +18,11 @@ fn board_replies(tasks: Value) -> Vec<Reply> {
 #[test]
 fn tasks_are_grouped_by_project_and_stage_with_the_stage_sequence() {
     let (client, server) = client_with(board_replies(json!([
-        record(5944, "Fix the export", (3, "Beacon"), (2, "In Progress")),
+        record(5944, "Fix the export", (3, "Aurora"), (2, "In Progress")),
         record(
             5217,
             "Template picker",
-            (3, "Beacon"),
+            (3, "Aurora"),
             (3, "Quality Assurance")
         ),
         record(4033, "Audit trail", (9, "Ledger"), (2, "In Progress")),
@@ -34,14 +34,14 @@ fn tasks_are_grouped_by_project_and_stage_with_the_stage_sequence() {
     assert!(!board.truncated);
     assert_eq!(
         board.projects.keys().collect::<Vec<_>>(),
-        vec!["Beacon", "Ledger"]
+        vec!["Aurora", "Ledger"]
     );
-    let beacon = &board.projects["Beacon"];
-    assert_eq!(beacon.project_id, 3);
-    assert_eq!(beacon.stages["In Progress"].stage_id, 2);
-    assert_eq!(beacon.stages["In Progress"].sequence, 2);
-    assert_eq!(beacon.stages["Quality Assurance"].sequence, 3);
-    assert_eq!(beacon.stages["In Progress"].tasks[0].id, 5944);
+    let aurora = &board.projects["Aurora"];
+    assert_eq!(aurora.project_id, 3);
+    assert_eq!(aurora.stages["In Progress"].stage_id, 2);
+    assert_eq!(aurora.stages["In Progress"].sequence, 2);
+    assert_eq!(aurora.stages["Quality Assurance"].sequence, 3);
+    assert_eq!(aurora.stages["In Progress"].tasks[0].id, 5944);
 
     // My board is filtered by assignment, so it is never limited or truncated.
     let kwargs = &server.requests()[1]["params"]["args"][6];
@@ -55,21 +55,21 @@ fn a_stage_with_no_sequence_sorts_last() {
     let (client, _server) = client_with(board_replies(json!([record(
         1,
         "Odd one",
-        (3, "Beacon"),
+        (3, "Aurora"),
         (77, "Somewhere New")
     )])));
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
     assert_eq!(
-        board.projects["Beacon"].stages["Somewhere New"].sequence,
+        board.projects["Aurora"].stages["Somewhere New"].sequence,
         999
     );
 }
 
 #[test]
 fn subtasks_nest_under_their_parent_and_leave_the_top_level() {
-    let mut parent = record(5944, "Parent", (3, "Beacon"), (2, "In Progress"));
+    let mut parent = record(5944, "Parent", (3, "Aurora"), (2, "In Progress"));
     parent["child_ids"] = json!([8801, 8802]);
-    let child_on_my_board = record(8802, "Mine too", (3, "Beacon"), (2, "In Progress"));
+    let child_on_my_board = record(8802, "Mine too", (3, "Aurora"), (2, "In Progress"));
 
     let (client, server) = client_with(vec![
         Reply::result(json!([parent, child_on_my_board])),
@@ -78,13 +78,13 @@ fn subtasks_nest_under_their_parent_and_leave_the_top_level() {
         // The children query: 8801 belongs to someone else, so only this call
         // sees it.
         Reply::result(json!([
-            record(8801, "Someone else's", (3, "Beacon"), (2, "In Progress")),
-            record(8802, "Mine too", (3, "Beacon"), (2, "In Progress")),
+            record(8801, "Someone else's", (3, "Aurora"), (2, "In Progress")),
+            record(8802, "Mine too", (3, "Aurora"), (2, "In Progress")),
         ])),
     ]);
 
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
-    let stage = &board.projects["Beacon"].stages["In Progress"];
+    let stage = &board.projects["Aurora"].stages["In Progress"];
     assert_eq!(
         stage.tasks.iter().map(|t| t.id).collect::<Vec<_>>(),
         vec![5944],
@@ -104,7 +104,7 @@ fn subtasks_nest_under_their_parent_and_leave_the_top_level() {
 
 #[test]
 fn a_failed_children_query_costs_nesting_not_the_board() {
-    let mut parent = record(5944, "Parent", (3, "Beacon"), (2, "In Progress"));
+    let mut parent = record(5944, "Parent", (3, "Aurora"), (2, "In Progress"));
     parent["child_ids"] = json!([8801]);
     let (client, _server) = client_with(vec![
         Reply::result(json!([parent])),
@@ -114,7 +114,7 @@ fn a_failed_children_query_costs_nesting_not_the_board() {
     ]);
 
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
-    let stage = &board.projects["Beacon"].stages["In Progress"];
+    let stage = &board.projects["Aurora"].stages["In Progress"];
     assert_eq!(stage.tasks.len(), 1);
     assert!(stage.tasks[0].subtasks.is_empty());
 }
@@ -122,8 +122,8 @@ fn a_failed_children_query_costs_nesting_not_the_board() {
 #[test]
 fn hidden_stages_are_dropped_client_side_and_hidden_states_in_the_domain() {
     let (client, server) = client_with(board_replies(json!([
-        record(1, "Shipped", (3, "Beacon"), (9, "Deployed")),
-        record(2, "Working", (3, "Beacon"), (2, "In Progress")),
+        record(1, "Shipped", (3, "Aurora"), (9, "Deployed")),
+        record(2, "Working", (3, "Aurora"), (2, "In Progress")),
     ])));
 
     let board = client
@@ -135,7 +135,7 @@ fn hidden_stages_are_dropped_client_side_and_hidden_states_in_the_domain() {
         .unwrap();
 
     assert_eq!(
-        board.projects["Beacon"].stages.keys().collect::<Vec<_>>(),
+        board.projects["Aurora"].stages.keys().collect::<Vec<_>>(),
         vec!["In Progress"],
         "the hidden stage was kept"
     );
@@ -152,12 +152,12 @@ fn the_all_view_resolves_project_names_and_reports_truncation() {
     let (client, server) = client_with(vec![
         // getProjects, for the include filter.
         Reply::result(json!([
-            { "id": 3, "name": "Beacon" },
+            { "id": 3, "name": "Aurora" },
             { "id": 9, "name": "Ledger" },
         ])),
         Reply::result(json!([
-            record(1, "One", (3, "Beacon"), (2, "In Progress")),
-            record(2, "Two", (3, "Beacon"), (2, "In Progress")),
+            record(1, "One", (3, "Aurora"), (2, "In Progress")),
+            record(2, "Two", (3, "Aurora"), (2, "In Progress")),
         ])),
         Reply::result(stage_rows()),
         Reply::result(json!([])),
@@ -166,7 +166,7 @@ fn the_all_view_resolves_project_names_and_reports_truncation() {
     let board = client
         .fetch_board(&FetchBoardOptions {
             mine_only: false,
-            include: vec!["Beacon".to_string()],
+            include: vec!["Aurora".to_string()],
             limit: 2,
             ..FetchBoardOptions::default()
         })
@@ -182,8 +182,8 @@ fn the_all_view_resolves_project_names_and_reports_truncation() {
 #[test]
 fn an_unscoped_all_view_keeps_its_limit_and_reports_truncation() {
     let (client, server) = client_with(board_replies(json!([
-        record(1, "One", (3, "Beacon"), (2, "In Progress")),
-        record(2, "Two", (3, "Beacon"), (2, "In Progress")),
+        record(1, "One", (3, "Aurora"), (2, "In Progress")),
+        record(2, "Two", (3, "Aurora"), (2, "In Progress")),
     ])));
 
     let board = client
@@ -201,7 +201,7 @@ fn an_unscoped_all_view_keeps_its_limit_and_reports_truncation() {
 #[test]
 fn an_include_list_that_matches_nothing_returns_nothing() {
     let (client, server) = client_with(vec![
-        Reply::result(json!([{ "id": 3, "name": "Beacon" }])),
+        Reply::result(json!([{ "id": 3, "name": "Aurora" }])),
         Reply::result(json!([])),
         Reply::result(stage_rows()),
         Reply::result(json!([])),
@@ -243,21 +243,21 @@ fn ignored_projects_are_excluded_when_they_resolve() {
 
 #[test]
 fn story_points_prefer_the_integer_and_fall_back_to_the_selection() {
-    let mut integer = record(1, "Integer", (3, "Beacon"), (2, "In Progress"));
+    let mut integer = record(1, "Integer", (3, "Aurora"), (2, "In Progress"));
     integer["x_studio_story_points_1"] = json!(5);
     integer["x_studio_story_points"] = json!("8");
 
-    let mut selection = record(2, "Selection", (3, "Beacon"), (2, "In Progress"));
+    let mut selection = record(2, "Selection", (3, "Aurora"), (2, "In Progress"));
     selection["x_studio_story_points_1"] = json!(false);
     selection["x_studio_story_points"] = json!("3 points");
 
-    let mut zero = record(3, "Unestimated", (3, "Beacon"), (2, "In Progress"));
+    let mut zero = record(3, "Unestimated", (3, "Aurora"), (2, "In Progress"));
     zero["x_studio_story_points_1"] = json!(0);
     zero["x_studio_story_points"] = json!("none");
 
     let (client, _server) = client_with(board_replies(json!([integer, selection, zero])));
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
-    let tasks = &board.projects["Beacon"].stages["In Progress"].tasks;
+    let tasks = &board.projects["Aurora"].stages["In Progress"].tasks;
 
     assert_eq!(tasks[0].story_points, Some(5), "the integer field wins");
     assert_eq!(tasks[1].story_points, Some(3), "the selection is parsed");
@@ -266,7 +266,7 @@ fn story_points_prefer_the_integer_and_fall_back_to_the_selection() {
 
 #[test]
 fn tags_deadlines_and_dependency_counts_decode() {
-    let mut task = record(5238, "Blocked one", (3, "Beacon"), (1, "Approved to Start"));
+    let mut task = record(5238, "Blocked one", (3, "Aurora"), (1, "Approved to Start"));
     task["tag_ids"] = json!([11]);
     task["date_deadline"] = json!("2026-09-20");
     task["depend_on_ids"] = json!([4034, 4035]);
@@ -276,7 +276,7 @@ fn tags_deadlines_and_dependency_counts_decode() {
 
     let (client, _server) = client_with(board_replies(json!([task])));
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
-    let task = &board.projects["Beacon"].stages["Approved to Start"].tasks[0];
+    let task = &board.projects["Aurora"].stages["Approved to Start"].tasks[0];
 
     assert_eq!(task.tags, vec!["auto_review".to_string()]);
     assert_eq!(task.deadline.as_deref(), Some("2026-09-20"));
@@ -288,11 +288,11 @@ fn tags_deadlines_and_dependency_counts_decode() {
 
 #[test]
 fn a_task_with_no_stage_reads_as_no_stage() {
-    let mut task = record(1, "Loose", (3, "Beacon"), (0, ""));
+    let mut task = record(1, "Loose", (3, "Aurora"), (0, ""));
     task["stage_id"] = json!(false);
     let (client, _server) = client_with(board_replies(json!([task])));
     let board = client.fetch_board(&FetchBoardOptions::default()).unwrap();
-    assert!(board.projects["Beacon"].stages.contains_key("No stage"));
+    assert!(board.projects["Aurora"].stages.contains_key("No stage"));
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn a_task_with_no_project_never_reaches_the_board() {
 
 #[test]
 fn stage_and_tag_metadata_are_cached_until_invalidated() {
-    let tasks = json!([record(1, "One", (3, "Beacon"), (2, "In Progress"))]);
+    let tasks = json!([record(1, "One", (3, "Aurora"), (2, "In Progress"))]);
     let (client, server) = client_with(vec![
         Reply::result(tasks.clone()),
         Reply::result(stage_rows()),

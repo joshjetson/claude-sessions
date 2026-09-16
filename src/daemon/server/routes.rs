@@ -92,6 +92,11 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         }
         ("POST", "/refresh") => {
             let body = body();
+            // The board is fetched by its own worker: the sessions tick no
+            // longer acts on the flag (Phase 9b), so honour it here.
+            if flag(&body, "board") {
+                engine.refresh_board();
+            }
             engine.refresh(RefreshRequest {
                 force_discovery: flag(&body, "forceDiscovery"),
                 board: flag(&body, "board"),

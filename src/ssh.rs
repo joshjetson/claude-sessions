@@ -131,11 +131,11 @@ pub enum SshResolution {
 /// The ssh alias for a project.
 ///
 /// Explicit config wins. Otherwise an alias is matched on its normalised name —
-/// exact first, then a prefix match in either direction, so "Beacon" finds
-/// "beacon" and "Ledger" finds the one alias it wants out of a
+/// exact first, then a prefix match in either direction, so "Aurora" finds
+/// "aurora" and "Ledger" finds the one alias it wants out of a
 /// multi-alias `Host` line.
 ///
-/// Exact beats prefix deliberately: "DCA" must not become "dca-backup".
+/// Exact beats prefix deliberately: "Atlas" must not become "atlas-backup".
 pub fn resolve_ssh_host(
     project_name: &str,
     hosts: &[SshHost],
@@ -185,7 +185,7 @@ pub fn resolve_ssh_host(
     }
 
     // A project name that starts an alias, or an alias that starts the project
-    // name — "LT Connects" vs "LTConnects Production".
+    // name — "NovaLink" vs "NovaLink Production".
     let prefix: Vec<_> = flat
         .iter()
         .filter(|(alias, _)| {
@@ -246,7 +246,7 @@ pub fn host_config_problem(hostname: &str) -> Option<HostProblem> {
 /// The command to run in a terminal for a resolved host.
 ///
 /// Quoted because aliases contain spaces — an OpenSSH `Host` line can name
-/// "LTConnects Production" and both words are separate aliases, but a configured
+/// "NovaLink Production" and both words are separate aliases, but a configured
 /// alias is taken verbatim.
 pub fn ssh_command(alias: &str) -> String {
     format!("ssh {}", shell_quote(alias))

@@ -93,6 +93,10 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
 
         self.inner.refresh(true);
         self.inner.notify_new_assignments();
+        // Warmed, never awaited: the board is one Odoo round trip and `start`
+        // is what a client waits on before its first snapshot. The Node
+        // original did the same, for the same reason.
+        self.refresh_board();
 
         let usage_interval = self.inner.config().usage().interval;
         if self.inner.usage.is_some() {
@@ -142,6 +146,7 @@ fn run_loop<S: ProcessSource + Send + 'static>(
         if now >= next_slow {
             next_slow = now + SLOW_TICK;
             inner.notify_new_assignments();
+            inner.poll_board();
         }
         if let (Some(at), Some(interval)) = (next_usage, usage_interval) {
             if now >= at {
@@ -157,6 +162,38 @@ fn run_loop<S: ProcessSource + Send + 'static>(
 }
 
 impl<S: ProcessSource> EngineInner<S> {
+    /// One board fetch, best-effort. Shared by the slow tick and the warm-up so
+    /// "a failed fetch keeps the previous board" is written once.
+    pub(crate) fn poll_board(&self) {
+        let Some(fetch) = &self.fetch_board else {
+            return;
+        };
+        let filter = self.state().board_filter;
+        match fetch(filter) {
+            Ok(board) => {
+                let mut state = self.state();
+                state.board_loading = false;
+                state.board_error = None;
+                state.set_board(Some(board));
+                drop(state);
+                self.publish(EngineEvent::Board {
+                    loading: false,
+                    error: None,
+                });
+            }
+            Err(error) => {
+                // The previous board stays: a stale list with an error beside
+                // it beats an empty tab.
+                self.state().board_loading = false;
+                self.state().board_error = Some(error.clone());
+                self.publish(EngineEvent::Board {
+                    loading: false,
+                    error: Some(error),
+                });
+            }
+        }
+    }
+
     /// Twice as fast while a launch is still waiting for its session — the
     /// window is the launch queue's own, so it ends when the last launch
     /// resolves or expires rather than on a separate timer.

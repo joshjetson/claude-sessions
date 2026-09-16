@@ -28,7 +28,7 @@ fn a_collapsed_project_is_one_row() {
             expanded,
             ..
         } => {
-            assert_eq!(*name, "Beacon");
+            assert_eq!(*name, "Aurora");
             assert_eq!(*task_count, 2);
             assert!(!expanded);
         }
@@ -43,7 +43,7 @@ fn stages_come_out_in_sequence_order_then_by_name() {
         ("Approved to Start", 1, vec![task(2, "Two")]),
         ("Also Third", 3, vec![task(3, "Three")]),
     ]);
-    let items = build_board_tree(&board, &expanded(&[project_key("Beacon")]));
+    let items = build_board_tree(&board, &expanded(&[project_key("Aurora")]));
     let stages: Vec<&str> = items
         .iter()
         .filter_map(|item| match item {
@@ -60,14 +60,14 @@ fn stages_come_out_in_sequence_order_then_by_name() {
 #[test]
 fn tasks_appear_only_under_an_expanded_stage() {
     let board = board(vec![("In Progress", 2, vec![task(5944, "Fix the export")])]);
-    let collapsed = build_board_tree(&board, &expanded(&[project_key("Beacon")]));
+    let collapsed = build_board_tree(&board, &expanded(&[project_key("Aurora")]));
     assert!(!collapsed
         .iter()
         .any(|item| matches!(item, BoardItem::Task { .. })));
 
     let open = build_board_tree(
         &board,
-        &expanded(&[project_key("Beacon"), stage_key("Beacon", "In Progress")]),
+        &expanded(&[project_key("Aurora"), stage_key("Aurora", "In Progress")]),
     );
     assert!(matches!(open[2], BoardItem::Task { task, .. } if task.id == 5944));
 }
@@ -78,7 +78,7 @@ fn subtasks_appear_only_when_their_parent_is_expanded() {
     parent.subtasks = vec![task(8801, "Child one"), task(8802, "Child two")];
     let board = board(vec![("In Progress", 2, vec![parent])]);
 
-    let keys = vec![project_key("Beacon"), stage_key("Beacon", "In Progress")];
+    let keys = vec![project_key("Aurora"), stage_key("Aurora", "In Progress")];
     let closed = build_board_tree(&board, &expanded(&keys));
     match &closed[2] {
         BoardItem::Task {
@@ -113,8 +113,8 @@ fn subtasks_appear_only_when_their_parent_is_expanded() {
 fn a_task_with_no_subtasks_never_expands() {
     let board = board(vec![("In Progress", 2, vec![task(5944, "Alone")])]);
     let keys = vec![
-        project_key("Beacon"),
-        stage_key("Beacon", "In Progress"),
+        project_key("Aurora"),
+        stage_key("Aurora", "In Progress"),
         subtask_key(5944),
     ];
     let items = build_board_tree(&board, &expanded(&keys));
@@ -150,27 +150,27 @@ fn keys_identify_a_row_across_refreshes() {
     let cases: Vec<(BoardItem<'_>, &str)> = vec![
         (
             BoardItem::Project {
-                name: "Beacon",
+                name: "Aurora",
                 project_id: 3,
                 task_count: 1,
                 expanded: false,
             },
-            "bp:Beacon",
+            "bp:Aurora",
         ),
         (
             BoardItem::Stage {
-                project_name: "Beacon",
+                project_name: "Aurora",
                 stage_name: "In Progress",
                 stage_id: 2,
                 count: 1,
                 expanded: false,
             },
-            "bs:Beacon:In Progress",
+            "bs:Aurora:In Progress",
         ),
         (
             BoardItem::Task {
                 task: &one,
-                project_name: "Beacon",
+                project_name: "Aurora",
                 stage_name: "In Progress",
                 sub_count: 0,
                 sub_expanded: false,

@@ -16,8 +16,9 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use crate::daemon::client::{self, DaemonClient, SseEvent, SseMessage, Subscription};
-use crate::daemon::{PendingRequest, RefreshRequest, SessionsEvent, Snapshot};
+use crate::daemon::{BoardFilter, PendingRequest, RefreshRequest, SessionsEvent, Snapshot};
 use crate::types::Notification;
+use crate::ui::board::BoardUpdate;
 use crate::ui::feed::{FeedEvent, SessionFeed};
 
 /// A dashboard's view of a running daemon.
@@ -31,9 +32,10 @@ pub struct RemoteFeed {
 impl RemoteFeed {
     pub fn connect(port: u16) -> Self {
         let (sender, events) = mpsc::channel();
+        let stream_client = DaemonClient::new(port);
         let subscription = client::subscribe(port, move |message| {
             if let SseMessage::Event(event) = message {
-                forward(&sender, &event);
+                forward(stream_client, &sender, &event);
             }
         });
         RemoteFeed {
@@ -58,24 +60,65 @@ impl RemoteFeed {
 }
 
 /// One SSE event as whatever the dashboard understands, or nothing.
-fn forward(sender: &Sender<FeedEvent>, event: &SseEvent) {
-    let feed_event = match event.event.as_str() {
-        "snapshot" => serde_json::from_str::<Snapshot>(&event.data)
-            .ok()
-            .map(|snapshot| sessions(snapshot.sessions)),
-        "sessions" => serde_json::from_str::<SessionsEvent>(&event.data)
-            .ok()
-            .map(sessions),
-        "notification" => serde_json::from_str::<Notification>(&event.data)
-            .ok()
-            .map(|notification| FeedEvent::Notification(Box::new(notification))),
-        // board, deploy, task-done and the link events belong to phases that
-        // have not landed; an unknown event is never an error.
-        _ => None,
-    };
-    if let Some(feed_event) = feed_event {
-        let _ = sender.send(feed_event);
+fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
+    match event.event.as_str() {
+        "snapshot" => {
+            if let Ok(snapshot) = serde_json::from_str::<Snapshot>(&event.data) {
+                let board = board_update(&snapshot);
+                let _ = sender.send(sessions(snapshot.sessions));
+                let _ = sender.send(board);
+            }
+        }
+        "sessions" => {
+            if let Ok(event) = serde_json::from_str::<SessionsEvent>(&event.data) {
+                let _ = sender.send(sessions(event));
+            }
+        }
+        "notification" => {
+            if let Ok(notification) = serde_json::from_str::<Notification>(&event.data) {
+                let _ = sender.send(FeedEvent::Notification(Box::new(notification)));
+            }
+        }
+        // The board event on the wire is a light "it changed" signal
+        // ({loading, error}) — the data itself rides the snapshot, so a
+        // settled change is answered by refetching /state. The loading=true
+        // edge is skipped: the dashboard keeps showing the last board rather
+        // than blanking for the seconds an Odoo round trip takes.
+        "board" => {
+            let settled = serde_json::from_str::<serde_json::Value>(&event.data)
+                .map(|d| d["loading"] != serde_json::Value::Bool(true))
+                .unwrap_or(false);
+            if settled {
+                if let Some(snapshot) = client.state() {
+                    let _ = sender.send(board_update(&snapshot));
+                }
+            }
+        }
+        // deploy and the link events belong to phases that have not landed;
+        // an unknown event is never an error.
+        _ => {}
     }
+}
+
+/// The board half of a snapshot, in the shape the dashboard applies.
+fn board_update(snapshot: &Snapshot) -> FeedEvent {
+    FeedEvent::Board(Box::new(BoardUpdate {
+        board: snapshot.board.clone(),
+        error: snapshot.board_error.clone(),
+        loading: snapshot.board_loading,
+        filter: match snapshot.board_filter.as_str() {
+            "all" => BoardFilter::All,
+            _ => BoardFilter::Mine,
+        },
+        task_sessions: snapshot.task_sessions.clone(),
+        done_tasks: snapshot.done_tasks.clone(),
+        archived_tasks: snapshot.archived_tasks.clone(),
+        blocked_tasks: snapshot
+            .blocked_tasks
+            .iter()
+            .map(|(task_id, blocked)| (*task_id, blocked.questions.clone()))
+            .collect(),
+    }))
 }
 
 fn sessions(event: SessionsEvent) -> FeedEvent {
@@ -102,6 +145,15 @@ impl SessionFeed for RemoteFeed {
         // look for it now rather than at the next tick.
         self.act(|client| {
             client.set_pending(&PendingRequest::default());
+            client.refresh(RefreshRequest::discovery());
+        });
+    }
+
+    fn note_task_launch(&self, request: PendingRequest) {
+        // The argument-carrying half of note_launch: the daemon can only link
+        // the session that appears if it knows the launch's cwd and task.
+        self.act(move |client| {
+            client.set_pending(&request);
             client.refresh(RefreshRequest::discovery());
         });
     }

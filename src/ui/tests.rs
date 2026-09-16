@@ -4,6 +4,7 @@
 //! every file here needs: a `TestBackend` render that returns the painted text,
 //! and a throwaway config on a temporary directory.
 
+mod board;
 mod conversation;
 mod dialogs;
 mod harness;

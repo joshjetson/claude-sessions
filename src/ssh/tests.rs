@@ -22,10 +22,10 @@ Host Edgeport
 Host planbook,osnode,dentalink
   HostName 192.168.0.194
 
-Host DCA
+Host Atlas
   HostName 198.51.100.90
 
-Host dca-backup
+Host atlas-backup
   HostName 198.51.100.90
 
 Host newsdesk
@@ -116,7 +116,7 @@ fn a_missing_file_yields_no_hosts() {
 
 #[test]
 fn matches_a_project_to_its_host_by_name() {
-    assert_eq!(alias_of("DCA"), "DCA");
+    assert_eq!(alias_of("Atlas"), "Atlas");
     assert_eq!(alias_of("Dentalink"), "dentalink");
     assert_eq!(alias_of("EdgePort"), "Edgeport", "case must not matter");
 }
@@ -129,11 +129,11 @@ fn ignores_punctuation_and_spacing_in_project_names() {
 
 #[test]
 fn an_exact_match_beats_a_longer_alias_that_merely_starts_the_same() {
-    // "DCA" must not become "dca-backup": connecting to the backup server
+    // "Atlas" must not become "atlas-backup": connecting to the backup server
     // instead of production is exactly the mistake worth preventing.
-    match resolve("DCA") {
+    match resolve("Atlas") {
         SshResolution::Host(host) => {
-            assert_eq!(host.alias, "DCA");
+            assert_eq!(host.alias, "Atlas");
             assert_eq!(host.source, MatchSource::Exact);
         }
         other => panic!("{other:?}"),
@@ -154,15 +154,15 @@ fn a_prefix_match_is_reported_as_one() {
 #[test]
 fn no_match_resolves_to_nothing_so_the_caller_can_open_the_picker() {
     assert_eq!(resolve("Odoo Community"), SshResolution::NoMatch);
-    assert_eq!(resolve("Ultra Tracks"), SshResolution::NoMatch);
+    assert_eq!(resolve("Orbit Media"), SshResolution::NoMatch);
 }
 
 #[test]
 fn an_explicit_config_entry_wins_over_any_guess() {
     let resolved = resolve_ssh_host(
-        "Ultra Tracks",
+        "Orbit Media",
         &hosts(),
-        &configured(&[("Ultra Tracks", "newsdesk")]),
+        &configured(&[("Orbit Media", "newsdesk")]),
     );
     match resolved {
         SshResolution::Host(host) => {
@@ -177,12 +177,12 @@ fn an_explicit_config_entry_wins_over_any_guess() {
 #[test]
 fn the_explicit_entry_is_matched_case_insensitively_on_the_project_name() {
     let resolved = resolve_ssh_host(
-        "ultra tracks",
+        "orbit media",
         &hosts(),
-        &configured(&[("Ultra Tracks", "DCA")]),
+        &configured(&[("Orbit Media", "Atlas")]),
     );
     match resolved {
-        SshResolution::Host(host) => assert_eq!(host.alias, "DCA"),
+        SshResolution::Host(host) => assert_eq!(host.alias, "Atlas"),
         other => panic!("{other:?}"),
     }
 }
@@ -270,7 +270,7 @@ fn resolution_still_succeeds_the_tool_reports_it_does_not_refuse() {
 
 #[test]
 fn quotes_the_alias_since_aliases_can_contain_spaces() {
-    assert_eq!(ssh_command("DCA"), "ssh 'DCA'");
+    assert_eq!(ssh_command("Atlas"), "ssh 'Atlas'");
     assert_eq!(
         ssh_command("AppConnects Production"),
         "ssh 'AppConnects Production'"
@@ -300,7 +300,7 @@ fn the_spawn_policy_covers_ssh_too() {
     use crate::term::{LaunchRequest, SpawnPolicy, TerminalDriver, TmuxDriver};
 
     let driver = TmuxDriver::new("cs", SpawnPolicy::detect());
-    for command in [ssh_command("DCA"), SSHING_COMMAND.to_string()] {
+    for command in [ssh_command("Atlas"), SSHING_COMMAND.to_string()] {
         let result = driver.launch(&LaunchRequest::new("/tmp", command));
         assert!(!result.ok, "a test opened an ssh session");
         assert!(result.error.unwrap_or_default().contains("Refusing to"));

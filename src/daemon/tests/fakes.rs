@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::daemon::{DoneStageRequest, MergeRequestRequest, StageMove, TaskBackend, TaskDetail};
+use crate::daemon::{MergeRequestRequest, StageMove, StageMoveRequest, TaskBackend, TaskDetail};
 use crate::scan::{ProcessRow, ProcessSource};
 
 /// A scripted `ps`/`lsof`. Unlike the scanner suite's fake this one is `Send`,
@@ -136,7 +136,7 @@ pub(crate) struct RecordingBackend {
 pub(crate) enum BackendCall {
     Detail(i64),
     MergeRequest(MergeRequestRequest),
-    MoveStage(DoneStageRequest),
+    MoveStage(StageMoveRequest),
     Comment { task_id: i64, html: String },
 }
 
@@ -174,7 +174,7 @@ impl TaskBackend for RecordingBackend {
         Ok(self.mr_url.lock().unwrap().clone())
     }
 
-    fn move_to_done_stage(&self, request: &DoneStageRequest) -> Result<StageMove, String> {
+    fn move_to_stage(&self, request: &StageMoveRequest) -> Result<StageMove, String> {
         self.calls
             .lock()
             .unwrap()

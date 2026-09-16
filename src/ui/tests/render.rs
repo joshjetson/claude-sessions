@@ -97,13 +97,22 @@ fn an_empty_tree_says_so_rather_than_drawing_a_blank_pane() {
 }
 
 #[test]
-fn the_board_and_deploy_views_name_the_phase_that_brings_them() {
-    for (view, needle) in [(View::Board, "board phase"), (View::Deploy, "deploy phase")] {
-        let (_dir, mut state) = sessions_state();
-        state.view = view;
-        let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
-        assert!(painted.contains(needle), "{view:?}: {painted}");
-    }
+fn a_view_that_is_not_built_yet_names_the_phase_that_brings_it() {
+    let (_dir, mut state) = sessions_state();
+    state.view = View::Deploy;
+    let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
+    assert!(painted.contains("deploy phase"), "{painted}");
+}
+
+#[test]
+fn the_board_says_why_it_is_empty_rather_than_looking_broken() {
+    // No credentials is a supported way to run the dashboard, so the tab has
+    // to explain itself rather than showing an empty pane.
+    let (_dir, mut state) = sessions_state();
+    state.view = View::Board;
+    let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
+    assert!(painted.contains("Tasks Board"), "{painted}");
+    assert!(painted.contains("No Odoo credentials"), "{painted}");
 }
 
 #[test]

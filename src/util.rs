@@ -55,8 +55,8 @@ pub fn project_name(cwd: &str) -> String {
 /// Reduce a human-written name to the part worth comparing: lowercase, letters
 /// and digits only.
 ///
-/// "LT Connects" and "ltconnects" are the same project; "Pl.ai.book" and
-/// "plaibook" are the same host. Punctuation and spacing are how people write a
+/// "NovaLink" and "novalink" are the same project; "Or.bit.al" and
+/// "orbital" are the same host. Punctuation and spacing are how people write a
 /// name, not what it is.
 ///
 /// Lives here because four separate features match names this way — the ssh

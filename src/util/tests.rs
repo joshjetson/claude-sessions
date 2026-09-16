@@ -119,9 +119,9 @@ fn cwd_encoding_matches_claude_codes_on_disk_format() {
 fn name_normalisation_ignores_case_spacing_and_punctuation() {
     // Shared by everything that matches a human-written project name against
     // something else a human wrote: ssh aliases, Optics keys, directory guesses.
-    assert_eq!(normalise_name("LT Connects"), "ltconnects");
-    assert_eq!(normalise_name("Pl.ai.book"), "plaibook");
-    assert_eq!(normalise_name("dca-backup"), "dcabackup");
+    assert_eq!(normalise_name("NovaLink"), "novalink");
+    assert_eq!(normalise_name("Or.bit.al"), "orbital");
+    assert_eq!(normalise_name("atlas-backup"), "atlasbackup");
     assert_eq!(normalise_name("Task 4033"), "task4033");
 }
 

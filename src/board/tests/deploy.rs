@@ -25,7 +25,7 @@ impl Fixture {
     fn new(tasks: Vec<DeployTask>, command: &str) -> Self {
         let mut projects = BTreeMap::new();
         projects.insert(
-            "Beacon".to_string(),
+            "Aurora".to_string(),
             DeployProjectState {
                 project_id: 3,
                 missing: false,
@@ -37,7 +37,7 @@ impl Fixture {
         Fixture {
             board: DeployBoard {
                 configured: true,
-                project_names: vec!["Beacon".to_string()],
+                project_names: vec!["Aurora".to_string()],
                 projects,
             },
             expanded: HashSet::new(),
@@ -46,18 +46,18 @@ impl Fixture {
     }
 
     fn open(mut self) -> Self {
-        self.expanded.insert(deploy_project_key("Beacon"));
+        self.expanded.insert(deploy_project_key("Aurora"));
         self
     }
 
     fn missing(mut self) -> Self {
-        self.board.projects.get_mut("Beacon").unwrap().missing = true;
+        self.board.projects.get_mut("Aurora").unwrap().missing = true;
         self
     }
 
     fn running(mut self, status: DeployRunStatus, exit_code: Option<i32>) -> Self {
         self.runs.insert(
-            "Beacon".to_string(),
+            "Aurora".to_string(),
             DeployRun {
                 status,
                 exit_code,
@@ -82,7 +82,7 @@ fn deploy_task(id: i64, name: &str) -> DeployTask {
         name: name.to_string(),
         state: "01_in_progress".to_string(),
         state_label: "In Progress".to_string(),
-        project_name: "Beacon".to_string(),
+        project_name: "Aurora".to_string(),
         project_id: 3,
         stage_name: "Deployed".to_string(),
         ..DeployTask::default()
@@ -133,7 +133,7 @@ fn a_project_row_counts_what_is_outstanding_and_names_the_target_branch() {
         "./deploy.sh",
     );
     let row = fixture.row(0);
-    assert_eq!(text(&row), "▶ 🚀 Beacon  1 outstanding  → main");
+    assert_eq!(text(&row), "▶ 🚀 Aurora  1 outstanding  → main");
     assert_eq!(role_of(&row, "1 outstanding"), Some(Role::Warn));
 
     match &fixture.items()[0] {
@@ -148,7 +148,7 @@ fn a_project_with_no_deploy_command_says_so() {
     let row = fixture.row(0);
     assert_eq!(
         text(&row),
-        "▶ 🚀 Beacon  clear to deploy  no deploy command"
+        "▶ 🚀 Aurora  clear to deploy  no deploy command"
     );
     assert_eq!(role_of(&row, "no deploy command"), Some(Role::Danger));
 }
@@ -174,7 +174,7 @@ fn an_expanded_project_with_nothing_outstanding_says_it_is_clear() {
         text(&fixture.row(1)),
         "     ✓ Nothing outstanding in Deployed — clear to ship."
     );
-    assert_eq!(deploy_item_key(&fixture.items()[1]), "di:clear:Beacon");
+    assert_eq!(deploy_item_key(&fixture.items()[1]), "di:clear:Aurora");
 }
 
 #[test]
@@ -182,11 +182,11 @@ fn a_project_missing_from_odoo_is_named() {
     let fixture = Fixture::new(vec![], "./deploy.sh").open().missing();
     assert_eq!(
         text(&fixture.row(1)),
-        "     No Odoo project named \"Beacon\"."
+        "     No Odoo project named \"Aurora\"."
     );
     assert_eq!(
         text(&fixture.row(0)),
-        "▼ 🚀 Beacon  not found in Odoo  → main"
+        "▼ 🚀 Aurora  not found in Odoo  → main"
     );
 }
 
@@ -341,5 +341,5 @@ fn a_collapsed_project_hides_its_tasks() {
     );
     let items = fixture.items();
     assert_eq!(items.len(), 1);
-    assert_eq!(deploy_item_key(&items[0]), "dp:Beacon");
+    assert_eq!(deploy_item_key(&items[0]), "dp:Aurora");
 }

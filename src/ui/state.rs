@@ -16,11 +16,15 @@ use std::path::PathBuf;
 
 use crate::config::ConfigHandle;
 use crate::paths::Paths;
-use crate::term::SessionRef;
-use crate::types::{ConversationMessage, DefaultView, Notification};
+use crate::types::{ConversationMessage, DefaultView, Notification, NotificationStatus};
+use crate::ui::board::slice::{BoardSlice, BoardUpdate};
 use crate::ui::conversation::ConversationMeta;
 use crate::ui::dialogs::Dialog;
 use crate::ui::tree::SessionsByProject;
+
+mod action;
+
+pub use action::Action;
 
 /// How many notifications the feed keeps. A `VecDeque` rather than Node's
 /// `unshift` + `length = 200` (brief §10 mandate #12).
@@ -64,35 +68,6 @@ pub enum Pane {
 pub enum Quit {
     Detach,
     ShutdownAll,
-}
-
-/// Work the UI thread refuses to do itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Action {
-    /// Ask the feed for a fresh scan now.
-    Refresh,
-    /// Refresh at 0/400/1000ms. SIGTERM is not instant — the process lingers in
-    /// `ps` for a moment — so Node polled three times after a kill, and a single
-    /// refresh here would redraw the row it just killed.
-    RefreshBurst,
-    /// Read this transcript into the conversation pane.
-    SelectSession {
-        session_id: String,
-        session_file: Option<PathBuf>,
-    },
-    FocusTerminal(Box<SessionRef>),
-    LaunchSession {
-        cwd: String,
-    },
-    Kill {
-        pids: Vec<u32>,
-        label: String,
-    },
-    /// Hand the terminal to `$EDITOR` and take it back — Node's `suspendUI`.
-    OpenEditor {
-        path: String,
-        line: u32,
-    },
 }
 
 /// Plan-usage readout for the header.
@@ -239,6 +214,9 @@ pub struct AppState {
     pub selected_session_id: Option<String>,
     pub selected_session_file: Option<PathBuf>,
     pub notifications: VecDeque<Notification>,
+    /// The board tab's own state, kept in its own type so neither this file nor
+    /// [`crate::ui::board`] becomes the god object Node's `state.js` was.
+    pub board: BoardSlice,
     pub dialog: Option<Dialog>,
     /// Transient message shown in the right-hand pane, cleared on the next
     /// selection or view change.
@@ -274,6 +252,7 @@ impl AppState {
             selected_session_id: None,
             selected_session_file: None,
             notifications: VecDeque::new(),
+            board: BoardSlice::default(),
             dialog: None,
             flash: None,
             usage: None,
@@ -335,7 +314,43 @@ impl AppState {
         self.dirty = true;
     }
 
+    /// Fold a board fetch in. Called from both feeds — the daemon's `board`
+    /// event and the in-process fetch — so the two can never diverge.
+    pub fn apply_board(&mut self, update: BoardUpdate) {
+        self.board.apply(update);
+        self.dirty = true;
+    }
+
+    /// The notification with this id, for the feed rows and the menu.
+    pub fn notification(&self, id: &str) -> Option<&Notification> {
+        self.notifications.iter().find(|n| n.id == id)
+    }
+
+    /// Change a notification's status locally, for immediate feedback.
+    ///
+    /// The list's real owner is the engine, which persists it and serves it to
+    /// every client on connect — mutating only the local copy is why a resolved
+    /// notification used to come back on the next reconnect. The caller also
+    /// enqueues [`Action::Notifications`] so the write reaches it.
+    pub fn set_notification_status(&mut self, id: &str, status: NotificationStatus) {
+        if let Some(notification) = self.notifications.iter_mut().find(|n| n.id == id) {
+            notification.status = status;
+            self.dirty = true;
+        }
+    }
+
+    pub fn dismiss_notification(&mut self, id: &str) {
+        self.notifications.retain(|n| n.id != id);
+        self.dirty = true;
+    }
+
+    /// A new notification rings, then joins the feed.
+    ///
+    /// The sound is enqueued rather than played here: the draw thread starts no
+    /// processes (brief §10 mandate #9), and `afplay` is a process like any
+    /// other.
     pub fn push_notification(&mut self, notification: Notification) {
+        self.enqueue(Action::Sound(notification.level));
         self.notifications.push_front(notification);
         while self.notifications.len() > MAX_NOTIFICATIONS {
             self.notifications.pop_back();
@@ -345,7 +360,10 @@ impl AppState {
 
     /// Every live session, flattened. Built on demand rather than kept as a
     /// second copy — Node's `Object.values().flat()` appeared in eight places.
-    pub fn sessions(&self) -> impl Iterator<Item = &crate::types::Session> {
+    /// `+ Clone` because the task-session resolution walks the list more than
+    /// once (by transcript task id, then by recorded link) and re-borrowing the
+    /// state between passes would fight the borrow checker for no gain.
+    pub fn sessions(&self) -> impl Iterator<Item = &crate::types::Session> + Clone {
         self.by_project.values().flatten()
     }
 

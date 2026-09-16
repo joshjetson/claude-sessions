@@ -60,7 +60,7 @@ fn assigned_in_stages_asks_by_stage_name_and_excludes_finished_tasks() {
         Reply::result(json!([record(
             5944,
             "Pick me up",
-            (3, "Beacon"),
+            (3, "Aurora"),
             (1, "Approved to Start")
         )])),
         Reply::result(json!([])),
@@ -91,7 +91,7 @@ fn task_detail_reads_the_fields_the_pane_shows() {
         "name": "Fix the export",
         "description": "<p>Broken since Tuesday.</p>",
         "stage_id": [2, "In Progress"],
-        "project_id": [3, "Beacon"],
+        "project_id": [3, "Aurora"],
         "priority": "1",
         "date_deadline": "2026-09-20",
     }]))]);
@@ -100,7 +100,7 @@ fn task_detail_reads_the_fields_the_pane_shows() {
     assert_eq!(detail.name, "Fix the export");
     assert_eq!(detail.description, "<p>Broken since Tuesday.</p>");
     assert_eq!(detail.stage_name, "In Progress");
-    assert_eq!(detail.project_name, "Beacon");
+    assert_eq!(detail.project_name, "Aurora");
     assert_eq!(detail.deadline.as_deref(), Some("2026-09-20"));
     assert_eq!(
         server.call_target(1),
@@ -207,14 +207,14 @@ fn writes_send_the_shapes_odoo_expects() {
 #[test]
 fn projects_are_fetched_once_and_ordered_by_name() {
     let (client, server) = client_with(vec![Reply::result(json!([
-        { "id": 3, "name": "Beacon" },
+        { "id": 3, "name": "Aurora" },
         { "id": 9, "name": "Ledger" },
     ]))]);
 
     let first = client.get_projects().unwrap();
     let second = client.get_projects().unwrap();
     assert_eq!(first, second);
-    assert_eq!(first[0].name, "Beacon");
+    assert_eq!(first[0].name, "Aurora");
     assert_eq!(server.calls().len(), 1);
     assert_eq!(
         server.requests()[1]["params"]["args"][6]["order"],

@@ -70,7 +70,7 @@ pub fn hint(text: &str) -> Line<'static> {
 
 /// A windowed, keyboard-driven list. The window is computed from the visible
 /// height, so a hundred-row menu costs the same to draw as a three-row one.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SelectList {
     pub rows: Vec<Line<'static>>,
     pub sel: usize,
@@ -159,7 +159,7 @@ impl SelectList {
 // --- InlineChoice -----------------------------------------------------------
 
 /// A horizontal `[ Cancel ] [ Do it ]` row.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineChoice {
     pub options: Vec<String>,
     pub sel: usize,
@@ -227,7 +227,7 @@ pub enum PromptOutcome {
 }
 
 /// A single- or multi-line text field with a block cursor.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TextPrompt {
     pub value: String,
     pub multiline: bool,

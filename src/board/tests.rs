@@ -26,14 +26,14 @@ pub(crate) fn task(id: i64, name: &str) -> Task {
         id,
         name: name.to_string(),
         stage_name: "In Progress".to_string(),
-        project_name: "Beacon".to_string(),
+        project_name: "Aurora".to_string(),
         project_id: 3,
         stage_id: 2,
         ..Task::default()
     }
 }
 
-/// A one-project board: `Beacon` with the given stages, each named with its
+/// A one-project board: `Aurora` with the given stages, each named with its
 /// sequence and its tasks.
 pub(crate) fn board(stages: Vec<(&str, i64, Vec<Task>)>) -> Board {
     let mut by_name: BTreeMap<String, BoardStage> = BTreeMap::new();
@@ -49,7 +49,7 @@ pub(crate) fn board(stages: Vec<(&str, i64, Vec<Task>)>) -> Board {
     }
     let mut projects = BTreeMap::new();
     projects.insert(
-        "Beacon".to_string(),
+        "Aurora".to_string(),
         BoardProject {
             project_id: 3,
             stages: by_name,
