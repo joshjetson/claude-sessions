@@ -7,7 +7,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
@@ -318,6 +318,16 @@ pub fn parse_start_time(raw: &str) -> Option<NaiveDateTime> {
                 .ok()
                 .map(|d| d.with_timezone(&Local).naive_local())
         })
+}
+
+/// Now, as the ISO-8601 stamp every stored timestamp uses.
+///
+/// Millisecond precision with a `Z` suffix — byte-for-byte what the Node app's
+/// `new Date().toISOString()` wrote. Archive rows, daily-log rows and marker
+/// files written by either implementation have to sort against each other, so
+/// the format is fixed here once rather than spelled out at each call site.
+pub fn iso_now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 #[cfg(test)]
