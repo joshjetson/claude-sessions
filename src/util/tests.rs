@@ -113,6 +113,27 @@ fn cwd_encoding_matches_claude_codes_on_disk_format() {
     );
 }
 
+// --- normaliseName ----------------------------------------------------------
+
+#[test]
+fn name_normalisation_ignores_case_spacing_and_punctuation() {
+    // Shared by everything that matches a human-written project name against
+    // something else a human wrote: ssh aliases, Optics keys, directory guesses.
+    assert_eq!(normalise_name("LT Connects"), "ltconnects");
+    assert_eq!(normalise_name("Pl.ai.book"), "plaibook");
+    assert_eq!(normalise_name("dca-backup"), "dcabackup");
+    assert_eq!(normalise_name("Task 4033"), "task4033");
+}
+
+#[test]
+fn a_name_with_nothing_comparable_in_it_normalises_to_nothing() {
+    // The callers treat this as "no match possible" rather than "matches
+    // everything", which is the difference between opening nothing and opening
+    // the wrong server.
+    assert_eq!(normalise_name("!!!"), "");
+    assert_eq!(normalise_name(""), "");
+}
+
 // --- timeAgo / formatStartTime ----------------------------------------------
 
 #[test]

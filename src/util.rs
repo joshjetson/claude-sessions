@@ -52,6 +52,23 @@ pub fn project_name(cwd: &str) -> String {
     }
 }
 
+/// Reduce a human-written name to the part worth comparing: lowercase, letters
+/// and digits only.
+///
+/// "LT Connects" and "ltconnects" are the same project; "Pl.ai.book" and
+/// "plaibook" are the same host. Punctuation and spacing are how people write a
+/// name, not what it is.
+///
+/// Lives here because four separate features match names this way — the ssh
+/// host lookup, the Optics project lookup, the launch directory guess and the
+/// purge filter — and the Node app wrote the same three lines in all four.
+pub fn normalise_name(name: &str) -> String {
+    name.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
 /// Collapse whitespace and cut to `max_len` *columns*, not characters.
 ///
 /// Width rather than length because a pane budget is columns: a row of CJK

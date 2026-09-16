@@ -12,6 +12,8 @@ pub mod config;
 pub mod db;
 pub mod paths;
 pub mod scan;
+pub mod ssh;
+pub mod term;
 pub mod transcript;
 pub mod types;
 pub mod util;
