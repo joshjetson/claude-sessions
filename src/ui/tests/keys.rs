@@ -1,0 +1,345 @@
+//! Key routing, selection stability, the action seam, and suspend/restore.
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::Rect;
+
+use crate::types::SessionStatus;
+use crate::ui::actions::KILL_REFRESH_DELAYS;
+use crate::ui::feed::group_sessions;
+use crate::ui::keys::{handle_key, tree_snapshot};
+use crate::ui::state::{Action, AppState, Pane, Quit, Selection, View};
+use crate::ui::tests::{session, sessions_state, temp_state};
+
+const AREA: Rect = Rect {
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 30,
+};
+
+fn press(state: &mut AppState, code: KeyCode) {
+    handle_key(state, KeyEvent::new(code, KeyModifiers::NONE), AREA);
+}
+
+fn with_sessions(state: &mut AppState, sessions: Vec<crate::types::Session>) {
+    state.apply_sessions(group_sessions(sessions));
+}
+
+fn three_sessions() -> Vec<crate::types::Session> {
+    vec![
+        session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle),
+        session("bbb", "/Users/x/dev/alpha", SessionStatus::Working),
+        session("ccc", "/Users/x/dev/beta", SessionStatus::Idle),
+    ]
+}
+
+// --- selection --------------------------------------------------------------
+
+#[test]
+fn a_keyed_selection_survives_a_reshuffle() {
+    // THE property: a session finishing above the cursor must not move the
+    // cursor. Selection is by identity, not by index.
+    let mut selection = Selection::default();
+    let before: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+    selection.set(&before, 2);
+    assert_eq!(selection.resolve(&before), 2);
+
+    let after: Vec<String> = ["c", "a", "b"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(selection.resolve(&after), 0, "followed its key");
+}
+
+#[test]
+fn a_vanished_key_falls_back_to_the_stored_position() {
+    let mut selection = Selection::default();
+    let before: Vec<String> = ["a", "b", "c", "d"].iter().map(|s| s.to_string()).collect();
+    selection.set(&before, 2);
+    let after: Vec<String> = ["a", "b", "x", "d"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(selection.resolve(&after), 2, "positional fallback");
+}
+
+#[test]
+fn the_fallback_clamps_when_the_list_shrinks() {
+    let mut selection = Selection::default();
+    let before: Vec<String> = (0..10).map(|i| i.to_string()).collect();
+    selection.set(&before, 9);
+    let after: Vec<String> = (0..3).map(|i| format!("x{i}")).collect();
+    assert_eq!(selection.resolve(&after), 2);
+    assert_eq!(selection.resolve(&[]), 0, "an empty list selects nothing");
+}
+
+#[test]
+fn moving_the_cursor_records_the_new_key() {
+    let mut selection = Selection::default();
+    let keys: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
+    selection.move_by(&keys, 1);
+    assert_eq!(selection.key(), Some("b"));
+    selection.move_by(&keys, 10);
+    assert_eq!(selection.key(), Some("c"), "clamped at the end");
+    selection.move_by(&keys, -10);
+    assert_eq!(selection.key(), Some("a"), "clamped at the start");
+}
+
+#[test]
+fn the_cursor_stays_on_its_session_when_the_list_reorders_between_ticks() {
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    // alpha is expanded on first sight, so its two sessions are rows.
+    press(&mut state, KeyCode::Down);
+    press(&mut state, KeyCode::Down);
+    let before = tree_snapshot(&state);
+    let selected_key = before.keys[before.selected].clone();
+
+    // The scan comes back with the same sessions in a different order.
+    let mut reordered = three_sessions();
+    reordered.reverse();
+    for (i, s) in reordered.iter_mut().enumerate() {
+        s.last_timestamp = Some(format!("2026-09-16T1{i}:00:00.000Z"));
+    }
+    with_sessions(&mut state, reordered);
+
+    let after = tree_snapshot(&state);
+    assert_eq!(after.keys[after.selected], selected_key);
+}
+
+// --- global keys ------------------------------------------------------------
+
+#[test]
+fn the_opening_view_comes_from_config() {
+    // Config's own default is the board; that is what a fresh install opens on.
+    let (_dir, state) = temp_state();
+    assert_eq!(state.view, View::Board);
+}
+
+#[test]
+fn q_and_ctrl_c_detach_without_stopping_the_daemon() {
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('q'));
+    assert_eq!(state.quit, Some(Quit::Detach));
+
+    let (_dir, mut state) = sessions_state();
+    handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        AREA,
+    );
+    assert_eq!(state.quit, Some(Quit::Detach));
+}
+
+#[test]
+fn shift_q_confirms_before_stopping_everything() {
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('Q'));
+    assert!(state.quit.is_none(), "Shift-Q must confirm first");
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("shutdown"));
+}
+
+#[test]
+fn tab_cycles_the_view_and_shift_tab_cycles_the_pane() {
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Tab);
+    assert_eq!(state.view, View::Board);
+    press(&mut state, KeyCode::Tab);
+    assert_eq!(state.view, View::Deploy);
+    press(&mut state, KeyCode::Tab);
+    assert_eq!(state.view, View::Sessions);
+
+    assert_eq!(state.focus, Pane::Tree);
+    press(&mut state, KeyCode::BackTab);
+    assert_eq!(state.focus, Pane::Conversation);
+    press(&mut state, KeyCode::BackTab);
+    assert_eq!(state.focus, Pane::Tree);
+}
+
+#[test]
+fn r_refreshes_everywhere_except_on_a_session_row() {
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('r'));
+    assert_eq!(state.pending_actions().front(), Some(&Action::Refresh));
+
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    press(&mut state, KeyCode::Down); // onto a session row
+    press(&mut state, KeyCode::Char('r'));
+    assert!(state.take_actions().is_empty(), "r renamed instead");
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("rename"));
+}
+
+#[test]
+fn the_phase_placeholders_flash_rather_than_doing_nothing() {
+    // A key that silently does nothing reads as a broken dashboard.
+    for code in [KeyCode::Char('u'), KeyCode::Char('l'), KeyCode::Char('L')] {
+        let (_dir, mut state) = sessions_state();
+        press(&mut state, code);
+        assert!(state.flash.is_some(), "{code:?} said nothing");
+    }
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    press(&mut state, KeyCode::Char('X'));
+    let flash = state.flash.clone().expect("purge flash");
+    assert!(flash.to_lowercase().contains("purge"), "{flash}");
+}
+
+// --- sessions view ----------------------------------------------------------
+
+#[test]
+fn enter_toggles_a_project_and_arrows_expand_and_collapse_it() {
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    assert!(state.expanded_projects.contains("x/alpha"));
+    press(&mut state, KeyCode::Enter);
+    assert!(!state.expanded_projects.contains("x/alpha"));
+    press(&mut state, KeyCode::Right);
+    assert!(state.expanded_projects.contains("x/alpha"));
+    press(&mut state, KeyCode::Left);
+    assert!(!state.expanded_projects.contains("x/alpha"));
+}
+
+#[test]
+fn selecting_a_session_enqueues_the_transcript_read() {
+    // Opening a transcript is I/O, so the key handler asks rather than reads.
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    press(&mut state, KeyCode::Down);
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(state.selected_session_id.as_deref(), Some("aaa"));
+    match state.take_actions().first() {
+        Some(Action::SelectSession { session_id, .. }) => assert_eq!(session_id, "aaa"),
+        other => panic!("expected a select action, got {other:?}"),
+    }
+}
+
+#[test]
+fn o_and_n_and_x_all_go_through_the_action_queue() {
+    // Brief §10 mandate #9: the draw thread must never block on a spawn. Every
+    // one of these leaves as an action for the worker.
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+    press(&mut state, KeyCode::Down); // a session row
+
+    press(&mut state, KeyCode::Char('o'));
+    assert!(matches!(
+        state.take_actions().first(),
+        Some(Action::FocusTerminal(_))
+    ));
+
+    press(&mut state, KeyCode::Char('n'));
+    match state.take_actions().first() {
+        Some(Action::LaunchSession { cwd }) => assert_eq!(cwd, "/Users/x/dev/alpha"),
+        other => panic!("expected a launch action, got {other:?}"),
+    }
+
+    press(&mut state, KeyCode::Char('x'));
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("killConfirm"));
+    assert!(
+        state.take_actions().is_empty(),
+        "x must confirm before signalling anything"
+    );
+}
+
+#[test]
+fn a_kill_refreshes_three_times_because_sigterm_is_not_instant() {
+    assert_eq!(KILL_REFRESH_DELAYS.len(), 3);
+    assert_eq!(KILL_REFRESH_DELAYS[0].as_millis(), 0);
+    assert_eq!(KILL_REFRESH_DELAYS[1].as_millis(), 400);
+    assert_eq!(KILL_REFRESH_DELAYS[2].as_millis(), 1000);
+}
+
+#[test]
+fn a_and_s_open_their_dialogs() {
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('a'));
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("addGroup"));
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('s'));
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("settings"));
+}
+
+#[test]
+fn d_removes_a_group_only_on_its_separator() {
+    let (_dir, mut state) = sessions_state();
+    state
+        .config
+        .add_group("Work", "/Users/x/work")
+        .expect("add group");
+    with_sessions(
+        &mut state,
+        vec![session("aaa", "/Users/x/work/alpha", SessionStatus::Idle)],
+    );
+    // The separator is the first row.
+    press(&mut state, KeyCode::Char('d'));
+    assert!(state.config.groups().is_empty());
+}
+
+// --- conversation pane ------------------------------------------------------
+
+#[test]
+fn conversation_keys_only_apply_when_that_pane_has_focus() {
+    let (_dir, mut state) = sessions_state();
+    assert!(!state.config.chat().show_timestamps);
+    press(&mut state, KeyCode::Char('t')); // tree focus: no effect
+    assert!(!state.config.chat().show_timestamps);
+    state.focus = Pane::Conversation;
+    press(&mut state, KeyCode::Char('t'));
+    assert!(state.config.chat().show_timestamps);
+}
+
+#[test]
+fn f_cycles_the_message_filter() {
+    let (_dir, mut state) = sessions_state();
+    state.focus = Pane::Conversation;
+    for expected in ["user", "assistant", "all"] {
+        press(&mut state, KeyCode::Char('f'));
+        assert_eq!(state.config.chat().message_filter, expected);
+    }
+}
+
+#[test]
+fn slash_opens_search_and_s_opens_settings_from_the_conversation() {
+    let (_dir, mut state) = sessions_state();
+    state.focus = Pane::Conversation;
+    press(&mut state, KeyCode::Char('/'));
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("search"));
+    let (_dir, mut state) = sessions_state();
+    state.focus = Pane::Conversation;
+    press(&mut state, KeyCode::Char('s'));
+    assert_eq!(state.dialog.as_ref().map(|d| d.name()), Some("settings"));
+}
+
+#[test]
+fn scrolling_releases_the_stick_and_g_capital_restores_it() {
+    let (_dir, mut state) = sessions_state();
+    state.focus = Pane::Conversation;
+    state.conv.page_height = 10;
+    state.conv.total_lines = 100;
+    state.conv.stick = true;
+    state.conv.scroll_top = 90;
+
+    press(&mut state, KeyCode::Up);
+    assert_eq!(state.conv.scroll_top, 89);
+    assert!(!state.conv.stick, "scrolling up released the stick");
+
+    press(&mut state, KeyCode::Char('g'));
+    assert_eq!(state.conv.scroll_top, 0);
+    assert!(!state.conv.stick);
+
+    press(&mut state, KeyCode::Char('G'));
+    assert!(state.conv.stick, "G re-sticks to the bottom");
+}
+
+#[test]
+fn page_keys_move_by_the_last_measured_page() {
+    let (_dir, mut state) = sessions_state();
+    state.focus = Pane::Conversation;
+    state.conv.page_height = 10;
+    state.conv.total_lines = 100;
+    state.conv.scroll_top = 50;
+    press(&mut state, KeyCode::PageUp);
+    assert_eq!(state.conv.scroll_top, 40);
+    press(&mut state, KeyCode::Char(' '));
+    assert_eq!(state.conv.scroll_top, 50);
+    for _ in 0..20 {
+        press(&mut state, KeyCode::PageDown);
+    }
+    assert_eq!(state.conv.scroll_top, 90, "clamped at the last page");
+    assert!(state.conv.stick, "reaching the bottom re-sticks");
+}

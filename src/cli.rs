@@ -1,5 +1,9 @@
 use clap::{Parser, Subcommand};
 
+use crate::config::{ConfigHandle, EnvOverrides};
+use crate::paths::Paths;
+use crate::term::SpawnPolicy;
+
 /// A live terminal dashboard for your Claude Code sessions.
 #[derive(Parser)]
 #[command(name = "claude-sessions", version, about)]
@@ -26,8 +30,14 @@ pub enum Command {
 
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Paths and config are resolved exactly once, here, and handed down —
+    // nothing below `main` reads the environment for itself.
     let surface = match cli.command {
-        None => "dashboard",
+        None => {
+            let paths = Paths::from_env();
+            let config = ConfigHandle::load(&paths, EnvOverrides::from_env());
+            return crate::ui::run_dashboard(paths, config, SpawnPolicy::detect());
+        }
         Some(Command::Daemon) => "daemon",
         Some(Command::Done) => "done hook",
         Some(Command::Notify) => "notify hook",

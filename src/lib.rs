@@ -20,4 +20,5 @@ pub mod ssh;
 pub mod term;
 pub mod transcript;
 pub mod types;
+pub mod ui;
 pub mod util;

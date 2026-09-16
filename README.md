@@ -201,9 +201,9 @@ cargo test
 This is an active rewrite of a battle-tested internal tool. Surfaces land in order:
 
 - [x] CLI scaffold — one binary, subcommand layout
-- [ ] Session scanner + transcript parser
-- [ ] Dashboard: sessions list + conversation pane + themes
-- [ ] Terminal drivers (tmux, iTerm2)
+- [x] Session scanner + transcript parser
+- [x] Dashboard: sessions list + conversation pane + themes
+- [x] Terminal drivers (tmux, iTerm2)
 - [ ] Daemon + `notify` / `done` / `blocked` hooks
 - [ ] Odoo task board + task pipeline
 - [ ] QA pipelines + viewer

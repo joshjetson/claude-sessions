@@ -2,6 +2,7 @@
 name = "claude-sessions"
 version = "0.1.0"
 edition = "2021"
+resolver = "3"
 rust-version = "1.85"
 license = "MIT"
 description = "A live terminal dashboard for your Claude Code sessions — conversations, task board, QA pipelines, and deploys in one TUI"
@@ -13,6 +14,8 @@ categories = ["command-line-utilities", "development-tools"]
 exclude = ["assets/", ".github/"]
 
 [dependencies]
+crossterm = "0.28"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
