@@ -1,0 +1,29 @@
+//! Discovery: which processes are Claude Code sessions, which transcript each
+//! one is writing, and what a project directory holds.
+//!
+//! The entry point is [`Scanner`], held across ticks for its caches. Everything
+//! below it is small and testable on its own: [`is_interactive_claude`] and
+//! friends decide what counts, [`pair_processes_to_sessions`] is pure, and the
+//! operating system is reached only through [`ProcessSource`].
+
+mod detect;
+mod files;
+mod pairing;
+mod process;
+mod projects;
+mod scanner;
+
+pub use detect::{
+    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+};
+pub use files::{is_compacting, session_files_in, SessionFilesCache};
+pub use pairing::{pair_processes_to_sessions, Pairing, BIRTH_SLACK_MS, BIRTH_WINDOW_MS};
+pub use process::{
+    parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row, ClaudeProcess, ProcessRow,
+    ProcessSource, SystemProcessSource,
+};
+pub use projects::discover_projects;
+pub use scanner::Scanner;
+
+#[cfg(test)]
+mod tests;

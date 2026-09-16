@@ -96,4 +96,9 @@ pub struct SessionFile {
     pub path: PathBuf,
     pub mtime: SystemTime,
     pub size: u64,
+    /// Creation time, where the filesystem reports one. `None` is "unknown",
+    /// which the pairing rules treat as a different thing from "born at the
+    /// epoch" — Node conflated the two behind `birthtime > 0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub birthtime: Option<SystemTime>,
 }

@@ -7,7 +7,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
@@ -294,7 +294,21 @@ pub fn format_start_time(lstart: &str, now: DateTime<Local>) -> String {
     }
 }
 
-fn parse_start_time(raw: &str) -> Option<NaiveDateTime> {
+/// A `ps -o lstart` stamp as an absolute instant, for arithmetic against file
+/// timestamps (the pairing rules in [`crate::scan`] compare it to a
+/// transcript's birth time).
+///
+/// `ps` prints local time with no zone, so this resolves through the local
+/// zone; the earlier of the two readings is taken for the hour that repeats
+/// when clocks go back.
+pub fn start_time_instant(lstart: &str) -> Option<SystemTime> {
+    let naive = parse_start_time(lstart.trim())?;
+    let local = Local.from_local_datetime(&naive).earliest()?;
+    Some(local.with_timezone(&Utc).into())
+}
+
+/// Parse a BSD `ps -o lstart` stamp: `Wed Sep 16 14:10:37 2026`, local time.
+pub fn parse_start_time(raw: &str) -> Option<NaiveDateTime> {
     // BSD `ps -o lstart` prints "Tue Sep 16 14:08:03 2026" in local time; the
     // day is space-padded for single digits.
     NaiveDateTime::parse_from_str(raw, "%a %b %e %H:%M:%S %Y")

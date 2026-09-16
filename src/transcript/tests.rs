@@ -6,6 +6,7 @@ mod conversation;
 mod cursor;
 mod invariants;
 mod prompts;
+mod task_ref;
 mod tool_use;
 
 use std::io::Write;

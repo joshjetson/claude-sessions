@@ -19,6 +19,7 @@
 mod cursor;
 mod entry;
 mod parse;
+mod task_ref;
 mod tool_use;
 
 pub use cursor::{CursorPoll, TranscriptCursor};
@@ -27,6 +28,7 @@ pub use parse::{
     parse_conversation, parse_session_and_conversation, parse_session_file, Collect,
     INITIAL_TAIL_SIZE, MAX_PROMPTS, MAX_TAIL_SIZE,
 };
+pub use task_ref::{first_task_ref, task_ref_in, TaskRefCache, TASK_REF_HEAD_BYTES};
 pub use tool_use::{format_tool_use, ToolInput};
 
 #[cfg(test)]
