@@ -1,0 +1,310 @@
+//! The small pure helpers: transcript-directory encoding, display-width aware
+//! truncation, the formatting the panes render, and the session status machine.
+//!
+//! Ported from the Node app's `src/utils.ts`. Nothing here reads the clock — the
+//! caller passes `now` in — so the status machine and the "3m ago" strings are
+//! testable without sleeping, and one render pass sees one consistent instant.
+
+use std::time::{Duration, SystemTime};
+
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
+
+/// Claude Code's context window, for the "72K tokens (36%)" readout.
+pub const CONTEXT_WINDOW: u64 = 200_000;
+
+/// A transcript younger than this is working, whatever its last entry says —
+/// the file is being appended to right now.
+const FRESH_WRITE: Duration = Duration::from_secs(10);
+/// How long a pending tool call stays "working" before it is assumed to be
+/// waiting on something outside the session (usually a permission prompt).
+const TOOL_CALL_GRACE: Duration = Duration::from_secs(30);
+/// How long a prose reply reads as "your turn" before the session goes idle.
+const REPLY_GRACE: Duration = Duration::from_secs(60);
+
+/// Claude Code stores a project's transcripts in a directory named after the
+/// cwd with every `/` replaced by `-`. Everything that finds a transcript
+/// depends on reproducing that encoding exactly.
+pub fn cwd_to_project_dir(cwd: &str) -> String {
+    cwd.replace('/', "-")
+}
+
+/// A short name for a working directory: its last two meaningful segments, with
+/// the scaffolding ones dropped so `/Users/someone/dev/repo` reads `someone/repo`.
+pub fn project_name(cwd: &str) -> String {
+    if cwd.is_empty() {
+        return "unknown".to_string();
+    }
+    let parts: Vec<&str> = cwd.split('/').filter(|p| !p.is_empty()).collect();
+    let meaningful: Vec<&str> = parts
+        .iter()
+        .copied()
+        .filter(|p| *p != "Users" && *p != "dev")
+        .collect();
+    if meaningful.len() >= 2 {
+        return meaningful[meaningful.len() - 2..].join("/");
+    }
+    match parts.last() {
+        Some(base) => base.to_string(),
+        None => cwd.to_string(),
+    }
+}
+
+/// Collapse whitespace and cut to `max_len` *columns*, not characters.
+///
+/// Width rather than length because a pane budget is columns: a row of CJK
+/// glyphs sliced by character count overflows its border and smears the frame.
+pub fn truncate(s: &str, max_len: usize) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let flat = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.width() <= max_len {
+        return flat;
+    }
+    // One column is spent on the ellipsis.
+    let limit = max_len.saturating_sub(1);
+    let mut out = String::new();
+    let mut width = 0usize;
+    for ch in flat.chars() {
+        let w = ch.width().unwrap_or(0);
+        if width + w > limit {
+            break;
+        }
+        out.push(ch);
+        width += w;
+    }
+    out.push('…');
+    out
+}
+
+/// Transcript and Odoo timestamps arrive as ISO strings. Callers that want a
+/// rendered value parse first and decide for themselves what an unparseable
+/// timestamp should look like.
+pub fn parse_timestamp(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s.trim())
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
+}
+
+/// "45s ago" / "12m ago" / "3h ago" / "2d ago" — one unit, always the largest
+/// that fits.
+pub fn time_ago(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let diff = now - then;
+    let (sec, min, hr, day) = (
+        diff.num_seconds(),
+        diff.num_minutes(),
+        diff.num_hours(),
+        diff.num_days(),
+    );
+    if sec < 60 {
+        format!("{sec}s ago")
+    } else if min < 60 {
+        format!("{min}m ago")
+    } else if hr < 24 {
+        format!("{hr}h ago")
+    } else {
+        format!("{day}d ago")
+    }
+}
+
+/// How stale a timestamp looks at a glance: fresh within the hour, aging within
+/// the day, grey after that.
+pub fn activity_color(then: DateTime<Utc>, now: DateTime<Utc>) -> Color {
+    let hours = (now - then).num_seconds() as f64 / 3600.0;
+    if hours < 1.0 {
+        Color::Green
+    } else if hours < 24.0 {
+        Color::Yellow
+    } else {
+        Color::Gray
+    }
+}
+
+/// "72K tokens (36%)" for the session header. Cache reads and cache creations
+/// count toward the window just as much as fresh prompt tokens do.
+pub fn format_context_usage(usage: Option<&Usage>) -> String {
+    let Some(usage) = usage else {
+        return String::new();
+    };
+    let total = usage.total_tokens() as f64;
+    let thousands = (total / 1000.0).round() as u64;
+    let pct = (total / CONTEXT_WINDOW as f64 * 100.0).round() as i64;
+    format!("{thousands}K tokens ({pct}%)")
+}
+
+impl SessionStatus {
+    /// The word shown in the session row. Note `Awaiting` and `AwaitingInput`
+    /// deliberately render the same: the distinction drives alerting, not the
+    /// reader's attention.
+    pub fn label(self) -> &'static str {
+        match self {
+            SessionStatus::Working => "working",
+            SessionStatus::Idle => "idle",
+            SessionStatus::Awaiting | SessionStatus::AwaitingInput => "awaiting",
+            SessionStatus::Compacting => "compacting",
+            SessionStatus::Starting => "starting…",
+        }
+    }
+
+    pub fn color(self) -> Color {
+        match self {
+            SessionStatus::Working => Color::Green,
+            SessionStatus::Idle => Color::Gray,
+            SessionStatus::Awaiting => Color::Yellow,
+            SessionStatus::AwaitingInput | SessionStatus::Starting => Color::Cyan,
+            SessionStatus::Compacting => Color::Magenta,
+        }
+    }
+}
+
+/// Tool names as a reader would say them. Unlisted tools (including every MCP
+/// one) fall back to "using <Name>", which is why this is a match and not a
+/// registry that has to be kept current.
+fn friendly_tool_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "Read" => "reading",
+        "Edit" => "editing",
+        "Write" => "writing",
+        "Bash" => "running command",
+        "Grep" => "searching",
+        "Glob" => "finding files",
+        "Task" => "running agent",
+        "WebFetch" => "fetching web",
+        "WebSearch" => "searching web",
+        "NotebookEdit" => "editing notebook",
+        "AskUserQuestion" => "asking user",
+        "EnterPlanMode" => "planning",
+        _ => return None,
+    })
+}
+
+fn using(name: &str) -> String {
+    friendly_tool_name(name)
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("using {name}"))
+}
+
+/// What the session is doing right now, for the second line of its row.
+pub fn activity_label(last_entry: Option<&LastEntry>) -> String {
+    let Some(entry) = last_entry else {
+        return String::new();
+    };
+    match &entry.kind {
+        EntryKind::Progress => {
+            let progress = entry.progress.as_ref();
+            match progress.and_then(|p| p.kind.as_deref()) {
+                Some("bash_progress") => "running command".to_string(),
+                Some("agent_progress") => "running agent".to_string(),
+                Some("hook_progress") => {
+                    // Hook names read "PreToolUse:Read" — the tool is the tail.
+                    let hook = progress.and_then(|p| p.hook_name.as_deref()).unwrap_or("");
+                    match hook.rsplit(':').next().unwrap_or("") {
+                        "" => "processing".to_string(),
+                        tool => using(tool),
+                    }
+                }
+                _ => "processing".to_string(),
+            }
+        }
+        EntryKind::Assistant if entry.has_message => match entry.tool_uses.last() {
+            Some(name) => using(name),
+            None => "responding".to_string(),
+        },
+        EntryKind::User => "thinking".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// The status machine, driven by the transcript's trailing entry and the file's
+/// mtime. `now` is a parameter so a whole refresh judges every session against
+/// one instant.
+pub fn detect_session_status(
+    last_entry: Option<&LastEntry>,
+    session_mtime: SystemTime,
+    now: SystemTime,
+) -> SessionStatus {
+    let Some(entry) = last_entry else {
+        return SessionStatus::Idle;
+    };
+    // A future mtime (clock skew, a copied transcript) reads as age zero, which
+    // is what Node's negative `ageSec < 10` comparison did too.
+    let age = now.duration_since(session_mtime).unwrap_or(Duration::ZERO);
+
+    if age < FRESH_WRITE {
+        return SessionStatus::Working;
+    }
+
+    match &entry.kind {
+        // The turn finished and Claude Code wrote its duration line.
+        EntryKind::System if entry.subtype.as_deref() == Some("turn_duration") => {
+            SessionStatus::Idle
+        }
+        EntryKind::Progress => SessionStatus::Working,
+        // A user entry is either a tool result mid-turn or fresh input.
+        EntryKind::User => {
+            if age < TOOL_CALL_GRACE {
+                SessionStatus::Working
+            } else {
+                SessionStatus::AwaitingInput
+            }
+        }
+        EntryKind::Assistant => {
+            if entry.has_tool_use() {
+                if age < TOOL_CALL_GRACE {
+                    SessionStatus::Working
+                } else {
+                    SessionStatus::Awaiting
+                }
+            } else if age < REPLY_GRACE {
+                SessionStatus::AwaitingInput
+            } else {
+                SessionStatus::Idle
+            }
+        }
+        // KNOWN GAP (pinned by the Node suite, preserved deliberately): current
+        // Claude Code ends transcripts on bookkeeping entries — `last-prompt`,
+        // `file-history-snapshot`, `attachment`, `ai-title`, `mode`, `pr-link` —
+        // so they land here and report idle, and the conversational branches
+        // above are mostly unreachable in practice. Fixing it means teaching the
+        // machine about those types, not changing this fall-through.
+        _ => SessionStatus::Idle,
+    }
+}
+
+/// Render a process start time: bare clock time for today, with a date prefix
+/// otherwise. The input is whatever `ps -o lstart` printed.
+pub fn format_start_time(lstart: &str, now: DateTime<Local>) -> String {
+    let raw = lstart.trim();
+    if raw.is_empty() {
+        return String::new();
+    }
+    let Some(started) = parse_start_time(raw) else {
+        // Unparseable start times are shown as-is rather than hidden: a garbled
+        // value in the row is a bug report, an empty cell is not.
+        return raw.to_string();
+    };
+    let clock = started.format("%I:%M %p");
+    if started.date() == now.date_naive() {
+        clock.to_string()
+    } else {
+        format!("{} {}", started.format("%b %-d"), clock)
+    }
+}
+
+fn parse_start_time(raw: &str) -> Option<NaiveDateTime> {
+    // BSD `ps -o lstart` prints "Tue Sep 16 14:08:03 2026" in local time; the
+    // day is space-padded for single digits.
+    NaiveDateTime::parse_from_str(raw, "%a %b %e %H:%M:%S %Y")
+        .ok()
+        .or_else(|| {
+            DateTime::parse_from_rfc3339(raw)
+                .ok()
+                .map(|d| d.with_timezone(&Local).naive_local())
+        })
+}
+
+#[cfg(test)]
+mod tests;

@@ -1,5 +1,3 @@
-mod cli;
-
 fn main() -> anyhow::Result<()> {
-    cli::run()
+    claude_sessions::cli::run()
 }
