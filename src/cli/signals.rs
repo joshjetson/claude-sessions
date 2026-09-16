@@ -28,7 +28,7 @@ mod platform {
     }
 
     pub(crate) fn install() {
-        let handler = catch as usize;
+        let handler = catch as extern "C" fn(i32) as usize;
         // SAFETY: registering a handler whose whole body is one atomic store.
         unsafe {
             signal(SIGINT, handler);
