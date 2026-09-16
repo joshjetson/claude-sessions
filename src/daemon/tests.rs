@@ -12,6 +12,8 @@
 mod alerts;
 mod archive;
 mod awaiting;
+mod backend;
+mod board;
 mod completion;
 mod fakes;
 mod linking;
@@ -67,6 +69,7 @@ pub(crate) struct Setup {
     pub(crate) config: Option<serde_json::Value>,
     pub(crate) assigned: Option<super::engine::AssignedFetch>,
     pub(crate) usage: Option<super::engine::UsageHook>,
+    pub(crate) board: Option<super::engine::BoardFetch>,
 }
 
 pub(crate) fn engine() -> TestEngine {
@@ -91,6 +94,7 @@ pub(crate) fn engine_with(setup: Setup) -> TestEngine {
     let engine = Engine::new(EngineOptions {
         backend: Arc::new(backend.clone()),
         fetch_assigned: setup.assigned,
+        fetch_board: setup.board,
         daily_log: Some(Box::new(move |record| {
             log.lock().unwrap().push(record.clone())
         })),

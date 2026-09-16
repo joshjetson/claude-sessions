@@ -15,10 +15,12 @@
 //! - [`keys`] — pure routing; blocking work leaves as a [`state::Action`].
 //! - [`dialogs`] — the four primitives plus the sessions-view dialogs.
 //! - [`feed`] — where sessions come from; Phase 6 plugs the daemon in here.
+//! - [`board`] — the Odoo task board: rows, detail, the launch flow.
 //! - [`actions`], [`run`] — the worker thread and the event loop.
 
 pub mod actions;
 pub mod app;
+pub mod board;
 pub mod components;
 pub mod conversation;
 pub mod dialogs;

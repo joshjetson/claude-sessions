@@ -10,9 +10,12 @@
 //! budget is columns, and a row of CJK sliced by character count smears the
 //! border it was supposed to sit inside.
 
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+use crate::board::{Role, Segment};
+use crate::ui::theme::color_from_name;
 
 /// Total display width of a run of spans.
 pub fn spans_width(spans: &[Span<'_>]) -> usize {
@@ -224,4 +227,46 @@ pub fn wrap_spans(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static
 /// windowing stays exact.
 pub fn wrap_line(line: &Line<'static>, width: usize) -> Vec<Vec<Span<'static>>> {
     wrap_spans(&line.spans, width)
+}
+
+// --- board rows -------------------------------------------------------------
+
+/// A [`crate::board::Role`] as a concrete style.
+///
+/// The board module returns rows as `(text, Role)` pairs precisely so this
+/// mapping exists once. The Node app instead returned strings carrying blessed
+/// tags (`{yellow-fg}★{/yellow-fg}`) which the renderer parsed back out — three
+/// string passes per row per frame, for every row whether visible or not
+/// (brief §10 mandate #7).
+pub fn role_style(role: Role) -> Style {
+    let name = match role {
+        Role::Plain => return Style::default(),
+        Role::Dim => "gray",
+        Role::Accent => "cyan",
+        Role::Id => "gray",
+        Role::Ok => "green",
+        Role::Ready => "green",
+        Role::Warn => "yellow",
+        Role::Danger => "red",
+        Role::Info => "blue",
+        Role::Project => "magenta",
+    };
+    Style::default().fg(color_from_name(name))
+}
+
+/// One board [`Segment`] as a ratatui [`Span`].
+pub fn segment_span(segment: &Segment) -> Span<'static> {
+    let mut style = role_style(segment.style.role);
+    if segment.style.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if segment.style.invert {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    Span::styled(segment.text.clone(), style)
+}
+
+/// A whole formatted board row as a drawable line.
+pub fn row_line(row: &[Segment]) -> Line<'static> {
+    Line::from(row.iter().map(segment_span).collect::<Vec<_>>())
 }

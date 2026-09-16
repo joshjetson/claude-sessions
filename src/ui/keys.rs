@@ -9,12 +9,17 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::term::SessionRef;
+use crate::ui::board::handle_board;
 use crate::ui::dialogs::{
-    AddGroup, Dialog, DialogCtx, DialogOutcome, KillConfirm, Rename, Search, SettingsDialog,
-    ShutdownConfirm,
+    AddGroup, Dialog, DialogCtx, KillConfirm, Rename, Search, SettingsDialog, ShutdownConfirm,
 };
 use crate::ui::state::{Action, AppState, Pane, Quit, View};
 use crate::ui::tree::{build_grouped_tree, SelectedRow, TreeItem};
+
+mod dialog;
+
+use dialog::apply_dialog_outcome;
+pub use dialog::go_to_session;
 
 /// A read-only look at the sessions tree as it stands right now.
 pub struct TreeSnapshot {
@@ -62,12 +67,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
             };
             dialog.handle_key(key, area, &mut ctx)
         };
-        match outcome {
-            DialogOutcome::Stay => state.dialog = Some(dialog),
-            DialogOutcome::Close => {}
-            DialogOutcome::Act(action) => state.enqueue(action),
-            DialogOutcome::Quit(quit) => state.quit = Some(quit),
-        }
+        apply_dialog_outcome(state, dialog, outcome);
         return;
     }
 
@@ -76,9 +76,10 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
     }
     match state.view {
         View::Sessions => handle_sessions(state, key),
-        // Phase 9b (board) and Phase 10 (deploy) own these views; until then
-        // their panes are placeholders and only the global keys apply.
-        View::Board | View::Deploy => {}
+        View::Board => handle_board(state, key),
+        // Phase 10 owns the deploy view; until then its pane is a placeholder
+        // and only the global keys apply.
+        View::Deploy => {}
     }
 }
 
@@ -125,6 +126,11 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
         }
         KeyCode::Char('r') if !renames_instead(state) => {
             state.enqueue(Action::Refresh);
+            // On the board tab `r` is also the retry the error message asks
+            // for, so it refetches rather than only rescanning processes.
+            if state.view == View::Board {
+                crate::ui::board::keys::refresh(state);
+            }
             true
         }
         _ => false,
@@ -145,6 +151,12 @@ fn set_view(state: &mut AppState, view: View) {
     state.focus = Pane::Tree;
     state.list_scroll = 0;
     state.flash = None;
+    // Arriving at an empty board fetches it, so the tab fills in rather than
+    // waiting out the 45-second poll.
+    if view == View::Board && state.board.board.is_none() && !state.board.loading {
+        state.board.loading = true;
+        crate::ui::board::keys::refresh(state);
+    }
 }
 
 fn handle_sessions(state: &mut AppState, key: KeyEvent) {

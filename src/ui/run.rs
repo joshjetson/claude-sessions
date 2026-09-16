@@ -29,7 +29,7 @@ use crate::config::ConfigHandle;
 use crate::paths::Paths;
 use crate::term::{driver_or_null, resolve_editor_from_env, run_editor, SpawnPolicy};
 use crate::transcript::{Collect, TranscriptCursor};
-use crate::ui::actions::{ActionResult, ActionWorker};
+use crate::ui::actions::{ActionResult, ActionWorker, BoardServices};
 use crate::ui::app::{body_area, draw};
 use crate::ui::conversation::ConversationMeta;
 use crate::ui::feed::{EmbeddedFeed, FeedEvent, SessionFeed};
@@ -154,7 +154,8 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         );
     }
 
-    let worker = ActionWorker::start(driver_or_null(&config, policy), policy);
+    let services = BoardServices::new(paths.clone(), odoo_client(&config), config.sounds());
+    let worker = ActionWorker::start(driver_or_null(&config, policy), policy, services);
     let mut state = AppState::new(paths.clone(), config);
     let mut feed = EmbeddedFeed::start(paths, group_paths(&state));
 
@@ -219,6 +220,7 @@ fn event_loop(
                     sync_selected_meta(state);
                 }
                 FeedEvent::Notification(notification) => state.push_notification(*notification),
+                FeedEvent::Board(update) => state.apply_board(*update),
             }
         }
 
@@ -230,6 +232,7 @@ fn event_loop(
                     feed.note_launch();
                     state.dirty = true;
                 }
+                other => crate::ui::board::apply_result(state, other),
             }
         }
 
@@ -270,7 +273,13 @@ fn event_loop(
                         state.flash(error);
                     }
                 }
-                other => worker.submit(other),
+                other => {
+                    // A task launch has to be registered with the pending queue
+                    // BEFORE the terminal opens, or nothing will claim the
+                    // session it starts.
+                    crate::ui::board::note_launch(feed, &other);
+                    worker.submit(other);
+                }
             }
         }
 
@@ -287,6 +296,15 @@ fn event_loop(
             return Ok(());
         }
     }
+}
+
+/// The Odoo client the worker uses, or nothing when the install is not
+/// configured for Odoo — which is a supported way to run the dashboard.
+fn odoo_client(config: &ConfigHandle) -> Option<std::sync::Arc<crate::odoo::OdooClient>> {
+    let creds = config.odoo_creds();
+    creds
+        .is_complete()
+        .then(|| std::sync::Arc::new(crate::odoo::OdooClient::new(creds)))
 }
 
 fn group_paths(state: &AppState) -> Vec<String> {

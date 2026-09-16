@@ -1,12 +1,12 @@
-//! What happens when a task finishes, and the seams the later phases fill.
+//! What happens when a task finishes.
 //!
 //! The orchestration is here and stays here: which order things happen in, what
 //! is still done when a step fails, what the user is told afterwards. What is
-//! NOT here is anything that talks to Odoo or GitLab — those sit behind
-//! [`TaskBackend`], which Phase 9b (Odoo) and Phase 10 (deploy/GitLab)
-//! implement, and behind the daily-log hook Phase 11 wires up. Until they do,
-//! [`NullBackend`] makes every remote step a soft no-op and the local half —
-//! archiving, the state change, the notification — still runs.
+//! NOT here is anything that talks to Odoo or GitLab — that is
+//! [`super::backend`]'s [`TaskBackend`], and the daily-log hook Phase 11 wires
+//! up. With no backend installed [`super::backend::NullBackend`] makes every
+//! remote step a soft no-op and the local half — archiving, the state change,
+//! the notification — still runs.
 //!
 //! The order matters and is the Node original's: the merge request first (so
 //! the comment can link it), then the stage move, then the comment, then the
@@ -21,6 +21,7 @@ use crate::archive::ArchiveRequest;
 use crate::scan::ProcessSource;
 use crate::types::NotificationLevel;
 
+use super::backend::{MergeRequestRequest, StageMove, StageMoveRequest, TaskDetail};
 use super::engine::EngineInner;
 use super::events::EngineEvent;
 use super::markers::{BlockedMarker, DoneMarker};
@@ -28,104 +29,6 @@ use super::notify::NewNotification;
 use super::state::{BlockedTask, TaskLinkPatch, TaskLinkStatus};
 use super::summary::summary_to_html;
 use crate::util::iso_now;
-
-/// What Odoo knows about a task the board has not loaded.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TaskDetail {
-    pub project_id: Option<i64>,
-    pub stage_id: Option<i64>,
-    pub name: String,
-    pub project_name: String,
-}
-
-/// A finished task that may need a merge request opening.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MergeRequestRequest {
-    pub task_id: i64,
-    /// Where the work was done — the repository `glab` is run in.
-    pub cwd: PathBuf,
-    pub project_id: Option<i64>,
-    pub project_name: String,
-}
-
-/// A finished task that may need moving on.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DoneStageRequest {
-    pub task_id: i64,
-    pub project_id: Option<i64>,
-    /// The stage it is in now, which the resolver uses to avoid moving
-    /// backwards.
-    pub stage_id: Option<i64>,
-    pub project_name: String,
-    /// The repository, so the project's own pipeline definition is the one
-    /// consulted: the flow shown under `P` is the flow that runs.
-    pub repo_path: Option<PathBuf>,
-}
-
-/// What became of a stage move.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StageMove {
-    /// The project's pipeline has no enabled `move-qa` step — moving the task
-    /// is not this flow's job, and that is not an error.
-    Disabled,
-    Moved(String),
-    /// Nothing matched. Never guess forward: the next stage along could be
-    /// "Revision Required".
-    NoStage(String),
-}
-
-/// Everything the completion flow needs from the outside world.
-///
-/// Phase 9b implements the Odoo half (`task_detail`, `move_to_done_stage`,
-/// `post_comment`), Phase 10 the GitLab half (`ensure_merge_request`). Each
-/// returns `Result<_, String>` because the message is shown to the user in the
-/// completion notification, not logged.
-pub trait TaskBackend: Send + Sync {
-    /// `project.task` read, for a task the board has not loaded.
-    fn task_detail(&self, task_id: i64) -> Result<TaskDetail, String>;
-
-    /// Safety net: if a finished task has no merge request yet, open one.
-    ///
-    /// The implementation is expected to skip when Odoo already holds an MR
-    /// URL, and when the branch is `development`/`main`/`master` or detached —
-    /// there is nothing to open a merge request from.
-    fn ensure_merge_request(&self, request: &MergeRequestRequest)
-        -> Result<Option<String>, String>;
-
-    /// Resolve the project's done stage by NAME and move the task there.
-    fn move_to_done_stage(&self, request: &DoneStageRequest) -> Result<StageMove, String>;
-
-    /// Post the completion comment on the task's chatter, as HTML.
-    fn post_comment(&self, task_id: i64, html: &str) -> Result<(), String>;
-}
-
-/// The backend until a later phase installs a real one: every remote step is a
-/// no-op, and says so.
-///
-/// Not a panic and not an error the flow aborts on — a daemon with no Odoo
-/// credentials must still archive transcripts and raise notifications.
-pub struct NullBackend;
-
-impl TaskBackend for NullBackend {
-    fn task_detail(&self, _task_id: i64) -> Result<TaskDetail, String> {
-        Ok(TaskDetail::default())
-    }
-
-    fn ensure_merge_request(
-        &self,
-        _request: &MergeRequestRequest,
-    ) -> Result<Option<String>, String> {
-        Ok(None)
-    }
-
-    fn move_to_done_stage(&self, _request: &DoneStageRequest) -> Result<StageMove, String> {
-        Ok(StageMove::Disabled)
-    }
-
-    fn post_comment(&self, _task_id: i64, _html: &str) -> Result<(), String> {
-        Ok(())
-    }
-}
 
 /// One line of the standup log. Phase 11 owns the writing; this is what it is
 /// handed.
@@ -194,12 +97,17 @@ impl<S: ProcessSource> EngineInner<S> {
 
         // Where the finished task goes is defined by the project's pipeline, so
         // the flow shown under `P` is the one that runs.
-        let moved = self.backend.move_to_done_stage(&DoneStageRequest {
-            task_id,
+        let moved = self.backend.move_to_stage(&StageMoveRequest {
             project_id: detail.project_id,
             stage_id: detail.stage_id,
             project_name: detail.project_name.clone(),
             repo_path: repo_path.clone(),
+            preferred: self
+                .config()
+                .done_stage()
+                .map(<[String]>::to_vec)
+                .unwrap_or_default(),
+            ..StageMoveRequest::to_done(task_id)
         });
 
         let comment = completion_comment(mr_url.as_deref(), &marker.summary, &work_cwd);
@@ -374,6 +282,7 @@ fn completion_message(
     };
     let stage = match moved {
         Ok(StageMove::Moved(stage)) => format!("Moved to {stage}. "),
+        Ok(StageMove::Unchanged(stage)) => format!("Already in {stage}. "),
         Ok(StageMove::NoStage(reason)) => format!("NOT moved ({reason}). "),
         Ok(StageMove::Disabled) => String::new(),
         Err(error) => format!("NOT moved ({error}). "),

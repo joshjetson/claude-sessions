@@ -35,10 +35,15 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.refresh(true);
     }
 
+    /// Which tasks the board shows. Changing it drops the board on the floor:
+    /// the old one is another filter's answer, and leaving it up while the new
+    /// one loads shows exactly the tasks that were just filtered out.
     pub fn set_board_filter(&self, filter: BoardFilter) -> ActionResult {
-        self.inner.state().board_filter = filter;
-        // Phase 9b refreshes the board here; the filter is stored either way so
-        // a snapshot taken now already reports it.
+        {
+            let mut state = self.inner.state();
+            state.board_filter = filter;
+            state.set_board(None);
+        }
         ActionResult::ok()
     }
 
@@ -132,6 +137,24 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
     pub fn process_blocked(&self, marker: BlockedMarker) {
         self.inner
             .spawn_worker(move |inner| inner.process_blocked(marker));
+    }
+
+    /// Fetch the board, off the caller's thread.
+    ///
+    /// Fire-and-forget like `processDone`: an Odoo round trip takes seconds and
+    /// an HTTP route (or a keystroke) must not wait for it. Best-effort by
+    /// design — a failure leaves the previous board up with an error beside it
+    /// and never stops the sessions tick.
+    pub fn refresh_board(&self) {
+        if self.inner.fetch_board.is_none() {
+            return;
+        }
+        self.inner.state().board_loading = true;
+        self.inner.publish(EngineEvent::Board {
+            loading: true,
+            error: None,
+        });
+        self.inner.spawn_worker(|inner| inner.poll_board());
     }
 
     /// Wait for the completion workers. `stop` does this too; it is public so a

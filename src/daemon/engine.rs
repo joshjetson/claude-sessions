@@ -16,13 +16,14 @@ use crate::db::Db;
 use crate::paths::Paths;
 use crate::scan::{ProcessSource, Scanner, SystemProcessSource};
 use crate::term::SpawnPolicy;
-use crate::types::Task;
+use crate::types::{Board, Task};
 
+use super::backend::{NullBackend, TaskBackend};
 use super::caches::Caches;
-use super::completion::{DailyLogHook, NullBackend, TaskBackend};
+use super::completion::DailyLogHook;
 use super::events::{EngineEvent, EventBus, Snapshot};
 use super::lock;
-use super::state::EngineState;
+use super::state::{BoardFilter, EngineState};
 
 /// The Odoo lookup behind the new-assignment alert.
 ///
@@ -35,11 +36,20 @@ pub type AssignedFetch = Box<dyn Fn(&[String]) -> Result<Vec<Task>, String> + Se
 /// value to clients.
 pub type UsageHook = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 
+/// The Odoo board query, behind the same injection seam as [`AssignedFetch`].
+///
+/// A hook rather than an `OdooClient` field so the poll is testable without a
+/// server, and so a daemon with no credentials simply has none installed
+/// instead of failing a request every 45 seconds.
+pub type BoardFetch = Box<dyn Fn(BoardFilter) -> Result<Board, String> + Send + Sync>;
+
 /// What a client asked a refresh to cover.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RefreshRequest {
     pub force_discovery: bool,
-    /// Phase 9b reads this; the sessions tick ignores it.
+    /// A client asking for the board too. The sessions tick ignores it: the
+    /// board is fetched by [`Engine::refresh_board`], which hands the round
+    /// trip to a worker rather than making the caller wait seconds for it.
     pub board: bool,
     /// Phase 10 reads this.
     pub deploy: bool,
@@ -107,6 +117,7 @@ pub(crate) struct EngineInner<S: ProcessSource> {
     pub(crate) bus: EventBus,
     pub(crate) backend: Arc<dyn TaskBackend>,
     pub(crate) fetch_assigned: Option<AssignedFetch>,
+    pub(crate) fetch_board: Option<BoardFetch>,
     pub(crate) daily_log: Option<DailyLogHook>,
     pub(crate) usage: Option<UsageHook>,
     pub(crate) spawn: SpawnPolicy,
@@ -181,6 +192,9 @@ pub struct EngineOptions<S: ProcessSource = SystemProcessSource> {
     /// Phases 9b and 10 replace this with the real Odoo/GitLab implementation.
     pub backend: Arc<dyn TaskBackend>,
     pub fetch_assigned: Option<AssignedFetch>,
+    /// The board poll. `None` leaves the board tab empty and says so, which is
+    /// what a daemon with no Odoo credentials should do.
+    pub fetch_board: Option<BoardFetch>,
     /// Phase 11 wires the standup log in here.
     pub daily_log: Option<DailyLogHook>,
     pub usage: Option<UsageHook>,
@@ -203,6 +217,7 @@ impl<S: ProcessSource> EngineOptions<S> {
             scanner,
             backend: Arc::new(NullBackend),
             fetch_assigned: None,
+            fetch_board: None,
             daily_log: None,
             usage: None,
             spawn: SpawnPolicy::detect(),
@@ -235,6 +250,7 @@ impl<S: ProcessSource> Engine<S> {
                 bus: EventBus::default(),
                 backend: options.backend,
                 fetch_assigned: options.fetch_assigned,
+                fetch_board: options.fetch_board,
                 daily_log: options.daily_log,
                 usage: options.usage,
                 spawn: options.spawn,

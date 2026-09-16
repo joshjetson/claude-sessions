@@ -49,7 +49,9 @@ pub struct TaskDetail {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub stage_id: i64,
     pub stage_name: String,
+    pub project_id: i64,
     pub project_name: String,
     pub priority: String,
     pub deadline: Option<String>,
@@ -180,16 +182,20 @@ pub fn to_blocker(record: &Value) -> Blocker {
 }
 
 pub fn to_detail(record: &Value) -> TaskDetail {
+    // The ids ride along with the names: the completion flow needs them to
+    // resolve a stage, and they are already in the record the names came from.
+    let (stage_id, stage_name) =
+        many2one(record.get("stage_id")).unwrap_or((0, NO_STAGE.to_string()));
+    let (project_id, project_name) =
+        many2one(record.get("project_id")).unwrap_or((0, String::new()));
     TaskDetail {
         id: record.get("id").and_then(Value::as_i64).unwrap_or(0),
         name: string_or_empty(record.get("name")),
         description: string_or_empty(record.get("description")),
-        stage_name: many2one(record.get("stage_id"))
-            .map(|(_, name)| name)
-            .unwrap_or_else(|| NO_STAGE.to_string()),
-        project_name: many2one(record.get("project_id"))
-            .map(|(_, name)| name)
-            .unwrap_or_default(),
+        stage_id,
+        stage_name,
+        project_id,
+        project_name,
         priority: string_or_empty(record.get("priority")),
         deadline: optional_string(record.get("date_deadline")),
     }

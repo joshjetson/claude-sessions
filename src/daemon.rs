@@ -24,7 +24,8 @@
 //! | `alerts` | the pure detection rules the watchers run |
 //! | `lifecycle` | start, stop, and the one timer thread |
 //! | `markers` | the `done/` and `blocked/` marker directories |
-//! | `completion` | what happens when a task finishes, and the seams later phases fill |
+//! | `backend` | what a task flow needs from Odoo, and the implementation of it |
+//! | `completion` | what happens when a task finishes |
 //! | `summary` | an agent's sign-off text as the HTML Odoo's chatter wants |
 //! | `notify` | the notification feed |
 //! | `events` | what leaves the engine: [`EngineEvent`], [`Snapshot`], [`wire_session`] |
@@ -41,6 +42,7 @@
 
 mod actions;
 mod alerts;
+mod backend;
 mod caches;
 mod completion;
 mod engine;
@@ -59,11 +61,14 @@ pub use alerts::{
     detect_new_assignments, detect_stalls, human_duration, normalise_stage, NewAssignment, Stall,
     StallOptions,
 };
-pub use completion::{
-    DailyLogHook, DailyLogRecord, DoneStageRequest, MergeRequestRequest, NullBackend, StageMove,
-    TaskBackend, TaskDetail,
+pub use backend::{
+    MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove, StageMoveRequest, TaskBackend,
+    TaskDetail, MOVE_IN_PROGRESS_STEP, MOVE_QA_STEP,
 };
-pub use engine::{AssignedFetch, Engine, EngineOptions, EngineStats, RefreshRequest, UsageHook};
+pub use completion::{DailyLogHook, DailyLogRecord};
+pub use engine::{
+    AssignedFetch, BoardFetch, Engine, EngineOptions, EngineStats, RefreshRequest, UsageHook,
+};
 pub use events::{wire_session, EngineEvent, SessionStats, SessionsEvent, Snapshot};
 pub use markers::{BlockedMarker, DoneMarker, MARKER_SETTLE};
 pub use notify::{ActionResult, NewNotification, NOTIFICATION_LIMIT};

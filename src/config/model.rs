@@ -73,6 +73,8 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board: Option<BoardBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub sounds: Option<SoundsBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deploy: Option<DeployBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub optics: Option<OpticsBlock>,
@@ -183,6 +185,30 @@ pub struct UsageBlock {
     /// 0 (the default) means "only when asked".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interval_minutes: Option<serde_json::Number>,
+    #[serde(flatten)]
+    pub extra: JsonMap,
+}
+
+/// Per-level notification sounds, as paths `afplay` can open.
+///
+/// New in the port. The Node app bundled an mp3 in the repository for the
+/// success chime and hardcoded three macOS system sounds for the rest; a
+/// bundled asset is not something a published crate should carry, so every
+/// level is a path and the defaults are all system sounds.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SoundsBlock {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub success: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub warn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub info: Option<String>,
+    /// `false` silences every level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
