@@ -9,6 +9,7 @@
 pub mod archive;
 pub mod cli;
 pub mod config;
+pub mod daemon;
 pub mod db;
 pub mod paths;
 pub mod scan;
