@@ -19,12 +19,25 @@
 
 use std::fs;
 use std::process::Command;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
 use claude_sessions::term::{
     LaunchRequest, Platform, SessionRef, SpawnPolicy, TerminalDriver, TmuxDriver,
 };
+
+/// The four live tests drive ONE tmux server and race over pane ids when the
+/// harness runs them in parallel (observed locally and on CI: a sibling test's
+/// freed tty is reassigned mid-assertion). Every test takes this lock first, so
+/// the suite is order-independent at any --test-threads.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 fn tmux(args: &[&str]) -> (bool, String) {
     match Command::new("tmux").args(args).output() {
@@ -83,6 +96,7 @@ fn keep_alive(cwd: &str, title: &str) -> LaunchRequest {
 
 #[test]
 fn launch_creates_a_real_window_at_the_requested_cwd_and_says_how_to_attach() {
+    let _serial = serial();
     if !available() {
         return;
     }
@@ -122,6 +136,7 @@ fn launch_creates_a_real_window_at_the_requested_cwd_and_says_how_to_attach() {
 
 #[test]
 fn addresses_a_session_by_the_bare_tty_the_scanner_reports() {
+    let _serial = serial();
     if !available() {
         return;
     }
@@ -181,6 +196,7 @@ fn addresses_a_session_by_the_bare_tty_the_scanner_reports() {
 
 #[test]
 fn the_launched_command_sees_the_exported_environment() {
+    let _serial = serial();
     if !available() {
         return;
     }
@@ -216,6 +232,7 @@ fn the_launched_command_sees_the_exported_environment() {
 
 #[test]
 fn close_removes_the_pane_and_a_pane_already_gone_is_success() {
+    let _serial = serial();
     if !available() {
         return;
     }
