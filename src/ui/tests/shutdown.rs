@@ -75,7 +75,7 @@ fn shutdown_derives_its_task_list_from_the_live_sessions() {
     let mut duplicate = session("bbb", "/Users/x/dev/alpha", SessionStatus::Working);
     duplicate.task_id = Some(5944);
     let plain = session("ccc", "/Users/x/dev/beta", SessionStatus::Idle);
-    let sessions = vec![linked, duplicate, plain];
+    let sessions = [linked, duplicate, plain];
     let dialog = ShutdownConfirm::from_sessions(sessions.iter());
     assert_eq!(dialog.task_sessions, vec![5944], "deduplicated");
 }

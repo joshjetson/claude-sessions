@@ -135,10 +135,9 @@ impl FileViewer {
         lines.push(Line::default());
         lines.push(hint("↑↓ scroll  ·  o open file  ·  Esc back"));
 
-        let percent = if max > 0 {
-            format!("  {}%", top * 100 / max)
-        } else {
-            String::new()
+        let percent = match (top * 100).checked_div(max) {
+            Some(pct) => format!("  {pct}%"),
+            None => String::new(),
         };
         render_modal(
             frame,

@@ -132,9 +132,10 @@ fn status_changes_reach_memory_the_store_and_the_clients() {
     let raised = harness.inner().push_notification(info("a"));
     let events = harness.engine.subscribe();
 
-    let result = harness
-        .engine
-        .set_notification_status(&[raised.id.clone()], NotificationStatus::Resolved);
+    let result = harness.engine.set_notification_status(
+        std::slice::from_ref(&raised.id),
+        NotificationStatus::Resolved,
+    );
     assert!(result.ok);
     assert_eq!(
         harness.state().notifications[0].status,
@@ -167,7 +168,7 @@ fn dismissing_removes_from_memory_and_the_store() {
     assert!(
         harness
             .engine
-            .dismiss_notifications(&[raised.id.clone()])
+            .dismiss_notifications(std::slice::from_ref(&raised.id))
             .ok
     );
     assert_eq!(harness.state().notifications.len(), 1);
