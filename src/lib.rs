@@ -6,6 +6,7 @@
 //! environment. `main` builds one [`paths::Paths`] and one
 //! [`config::ConfigHandle`] and hands them down.
 
+pub mod archive;
 pub mod cli;
 pub mod config;
 pub mod db;
