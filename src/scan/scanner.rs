@@ -22,6 +22,7 @@ use super::detect::{
 use super::files::SessionFilesCache;
 use super::pairing::pair_processes_to_sessions;
 use super::process::{ClaudeProcess, ProcessRow, ProcessSource, SystemProcessSource};
+use std::cmp::Reverse;
 
 /// What one `ps -o command=` line said about a process. Fixed for its lifetime,
 /// so it is read once.
@@ -270,7 +271,7 @@ fn group_by_project(procs: Vec<ClaudeProcess>) -> Vec<ProjectGroup> {
         }
     }
     for group in &mut order {
-        group.procs.sort_by(|a, b| b.start.cmp(&a.start));
+        group.procs.sort_by_key(|proc| Reverse(proc.start));
     }
     order
 }

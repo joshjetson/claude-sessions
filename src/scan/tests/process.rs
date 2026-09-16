@@ -1,8 +1,8 @@
 //! Reading `ps` and `lsof` output.
 
-use crate::scan::{
-    is_interactive_claude, parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row,
-};
+#[cfg(target_os = "macos")]
+use crate::scan::is_interactive_claude;
+use crate::scan::{parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row};
 use crate::util::start_time_instant;
 
 const LISTING: &str = "  PID TTY      STARTED                      COMM

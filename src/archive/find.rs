@@ -17,6 +17,7 @@ use crate::types::SessionFile;
 use crate::util::iso_now;
 
 use super::Archive;
+use std::cmp::Reverse;
 
 /// How far up from the directory an agent signed off in the folder search
 /// walks. Four levels covers `repo/grails-app/assets/javascripts` and stops
@@ -164,7 +165,7 @@ impl Archive<'_> {
         for dir in dirs.flatten() {
             files.extend(session_files_in(&dir.path()));
         }
-        files.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+        files.sort_by_key(|file| Reverse(file.mtime));
         let file = files
             .into_iter()
             .take(ANYWHERE_SCAN_LIMIT)

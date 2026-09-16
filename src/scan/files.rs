@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::types::SessionFile;
+use std::cmp::Reverse;
 
 /// The transcripts in one project directory, newest write first.
 ///
@@ -36,7 +37,7 @@ pub fn session_files_in(dir: &Path) -> Vec<SessionFile> {
             })
         })
         .collect();
-    files.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+    files.sort_by_key(|file| Reverse(file.mtime));
     files
 }
 
