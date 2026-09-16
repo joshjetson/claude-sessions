@@ -4,7 +4,8 @@
 //! daemon owns the engine, the TUI subscribes over SSE) and `embedded` (the
 //! engine runs in-process). [`SessionFeed`] is that seam. Phase 6 plugs the
 //! daemon SSE client in here as a second implementation and nothing above this
-//! module changes.
+//! module changes — [`RemoteFeed`](super::feed_remote::RemoteFeed) is that
+//! implementation.
 //!
 //! Until then [`EmbeddedFeed`] runs an "embedded-lite" scan on its own thread:
 //! the [`Scanner`] is held across ticks for its caches, and each live transcript
@@ -57,6 +58,10 @@ pub trait SessionFeed: Send {
     fn note_launch(&self);
     /// Re-read the group list (a group was added or removed).
     fn set_groups(&self, group_paths: Vec<String>);
+    /// Stop the engine behind this feed, for Shift-Q. Only the remote
+    /// transport has anything to stop: an embedded engine dies with the
+    /// process, and the daemon is meant to outlive the dashboard otherwise.
+    fn shutdown_daemon(&self) {}
 }
 
 enum Command {

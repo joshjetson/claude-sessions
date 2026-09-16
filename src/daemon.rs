@@ -55,9 +55,17 @@ mod summary;
 mod vanished;
 mod watchers;
 
+/// The wire: how a client finds the daemon, talks to it, and follows it.
+pub mod client;
+pub mod protocol;
+pub mod server;
+
 pub use alerts::{
     detect_new_assignments, detect_stalls, human_duration, normalise_stage, NewAssignment, Stall,
     StallOptions,
+};
+pub use client::{
+    DaemonClient, DaemonTarget, Health, SseEvent, SseMessage, SseParser, Subscription,
 };
 pub use completion::{
     DailyLogHook, DailyLogRecord, DoneStageRequest, MergeRequestRequest, NullBackend, StageMove,
@@ -68,6 +76,8 @@ pub use events::{wire_session, EngineEvent, SessionStats, SessionsEvent, Snapsho
 pub use markers::{BlockedMarker, DoneMarker, MARKER_SETTLE};
 pub use notify::{ActionResult, NewNotification, NOTIFICATION_LIMIT};
 pub use pending::PendingRequest;
+pub use protocol::{DaemonInfo, DEFAULT_PORT};
+pub use server::ServerHandle;
 pub use state::{
     BlockedTask, BoardFilter, EngineState, PendingLaunch, SessionIndex, TaskLink, TaskLinkPatch,
     TaskLinkStatus,

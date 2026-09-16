@@ -26,6 +26,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::config::ConfigHandle;
+use crate::daemon::{client, protocol};
 use crate::paths::Paths;
 use crate::term::{driver_or_null, resolve_editor_from_env, run_editor, SpawnPolicy};
 use crate::transcript::{Collect, TranscriptCursor};
@@ -33,6 +34,7 @@ use crate::ui::actions::{ActionResult, ActionWorker};
 use crate::ui::app::{body_area, draw};
 use crate::ui::conversation::ConversationMeta;
 use crate::ui::feed::{EmbeddedFeed, FeedEvent, SessionFeed};
+use crate::ui::feed_remote::RemoteFeed;
 use crate::ui::keys::handle_key;
 use crate::ui::state::{Action, AppState, Quit};
 
@@ -155,8 +157,12 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
     }
 
     let worker = ActionWorker::start(driver_or_null(&config, policy), policy);
+    let remote = connect_feed(&paths, &config);
     let mut state = AppState::new(paths.clone(), config);
-    let mut feed = EmbeddedFeed::start(paths, group_paths(&state));
+    let mut feed: Box<dyn SessionFeed> = match remote {
+        Some(remote) => Box::new(remote),
+        None => Box::new(EmbeddedFeed::start(paths, group_paths(&state))),
+    };
 
     let mut screen = CrosstermScreen::new();
     screen.acquire()?;
@@ -167,7 +173,7 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         &mut terminal,
         &mut screen,
         &mut state,
-        &mut feed,
+        feed.as_mut(),
         &worker,
         policy,
     );
@@ -182,7 +188,7 @@ fn event_loop(
     terminal: &mut Tui,
     screen: &mut CrosstermScreen,
     state: &mut AppState,
-    feed: &mut EmbeddedFeed,
+    feed: &mut dyn SessionFeed,
     worker: &ActionWorker,
     policy: SpawnPolicy,
 ) -> Result<()> {
@@ -281,12 +287,28 @@ fn event_loop(
         }
 
         if let Some(quit) = state.quit {
-            // Phase 6 gives `ShutdownAll` something to stop; with no daemon yet
-            // both paths simply close the dashboard.
-            let _ = quit == Quit::ShutdownAll;
+            // Plain `q` detaches and leaves the daemon working — that is the
+            // point of it. Shift-Q stops the daemon too, so nothing is left
+            // running in the background.
+            if quit == Quit::ShutdownAll {
+                feed.shutdown_daemon();
+            }
             return Ok(());
         }
     }
+}
+
+/// Which transport the dashboard runs on, decided exactly as the Node entry
+/// point decided it: a daemon unless one is disabled, started if none is
+/// answering and autostart is on, and an in-process engine if either of those
+/// says no. `None` here means "fall back to embedded".
+fn connect_feed(paths: &Paths, config: &ConfigHandle) -> Option<RemoteFeed> {
+    if !config.daemon_enabled() {
+        return None;
+    }
+    let port = protocol::resolve_port(config, paths, None);
+    let target = client::ensure_daemon(paths, port, config.daemon_autostart())?;
+    Some(RemoteFeed::connect(target.port))
 }
 
 fn group_paths(state: &AppState) -> Vec<String> {

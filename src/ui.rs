@@ -14,7 +14,8 @@
 //! - [`state`] — one owned [`state::AppState`], no globals.
 //! - [`keys`] — pure routing; blocking work leaves as a [`state::Action`].
 //! - [`dialogs`] — the four primitives plus the sessions-view dialogs.
-//! - [`feed`] — where sessions come from; Phase 6 plugs the daemon in here.
+//! - [`feed`], [`feed_remote`] — where sessions come from: this machine, or a
+//!   daemon over SSE.
 //! - [`actions`], [`run`] — the worker thread and the event loop.
 
 pub mod actions;
@@ -23,6 +24,7 @@ pub mod components;
 pub mod conversation;
 pub mod dialogs;
 pub mod feed;
+pub mod feed_remote;
 pub mod keys;
 pub mod run;
 pub mod spans;

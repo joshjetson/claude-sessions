@@ -2,6 +2,10 @@
 //! `test/task-session-linking.test.js`, `test/awaiting.test.js`,
 //! `test/auto-archive.test.js` and the engine half of `test/daemon.test.js`.
 //!
+//! The wire half — `protocol`, `server`, `client`, `cli` — is the rest of
+//! `test/daemon.test.js`: every server there binds an ephemeral port on
+//! loopback and no test starts a real daemon.
+//!
 //! Every test gets its own runtime tree AND its own transcript store through
 //! [`Paths::for_test`] — the structural version of the Node suite's
 //! `helpers/isolate.js`, which had to be imported before anything else to patch
@@ -12,11 +16,16 @@
 mod alerts;
 mod archive;
 mod awaiting;
+mod cli;
+mod client;
 mod completion;
 mod fakes;
 mod linking;
 mod markers;
+mod protocol;
 mod refresh;
+mod routes;
+mod server;
 mod watchers;
 mod wire;
 
