@@ -10,12 +10,16 @@
 //! values as strings so a hand-written config never loses data on save.
 
 mod board;
+mod deploy;
 mod notify;
 mod session;
 mod transcript;
 mod ui;
 
 pub use board::{Board, BoardProject, BoardStage, OdooCreds, Task};
+pub use deploy::{
+    DeployBoard, DeployProjectState, DeployRun, DeployRunStatus, DeployTask, MergeRequest,
+};
 pub use notify::{Notification, NotificationLevel, NotificationStatus};
 pub use session::{RawSession, Session, SessionFile, SessionStatus};
 pub use transcript::{

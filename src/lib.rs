@@ -7,11 +7,14 @@
 //! [`config::ConfigHandle`] and hands them down.
 
 pub mod archive;
+pub mod board;
 pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod db;
+pub mod odoo;
 pub mod paths;
+pub mod pipeline;
 pub mod scan;
 pub mod ssh;
 pub mod term;

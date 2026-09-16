@@ -57,6 +57,12 @@ pub struct Paths {
     pub tasks_dir: PathBuf,
     pub logs_dir: PathBuf,
     pub prompts_dir: PathBuf,
+    /// Where a spawned agent writes the plain-English summary the pipeline
+    /// prompt asks for. The Node app hardcoded
+    /// `/tmp/claude-sessions-task-<id>-summary.md`; keeping it with the rest of
+    /// the runtime state means an isolated run cannot read or overwrite the
+    /// real one's summaries.
+    pub summaries_dir: PathBuf,
     pub done_dir: PathBuf,
     pub blocked_dir: PathBuf,
     /// `notify.json` — how the helper CLIs find the daemon's port.
@@ -93,6 +99,7 @@ impl Paths {
             tasks_dir: runtime_dir.join("tasks"),
             logs_dir: runtime_dir.join("logs"),
             prompts_dir: runtime_dir.join("prompts"),
+            summaries_dir: runtime_dir.join("summaries"),
             done_dir: runtime_dir.join("done"),
             blocked_dir: runtime_dir.join("blocked"),
             port_file: runtime_dir.join("notify.json"),
@@ -149,6 +156,13 @@ impl Paths {
     /// The marker file `claude-sessions done <id>` writes and the daemon watches.
     pub fn done_marker(&self, task_id: i64) -> PathBuf {
         self.done_dir.join(format!("{task_id}.json"))
+    }
+
+    /// Where the agent writes a finished task's summary, named into the
+    /// prompt so the completion command can read it back.
+    pub fn task_summary_file(&self, task_id: i64) -> PathBuf {
+        self.summaries_dir
+            .join(format!("task-{task_id}-summary.md"))
     }
 
     /// The marker file `claude-sessions blocked <id>` writes.
@@ -284,6 +298,10 @@ mod tests {
         assert_eq!(
             p.task_dir(4033),
             Path::new("/home/dev/.claude-sessions/tasks/4033")
+        );
+        assert_eq!(
+            p.task_summary_file(4033),
+            Path::new("/home/dev/.claude-sessions/summaries/task-4033-summary.md")
         );
     }
 
