@@ -131,8 +131,8 @@ pub enum SshResolution {
 /// The ssh alias for a project.
 ///
 /// Explicit config wins. Otherwise an alias is matched on its normalised name —
-/// exact first, then a prefix match in either direction, so "LottoEdge" finds
-/// "Lottoedge" and "Edentulink" finds the one alias it wants out of a
+/// exact first, then a prefix match in either direction, so "Beacon" finds
+/// "beacon" and "Ledger" finds the one alias it wants out of a
 /// multi-alias `Host` line.
 ///
 /// Exact beats prefix deliberately: "DCA" must not become "dca-backup".
