@@ -1,11 +1,5 @@
 //! Handing the terminal to `$EDITOR` and getting it back.
 
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
-
-use tempfile::TempDir;
-
 use crate::term::{
     build_editor_argv, line_args, resolve_editor, Editor, EditorSource, SpawnPolicy,
 };
@@ -15,21 +9,42 @@ use crate::term::{
 /// directory is reachable from it.
 const ALLOWED: SpawnPolicy = SpawnPolicy::Allow;
 
-fn fake_editor(script: &str) -> (TempDir, PathBuf) {
-    let dir = TempDir::new().expect("temp dir");
-    let bin = dir.path().join("fake-editor");
-    fs::write(&bin, format!("#!/bin/sh\n{script}\n")).expect("write");
-    fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
-    (dir, bin)
-}
+/// The three tests that need a real editor to run need a real script to be it,
+/// and a `#!` line plus an executable bit is how one is made. Windows has
+/// neither, so what those three prove is proved only where it can be — the
+/// thirteen tests either side of them are pure argv building and run
+/// everywhere.
+#[cfg(unix)]
+mod fake {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
 
-fn editor_at(bin: &Path, args: &[&str]) -> Editor {
-    Editor {
-        cmd: bin.display().to_string(),
-        args: args.iter().map(|a| a.to_string()).collect(),
-        source: EditorSource::Default,
+    use tempfile::TempDir;
+
+    use crate::term::{Editor, EditorSource};
+
+    pub(super) fn fake_editor(script: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new().expect("temp dir");
+        let bin = dir.path().join("fake-editor");
+        fs::write(&bin, format!("#!/bin/sh\n{script}\n")).expect("write");
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).expect("chmod");
+        (dir, bin)
+    }
+
+    pub(super) fn editor_at(bin: &Path, args: &[&str]) -> Editor {
+        Editor {
+            cmd: bin.display().to_string(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            source: EditorSource::Default,
+        }
     }
 }
+
+#[cfg(unix)]
+use fake::{editor_at, fake_editor};
+#[cfg(unix)]
+use std::fs;
 
 #[test]
 fn visual_wins_over_editor_which_is_the_convention() {
@@ -130,6 +145,7 @@ fn without_a_line_every_editor_just_gets_the_filename() {
 }
 
 #[test]
+#[cfg(unix)]
 fn runs_the_editor_against_the_file_and_reports_success() {
     let (dir, bin) = fake_editor("echo \"edited by the editor\" >> \"$1\"");
     let file = dir.path().join("pipeline.json");
@@ -148,6 +164,7 @@ fn runs_the_editor_against_the_file_and_reports_success() {
 }
 
 #[test]
+#[cfg(unix)]
 fn passes_editor_arguments_before_the_filename() {
     let (dir, bin) = fake_editor("printf \"%s\" \"$*\" > \"$2\"");
     let file = dir.path().join("out.txt");
@@ -162,6 +179,7 @@ fn passes_editor_arguments_before_the_filename() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_non_zero_exit_is_reported_not_thrown() {
     let (dir, bin) = fake_editor("exit 3");
     let result = crate::term::run_editor(

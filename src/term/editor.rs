@@ -59,11 +59,25 @@ impl Editor {
         }
     }
 
+    /// The program's name, without its directory and — on Windows — without the
+    /// launcher extension. `nvim.exe` and `code.cmd` are the same editors as
+    /// `nvim` and `code`, and the per-editor line flags below are matched by
+    /// name. A Unix file really can be called `vim.exe`, so nothing is stripped
+    /// there.
     fn basename(&self) -> &str {
-        Path::new(&self.cmd)
+        let name = Path::new(&self.cmd)
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or(&self.cmd)
+            .unwrap_or(&self.cmd);
+        if !cfg!(windows) {
+            return name;
+        }
+        for suffix in [".exe", ".cmd", ".bat", ".com"] {
+            if name.len() > suffix.len() && name.to_ascii_lowercase().ends_with(suffix) {
+                return &name[..name.len() - suffix.len()];
+            }
+        }
+        name
     }
 }
 

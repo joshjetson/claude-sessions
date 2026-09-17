@@ -173,6 +173,21 @@ const NO_DRIVER: &str = "No terminal driver available.";
 const NO_DRIVER_LAUNCH: &str =
     "No terminal driver available. Install tmux, or run under iTerm2 on macOS.";
 
+/// A refusal, plus the platform note where the reason is a phase rather than a
+/// missing install.
+///
+/// On Unix the error already says what to install, so the hint stays empty and
+/// nothing about the existing answers changes; on a platform with no driver
+/// implementation at all, a person who installs tmux is owed the reason that
+/// still did not help.
+fn no_driver(error: &'static str) -> DriverResult {
+    DriverResult {
+        ok: false,
+        error: Some(error.to_string()),
+        hint: crate::platform::terminal_notice(),
+    }
+}
+
 impl TerminalDriver for NullDriver {
     fn name(&self) -> &'static str {
         "none"
@@ -183,18 +198,18 @@ impl TerminalDriver for NullDriver {
     }
 
     fn launch(&self, _request: &LaunchRequest) -> DriverResult {
-        DriverResult::failed(NO_DRIVER_LAUNCH)
+        no_driver(NO_DRIVER_LAUNCH)
     }
 
     fn send_text(&self, _session: &SessionRef, _text: &str) -> DriverResult {
-        DriverResult::failed(NO_DRIVER)
+        no_driver(NO_DRIVER)
     }
 
     fn focus(&self, _session: &SessionRef) -> DriverResult {
-        DriverResult::failed(NO_DRIVER)
+        no_driver(NO_DRIVER)
     }
 
     fn close(&self, _session: &SessionRef) -> DriverResult {
-        DriverResult::failed(NO_DRIVER)
+        no_driver(NO_DRIVER)
     }
 }

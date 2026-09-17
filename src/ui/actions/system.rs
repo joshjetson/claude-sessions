@@ -91,6 +91,12 @@ pub(super) fn purge(
 /// A notification sound. Failure is silence, which is the correct failure mode
 /// for a sound.
 pub(super) fn play(file: &str, policy: SpawnPolicy) {
+    // `afplay` is a macOS program, and the configured defaults are macOS system
+    // sounds. Silence is already this function's failure mode, so starting a
+    // process that cannot work buys nothing but a fork per notification.
+    if cfg!(windows) {
+        return;
+    }
     if policy.check("play a sound").is_err() {
         return;
     }
@@ -162,6 +168,9 @@ pub(super) fn ssh(
 pub(super) fn kill_pids(pids: &[u32], policy: SpawnPolicy) -> Result<(), String> {
     if pids.is_empty() {
         return Err("Nothing to kill.".to_string());
+    }
+    if !crate::platform::PROCESS_SIGNALS {
+        return Err(crate::platform::unsupported("Signalling a session"));
     }
     policy
         .check("kill a session")

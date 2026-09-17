@@ -21,7 +21,7 @@ use super::detect::{
 };
 use super::files::SessionFilesCache;
 use super::pairing::pair_processes_to_sessions;
-use super::process::{ClaudeProcess, ProcessRow, ProcessSource, SystemProcessSource};
+use super::process::{ClaudeProcess, PlatformProcessSource, ProcessRow, ProcessSource};
 use std::cmp::Reverse;
 
 /// What one `ps -o command=` line said about a process. Fixed for its lifetime,
@@ -36,7 +36,7 @@ struct ArgvInfo {
 
 /// The scan, with its caches.
 #[derive(Debug)]
-pub struct Scanner<S: ProcessSource = SystemProcessSource> {
+pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     source: S,
     paths: Paths,
     /// A process's working directory is fixed for its lifetime, so each pid is
@@ -49,10 +49,12 @@ pub struct Scanner<S: ProcessSource = SystemProcessSource> {
     task_refs: TaskRefCache,
 }
 
-impl Scanner<SystemProcessSource> {
-    /// The scanner the daemon runs: real `ps`, real `lsof`.
+impl Scanner<PlatformProcessSource> {
+    /// The scanner the daemon runs: real `ps` and real `lsof` where the
+    /// platform has them, and a source that answers "no processes" where it
+    /// does not. See [`crate::platform::LIVE_DISCOVERY`].
     pub fn system(paths: Paths) -> Self {
-        Scanner::new(SystemProcessSource::new(), paths)
+        Scanner::new(PlatformProcessSource::default(), paths)
     }
 }
 

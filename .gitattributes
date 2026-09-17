@@ -1,0 +1,9 @@
+# Check every text file out with LF on every platform.
+#
+# Two things in this repo read their own source bytes back and compare them:
+# the journal and pipeline HTML renderers `include_str!` their CSS and JS and
+# are diffed byte-for-byte against golden output, and one UI test includes a
+# source file to assert on it. A CRLF checkout — which is what Git does by
+# default on Windows — changes those bytes and fails the tests for a reason
+# that has nothing to do with the code.
+* text=auto eol=lf

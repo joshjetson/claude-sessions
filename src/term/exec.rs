@@ -55,12 +55,35 @@ impl CommandOutput {
 }
 
 /// The platform's "hand this to whatever handles it" command. The Node app was
-/// macOS-only and said `open`; the rest of the world says `xdg-open`.
+/// macOS-only and said `open`; most of the rest of the world says `xdg-open`,
+/// and Windows has no such program at all — only `start`, which is a `cmd`
+/// builtin rather than an executable.
 pub const OPEN_COMMAND: &str = if cfg!(target_os = "macos") {
     "open"
+} else if cfg!(windows) {
+    "cmd"
 } else {
     "xdg-open"
 };
+
+/// The arguments that come before the target.
+///
+/// Empty everywhere but Windows, where `start`'s first argument is a window
+/// title. It has to be present and empty: given one argument, `start` reads it
+/// as the title and opens nothing.
+pub const OPEN_PREFIX: &[&str] = if cfg!(windows) {
+    &["/C", "start", ""]
+} else {
+    &[]
+};
+
+/// The full argv for opening `target`. Pure, so the shape is pinned by a test
+/// rather than by a desktop appearing.
+pub fn open_args(target: &str) -> Vec<String> {
+    let mut args: Vec<String> = OPEN_PREFIX.iter().map(|arg| arg.to_string()).collect();
+    args.push(target.to_string());
+    args
+}
 
 /// How long `open` may take. It hands off to another process and returns, so
 /// anything slower than this is a wedged desktop, not a slow launch.
@@ -141,11 +164,7 @@ impl Exec {
     /// action, the daily log, and the two generated HTML viewers — so the
     /// platform choice and the spawn gate are decided once.
     pub fn open(&self, target: &str) -> CommandOutput {
-        self.run(
-            OPEN_COMMAND,
-            std::slice::from_ref(&target.to_string()),
-            OPEN_TIMEOUT,
-        )
+        self.run(OPEN_COMMAND, &open_args(target), OPEN_TIMEOUT)
     }
 
     /// [`Exec::run`] with an explicit working directory.

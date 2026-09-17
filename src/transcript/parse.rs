@@ -274,7 +274,18 @@ pub(crate) fn file_id(meta: &Metadata) -> Option<u64> {
     Some(meta.ino())
 }
 
-#[cfg(not(unix))]
+/// The NTFS equivalent of an inode. Only populated for metadata read through an
+/// open handle, which is where every caller here gets it — the cursor polls by
+/// opening the file and asking it, precisely so this answer exists.
+#[cfg(windows)]
+pub(crate) fn file_id(meta: &Metadata) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt;
+    meta.file_index()
+}
+
+/// Nowhere else has one, and a cursor without it still notices a file that
+/// shrank — it just cannot notice one replaced by another of the same length.
+#[cfg(not(any(unix, windows)))]
 pub(crate) fn file_id(_meta: &Metadata) -> Option<u64> {
     None
 }

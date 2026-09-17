@@ -5,11 +5,12 @@
 //! [`SseParser`] is a byte buffer with a public `push`, driven in the tests
 //! with every adversarial split rather than hoped about.
 
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use serde_json::Value;
 
@@ -17,6 +18,16 @@ use crate::daemon::lock;
 use crate::daemon::protocol::read_head;
 
 use super::{loopback, BACKOFF_MAX, BACKOFF_MIN, PROBE_TIMEOUT};
+
+/// How long a read waits before looking up.
+///
+/// Comfortably longer than the daemon's 25-second keep-alive, so a healthy
+/// stream never sees it — this is not a liveness check, it is the thing that
+/// stops the reader thread being parked in a syscall that only somebody else's
+/// `shutdown()` can end. A half-open socket used to wedge the feed thread for
+/// good, and closing the subscription relied on `shutdown()` waking a blocked
+/// `read` — which Unix guarantees and Winsock does not.
+const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// One server-sent event: the name and its still-serialised payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,9 +181,10 @@ fn stream_events(
     let Ok(mut stream) = TcpStream::connect_timeout(&loopback(port), PROBE_TIMEOUT) else {
         return false;
     };
-    // No read timeout: a quiet stream is normal, and the daemon's `: ping`
-    // every 25 seconds is what proves the socket is still there.
-    let _ = stream.set_read_timeout(None);
+    // A quiet stream is normal — the daemon's `: ping` every 25 seconds is what
+    // proves the socket is still there — so the deadline below is long enough
+    // never to interrupt one. See [`READ_TIMEOUT`] for why there is one at all.
+    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
     let head = format!(
         "GET /events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\n\r\n"
     );
@@ -199,12 +211,16 @@ fn stream_events(
     let mut chunk = [0u8; 8192];
     loop {
         match reader.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
             Ok(read) => {
                 for event in parser.push(&chunk[..read]) {
                     handler(SseMessage::Event(event));
                 }
             }
+            // The deadline passing is not the stream ending: nothing was
+            // consumed, so the loop checks the stop flag and waits again.
+            Err(error) if timed_out(&error) => {}
+            Err(_) => break,
         }
         if stopped.load(Ordering::SeqCst) {
             break;
@@ -212,4 +228,11 @@ fn stream_events(
     }
     *lock(slot) = None;
     true
+}
+
+/// A read that ran out of time rather than out of stream. Unix reports
+/// `WouldBlock` for a timed-out read and Windows reports `TimedOut`; both mean
+/// the same thing here.
+fn timed_out(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
 }

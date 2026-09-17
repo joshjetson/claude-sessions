@@ -11,8 +11,11 @@ env:
 jobs:
   check:
     strategy:
+      # Windows is experimental: it compiles and its test suite runs, with the
+      # Unix-only pieces (live process discovery, the terminal drivers) gated
+      # off rather than silently broken. See the Windows section of the README.
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +23,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Formatting is a property of the source, not of the platform, so one OS
+      # settles it. Running it three times only adds a way for a line-ending
+      # difference to fail a job that is not about formatting.
       - run: cargo fmt --all --check
+        if: runner.os == 'Linux'
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
 

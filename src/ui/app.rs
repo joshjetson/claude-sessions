@@ -84,11 +84,27 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
 
     if items.is_empty() {
+        // An empty list that will never fill is indistinguishable from a broken
+        // one unless it says which it is, so a platform that cannot read the
+        // process table says so here — where somebody is already looking for
+        // the sessions that are not appearing.
+        let mut lines = placeholder_lines(&["No active sessions found."]);
+        if let Some(notice) = crate::platform::discovery_notice() {
+            lines.push(Line::raw(""));
+            lines.extend(
+                wrap_line(
+                    &placeholder_lines(&[notice])[0],
+                    area.width.saturating_sub(2).max(1) as usize,
+                )
+                .into_iter()
+                .map(Line::from),
+            );
+        }
         render_list(
             frame,
             area,
             " Sessions ",
-            placeholder_lines(&["No active sessions found."]),
+            lines,
             None,
             state.focus == Pane::Tree,
         );

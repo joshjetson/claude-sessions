@@ -31,15 +31,28 @@ fn the_folder_search_takes_the_newest_of_this_tasks_transcripts() {
 fn the_ancestor_search_finds_the_repo_from_a_subfolder() {
     // An agent that ran `cd` into a subfolder before finishing reports a cwd no
     // session directory matches — Claude keys them by exact path.
+    //
+    // The repo is absolutised first because the search is: it walks the parents
+    // of `std::path::absolute(cwd)`, which on Windows prefixes the current
+    // drive. Handing it a cwd that is already rooted the way the walk will root
+    // it is what makes the fixture and the search agree on one platform as much
+    // as the other — and on Unix it is the same string either way.
+    let repo = std::path::absolute("/repo/portal")
+        .expect("absolute")
+        .to_string_lossy()
+        .into_owned();
     let mut t = open();
-    let own = t.transcript(Some(4033), "/repo/portal");
+    let own = t.transcript(Some(4033), &repo);
 
+    let subfolder = std::path::Path::new(&repo)
+        .join("grails-app")
+        .join("assets");
     let found = t
-        .find_near("/repo/portal/grails-app/assets", 4033)
+        .find_near(&subfolder.to_string_lossy(), 4033)
         .expect("nothing found");
     assert_eq!(found.path(), own.path());
     assert_eq!(
-        found.cwd, "/repo/portal",
+        found.cwd, repo,
         "reported the directory it was handed, not the one it found"
     );
 }

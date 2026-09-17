@@ -33,19 +33,34 @@ fn an_allowing_policy_lets_the_action_through() {
 
 #[test]
 fn a_refused_command_never_reaches_the_operating_system() {
-    // `true` exists on every machine this runs on, so a non-refusing
-    // implementation would report ok here.
+    // A non-refusing implementation would report ok here on any machine with a
+    // `true` on it, and would report a spawn failure rather than a refusal on
+    // any machine without one. Either way the assertion below only holds
+    // because nothing was started.
     let out = Exec::new(SpawnPolicy::Refuse).run("true", &[], Duration::from_secs(5));
     assert!(!out.ok);
     assert!(out.error.unwrap().starts_with("Refusing to run true"));
     assert!(out.stdout.is_empty());
 }
 
+/// Both pipes are drained and reported, proved against the shell each platform
+/// actually has. The property is the same; only the spelling of "print a line
+/// to each stream" differs.
 #[test]
 fn an_allowed_command_runs_and_reports_both_streams() {
+    let (program, script) = if cfg!(windows) {
+        ("cmd", "/C")
+    } else {
+        ("sh", "-c")
+    };
+    let command = if cfg!(windows) {
+        "echo out& echo err 1>&2"
+    } else {
+        "echo out; echo err >&2"
+    };
     let out = Exec::new(SpawnPolicy::Allow).run(
-        "sh",
-        &["-c".to_string(), "echo out; echo err >&2".to_string()],
+        program,
+        &[script.to_string(), command.to_string()],
         Duration::from_secs(5),
     );
     assert!(out.ok, "{out:?}");

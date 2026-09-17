@@ -105,3 +105,31 @@ fn the_real_ps_output_still_parses() {
         .iter()
         .all(|r| !r.comm.is_empty() || !is_interactive_claude(&r.comm)));
 }
+
+/// A platform whose process table cannot be read yet answers every question
+/// emptily, and never with a panic or a hang — which is what lets the scanner
+/// above it run unchanged and simply find nothing live.
+#[test]
+fn the_unsupported_source_answers_every_call_with_nothing() {
+    use crate::scan::{ProcessSource, UnsupportedProcessSource};
+
+    let source = UnsupportedProcessSource::new();
+    assert!(source.list().is_empty());
+    assert!(source.cwds(&[1, 2, 3]).is_empty());
+    assert!(source.argv(&[1, 2, 3]).is_empty());
+    assert!(source.environ(&[1, 2, 3]).is_empty());
+}
+
+/// And a scanner built on it produces no sessions rather than failing a tick.
+#[test]
+fn a_scan_on_an_unsupported_platform_is_empty_rather_than_broken() {
+    use crate::paths::Paths;
+    use crate::scan::{Scanner, UnsupportedProcessSource};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut scanner = Scanner::new(UnsupportedProcessSource, Paths::for_test(dir.path()));
+    assert!(scanner.processes().is_empty());
+    assert!(scanner
+        .scan_sessions(std::time::SystemTime::now())
+        .is_empty());
+}

@@ -165,3 +165,51 @@ fn both_drivers_expose_close_so_the_contract_is_not_iterm2_only() {
         );
     }
 }
+
+#[test]
+fn native_windows_resolves_to_no_driver_however_it_is_asked() {
+    // iTerm2 is a macOS application and the tmux driver runs `/bin/sh -lc` and
+    // joins panes by a Unix tty. Even handed an availability that claims both,
+    // the answer is nothing — a driver that cannot work is worse than none.
+    for requested in [
+        TerminalDriverName::Auto,
+        TerminalDriverName::Tmux,
+        TerminalDriverName::Iterm2,
+    ] {
+        assert_eq!(
+            choose_driver(requested, available(true, true, Platform::Windows)),
+            None,
+            "{requested:?} should resolve to nothing on Windows"
+        );
+    }
+}
+
+#[test]
+fn the_null_driver_names_the_phase_only_where_a_driver_could_not_exist() {
+    // On Unix the error already says what to install, so a second sentence
+    // would be noise; where the reason is that the port has not got there yet,
+    // installing tmux would not have helped and the hint says so.
+    let hint = NullDriver
+        .launch(&crate::term::LaunchRequest::new("/repo", "claude"))
+        .hint;
+    assert_eq!(hint, crate::platform::terminal_notice());
+    assert_eq!(hint.is_some(), !crate::platform::TERMINAL_CONTROL);
+}
+
+#[test]
+fn opening_a_target_uses_the_platforms_handler() {
+    use crate::term::{open_args, OPEN_COMMAND};
+
+    let args = open_args("https://example.com/x");
+    assert_eq!(args.last().unwrap(), "https://example.com/x");
+    if cfg!(target_os = "macos") {
+        assert_eq!((OPEN_COMMAND, args.len()), ("open", 1));
+    } else if cfg!(windows) {
+        // `start`'s first argument is a window title; without an empty one it
+        // reads the target as the title and opens nothing.
+        assert_eq!(OPEN_COMMAND, "cmd");
+        assert_eq!(args[..3], ["/C", "start", ""]);
+    } else {
+        assert_eq!((OPEN_COMMAND, args.len()), ("xdg-open", 1));
+    }
+}

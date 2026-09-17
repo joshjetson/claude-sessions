@@ -3,16 +3,22 @@
 //! The four shell-outs the scanner needs sit behind [`ProcessSource`] so that
 //! the rest of this module is testable without spawning anything, and so a
 //! `/proc`-based Linux implementation can be dropped in later without a single
-//! caller changing. The commands below are the macOS/BSD ones the Node app used
-//! — `ps -E` in particular is BSD-specific (see the platform notes in the
-//! architecture brief).
+//! caller changing. That seam is also what makes a platform with no readable
+//! process table a supported platform rather than a broken one: it gets
+//! [`UnsupportedProcessSource`], and everything above the trait is unchanged.
+//!
+//! The row types and every parser live here and are compiled and tested on
+//! every platform. The `ps`/`lsof` implementation lives in `process/system.rs`
+//! and exists only where those commands do.
 
 use std::collections::HashMap;
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
+
+#[cfg(unix)]
+mod system;
+
+#[cfg(unix)]
+pub use system::SystemProcessSource;
 
 /// One row of `ps -eo pid,tty,lstart,comm`, before anything is decided about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,137 +81,55 @@ pub trait ProcessSource {
     fn environ(&self, pids: &[u32]) -> HashMap<u32, String>;
 }
 
-/// How long any one of the four commands may take before its output is given
-/// up on. Node passed the same 5s to `execFile`.
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The real thing: `ps` and `lsof`.
-#[derive(Debug, Clone)]
-pub struct SystemProcessSource {
-    timeout: Duration,
-}
-
-impl Default for SystemProcessSource {
-    fn default() -> Self {
-        SystemProcessSource {
-            timeout: COMMAND_TIMEOUT,
-        }
-    }
-}
-
-impl SystemProcessSource {
-    pub fn new() -> Self {
-        SystemProcessSource::default()
-    }
-}
-
-impl ProcessSource for SystemProcessSource {
-    fn list(&self) -> Vec<ProcessRow> {
-        parse_ps_listing(&exec("ps", &["-eo", "pid,tty,lstart,comm"], self.timeout))
-    }
-
-    fn cwds(&self, pids: &[u32]) -> HashMap<u32, String> {
-        let mut out = HashMap::new();
-        for batch in pids.chunks(MAX_CONCURRENT_LSOF) {
-            let answers: Vec<(u32, Option<String>)> = thread::scope(|scope| {
-                let handles: Vec<_> = batch
-                    .iter()
-                    .map(|pid| {
-                        let (pid, timeout) = (*pid, self.timeout);
-                        scope.spawn(move || (pid, lsof_cwd(pid, timeout)))
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .filter_map(|handle| handle.join().ok())
-                    .collect()
-            });
-            for (pid, cwd) in answers {
-                if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()) {
-                    out.insert(pid, cwd);
-                }
-            }
-        }
-        out
-    }
-
-    fn argv(&self, pids: &[u32]) -> HashMap<u32, String> {
-        if pids.is_empty() {
-            return HashMap::new();
-        }
-        let csv = pid_csv(pids);
-        parse_pid_prefixed(&exec(
-            "ps",
-            &["-o", "pid=,command=", "-p", &csv],
-            self.timeout,
-        ))
-    }
-
-    fn environ(&self, pids: &[u32]) -> HashMap<u32, String> {
-        if pids.is_empty() {
-            return HashMap::new();
-        }
-        let csv = pid_csv(pids);
-        parse_pid_prefixed(&exec(
-            "ps",
-            &["-ww", "-o", "pid=,command=", "-E", "-p", &csv],
-            self.timeout,
-        ))
-    }
-}
-
-/// How many `lsof` calls are in flight at once. Bounded rather than unbounded
-/// so a machine with a hundred sessions does not fork a hundred processes in
-/// one go.
-const MAX_CONCURRENT_LSOF: usize = 16;
-
-fn lsof_cwd(pid: u32, timeout: Duration) -> Option<String> {
-    let pid = pid.to_string();
-    parse_lsof_cwd(&exec(
-        "lsof",
-        &["-a", "-p", &pid, "-d", "cwd", "-Fn"],
-        timeout,
-    ))
-}
-
-fn pid_csv(pids: &[u32]) -> String {
-    pids.iter()
-        .map(u32::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// Run a command and return its stdout, or an empty string for anything that
-/// went wrong — a missing binary, a non-zero exit, a timeout. Node's wrapper
-/// resolved `''` on error too: a scan tick must never fail because `lsof`
-/// did.
+/// The process source for a platform whose process table this tool cannot read
+/// yet.
 ///
-/// The wait happens on a helper thread so a hung command cannot stall a tick.
-/// Reading the pipe on that same thread matters: a child whose output fills the
-/// pipe buffer blocks until somebody drains it, and `ps -e` on a busy machine
-/// is comfortably larger than a pipe.
-fn exec(program: &str, args: &[&str], timeout: Duration) -> String {
-    let Ok(child) = Command::new(program)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return String::new();
-    };
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut child = child;
-        let mut out = String::new();
-        if let Some(mut pipe) = child.stdout.take() {
-            let _ = pipe.read_to_string(&mut out);
-        }
-        let ok = matches!(child.wait(), Ok(status) if status.success());
-        let _ = tx.send(if ok { out } else { String::new() });
-    });
-    rx.recv_timeout(timeout).unwrap_or_default()
+/// Answers "no processes", which is emphatically not the same claim as "no
+/// sessions": the transcripts are on disk and still being appended to, and
+/// every view that reads them is unaffected. What is missing is the pairing of
+/// a transcript to a live pid, and with it everything that needs one — the
+/// live/idle status machine, the tty a driver would address, and killing.
+///
+/// Compiled on every platform, not just the ones that need it, so the
+/// behaviour above the trait is exercised by the normal test run rather than
+/// only in CI on the platform that degrades.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnsupportedProcessSource;
+
+impl UnsupportedProcessSource {
+    pub fn new() -> Self {
+        UnsupportedProcessSource
+    }
 }
+
+impl ProcessSource for UnsupportedProcessSource {
+    fn list(&self) -> Vec<ProcessRow> {
+        Vec::new()
+    }
+
+    fn cwds(&self, _pids: &[u32]) -> HashMap<u32, String> {
+        HashMap::new()
+    }
+
+    fn argv(&self, _pids: &[u32]) -> HashMap<u32, String> {
+        HashMap::new()
+    }
+
+    fn environ(&self, _pids: &[u32]) -> HashMap<u32, String> {
+        HashMap::new()
+    }
+}
+
+/// The source this platform actually uses.
+///
+/// A type alias rather than a second [`Scanner`](super::Scanner): every default
+/// type parameter in the crate names this one type, so a platform swaps its
+/// implementation without a single generic signature changing (WORKING.md
+/// rule 5).
+#[cfg(unix)]
+pub type PlatformProcessSource = SystemProcessSource;
+#[cfg(not(unix))]
+pub type PlatformProcessSource = UnsupportedProcessSource;
 
 /// `ps -eo pid,tty,lstart,comm` output into rows, header and junk skipped.
 pub fn parse_ps_listing(out: &str) -> Vec<ProcessRow> {

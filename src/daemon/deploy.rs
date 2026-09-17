@@ -145,6 +145,16 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
         if let Err(refused) = self.inner.spawn.check(&format!("deploy {project}")) {
             return ActionResult::failed(refused.message);
         }
+        // Everything above this point is configuration, and a platform that
+        // cannot run the command can still answer for it correctly. What it
+        // cannot do is the line below: `cmd /C` is not a login shell and has no
+        // equivalent, so the command would run against a different PATH than
+        // the one it was written for. See [`crate::platform::LOGIN_SHELL`].
+        if !crate::platform::LOGIN_SHELL {
+            return ActionResult::failed(crate::platform::unsupported(&format!(
+                "Deploying {project}"
+            )));
+        }
 
         // A login shell so the command sees the PATH the user's own terminal
         // has; the cwd is the project's repository when config names one.
@@ -324,6 +334,9 @@ impl<S: ProcessSource> EngineInner<S> {
     /// guards process STARTS, so routing the signal through one means a test
     /// run cannot kill anything even by accident.
     pub(crate) fn terminate(&self, pid: u32) {
+        if !crate::platform::PROCESS_SIGNALS {
+            return;
+        }
         if self.spawn.check("stop a deploy").is_err() {
             return;
         }

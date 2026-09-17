@@ -73,13 +73,16 @@ impl<'de> Deserialize<'de> for ToolInput {
     }
 }
 
-/// Node's `shortPath`: the last two `/`-separated pieces, leading empty piece
+/// Node's `shortPath`: the last two separated pieces, leading empty piece
 /// included, so `/a/b.js` reads `a/b.js` and a bare `b.js` stays `b.js`.
+///
+/// Always rejoined with `/`, whichever separator it came apart on: this is a
+/// label in a conversation, not a path anything opens.
 fn short_path(path: &str) -> String {
     if path.is_empty() {
         return String::new();
     }
-    let parts: Vec<&str> = path.split('/').collect();
+    let parts: Vec<&str> = path.split(crate::util::SEPARATORS).collect();
     parts[parts.len().saturating_sub(2)..].join("/")
 }
 
