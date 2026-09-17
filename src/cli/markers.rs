@@ -18,9 +18,12 @@ use crate::config::ConfigHandle;
 use crate::daemon::client::DaemonClient;
 use crate::daemon::{protocol, BlockedMarker, DoneMarker};
 use crate::paths::Paths;
+use crate::term::{SessionRef, SpawnPolicy};
+use crate::types::NotificationStatus;
 use crate::util::iso_now;
+use serde_json::Value;
 
-use super::{fail, BlockedArgs, DoneArgs, NotifyArgs, TASK_ID_ENV};
+use super::{fail, BlockedArgs, DoneArgs, NotifyArgs, QaAnswerArgs, QaShadowArgs, TASK_ID_ENV};
 
 // --- notify -----------------------------------------------------------------
 
@@ -34,6 +37,7 @@ pub(super) fn notify(paths: &Paths, config: &ConfigHandle, args: NotifyArgs) -> 
         "title": if title.is_empty() { "Notification".to_string() } else { title },
         "message": message,
         "level": args.level,
+        "kind": args.kind,
         "cwd": cwd(),
         "taskId": task_id_from_env(),
         "sessionId": args.session.unwrap_or_default(),
@@ -173,4 +177,97 @@ fn cwd() -> String {
     std::env::current_dir()
         .map(|dir| dir.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+// --- QA runs ----------------------------------------------------------------
+
+/// Record what a coordinator would have answered, before it acts on it.
+///
+/// Writes to disk with no network at all, like `done` and `blocked`: the record
+/// has to survive the dashboard being closed, and it is the measurement the
+/// whole triage decision rests on.
+pub(super) fn qa_shadow(paths: &Paths, args: QaShadowArgs) -> Result<()> {
+    let store = crate::qarun::ShadowStore::new(&paths.runtime_dir);
+    match store.record(
+        &args.run,
+        args.task,
+        &args.question,
+        &args.would_answer,
+        args.confidence.as_deref(),
+        iso_now(),
+    ) {
+        Ok(path) => {
+            println!("qa-shadow: recorded -> {}", path.display());
+            Ok(())
+        }
+        Err(error) => fail(format!("qa-shadow: {}", error.detail())),
+    }
+}
+
+/// Deliver a coordinator's answer to the session working a task.
+///
+/// The daemon decides whether it may be delivered — a question may be answered,
+/// a verdict checkpoint never may be, whatever this command is told. The
+/// refusal text matters more than the status code: it tells a coordinator
+/// whether to rephrase or to escalate.
+pub(super) fn qa_answer(paths: &Paths, config: &ConfigHandle, args: QaAnswerArgs) -> Result<()> {
+    let port = protocol::resolve_port(config, paths, None);
+    let body = serde_json::json!({
+        "taskId": args.task,
+        "answer": args.answer,
+        "kind": args.kind,
+    });
+    let client = DaemonClient::new(port);
+    match client.qa_answer(body) {
+        Some(response) if response.accepted() => {
+            // The daemon decided; this process delivers. It drives no terminal
+            // of its own accord — the spawn policy gates that the same way it
+            // gates every other child process in this crate.
+            let session = SessionRef {
+                tty: response.body.pointer("/session/tty").and_then(Value::as_str).map(str::to_string),
+                session_id: response.body.pointer("/session/sessionId").and_then(Value::as_str).map(str::to_string),
+                cwd: response.body.pointer("/session/cwd").and_then(Value::as_str).map(str::to_string),
+            };
+            let driver = crate::term::driver_or_null(config, SpawnPolicy::detect());
+            let result = driver.send_text(&session, &args.answer);
+            if !result.ok {
+                fail(format!(
+                    "qa-answer: the daemon allowed it but the terminal refused — {}",
+                    result.error.unwrap_or_else(|| "no reason given".to_string())
+                ));
+            }
+
+            // Only now are the questions resolved. Resolving before the send
+            // would clear the board's attention row for an answer that never
+            // arrived.
+            let ids: Vec<String> = response
+                .body
+                .get("resolve")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            if !ids.is_empty() {
+                client.set_notification_status(&ids, NotificationStatus::Resolved);
+            }
+
+            println!("qa-answer: delivered to task {}", args.task);
+            Ok(())
+        }
+        Some(response) => fail(format!(
+            "qa-answer: refused — {}",
+            response
+                .body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("no reason given")
+        )),
+        None => fail(format!(
+            "qa-answer: dashboard not reachable on 127.0.0.1:{port}"
+        )),
+    }
 }

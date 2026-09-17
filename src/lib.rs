@@ -27,6 +27,7 @@ pub mod pipeline;
 pub mod platform;
 pub mod purge;
 pub mod qaden;
+pub mod qarun;
 pub mod scan;
 pub mod ssh;
 pub mod term;

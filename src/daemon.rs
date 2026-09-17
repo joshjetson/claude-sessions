@@ -52,6 +52,7 @@ mod events;
 mod lifecycle;
 mod markers;
 mod notify;
+mod qarun;
 mod pending;
 mod refresh;
 mod state;
@@ -80,7 +81,7 @@ pub use deploy::{
     running_deploys, DeployRunState, DEPLOY_SHELL, DEPLOY_SHELL_FLAGS, MAX_RUN_LINES,
     WIRE_RUN_LINES,
 };
-pub use engine::{
+pub use engine::{AnswerOutcome, 
     AssignedFetch, BoardFetch, DeployFetch, Engine, EngineOptions, EngineStats, RefreshRequest,
     UsageHook,
 };

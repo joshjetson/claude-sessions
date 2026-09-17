@@ -299,6 +299,16 @@ impl DaemonClient {
         self.post("/notify", body)
     }
 
+    /// A coordinator answering one of the sessions in its run.
+    ///
+    /// Goes through the daemon rather than the coordinator driving a terminal
+    /// itself, because the daemon is what actually knows which session is on
+    /// which task — and because the rule about what may be answered then lives
+    /// in one module instead of in a prompt a model could talk itself out of.
+    pub fn qa_answer(&self, body: Value) -> Option<Response> {
+        self.post("/qa-run/answer", body)
+    }
+
     pub fn done(&self, task_id: i64, cwd: &str, summary: &str) -> bool {
         self.post(
             "/done",

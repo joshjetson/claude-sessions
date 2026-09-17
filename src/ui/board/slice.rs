@@ -233,6 +233,12 @@ impl BoardSlice {
     /// transcript claims, which is what makes the running marker right after a
     /// daemon restart — the in-memory links are empty then.
     pub fn ctx<'a>(&'a self, live: &'a HashSet<i64>) -> BoardCtx<'a> {
+        self.ctx_at_width(live, 0)
+    }
+
+    /// The same, told how wide the list pane is. Only a QA run's status column
+    /// reads it; every other row formats identically at any width.
+    pub fn ctx_at_width<'a>(&'a self, live: &'a HashSet<i64>, tree_cols: u16) -> BoardCtx<'a> {
         BoardCtx {
             task_sessions: Some(&self.session_status),
             done_tasks: Some(&self.done_tasks),
@@ -245,6 +251,7 @@ impl BoardSlice {
             // is from the task's Odoo tags.
             auto_dev: Some(crate::autodev::board_marker),
             now: None,
+            tree_cols,
         }
     }
 }

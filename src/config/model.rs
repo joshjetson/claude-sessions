@@ -57,6 +57,10 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "lenient")]
     pub usage: Option<UsageBlock>,
+    /// QA run settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub qa: Option<QaBlock>,
     /// Memory sampling into `runtime/memory.log`. Off unless asked for — it is
     /// a diagnostic, not a feature. See [`crate::diagnostics`].
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -450,4 +454,27 @@ fn de_conversation_width<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u
         (raw.round() as i64).clamp(MIN_CONVERSATION_WIDTH as i64, MAX_CONVERSATION_WIDTH as i64)
             as u16,
     )
+}
+
+/// How a QA run behaves.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct QaBlock {
+    /// How many QA sessions a run may have live at once.
+    ///
+    /// Caps CONCURRENCY, not the size of a run: a run of 15 tasks with a limit
+    /// of 6 starts 6 and leaves the rest queued until a lane frees.
+    ///
+    /// Absent or `0` means no cap, and that is the default. Two earlier drafts
+    /// of this feature capped it at 4 and then 16, both reasoned from a guess
+    /// about how many browsers a machine tolerates rather than from a
+    /// measurement — and both sat below what the tool is already used for. A
+    /// cap below someone's normal working volume is an obstacle, not a
+    /// safeguard.
+    ///
+    /// What stays enforced regardless: one pass per task. Two passes on one
+    /// task share a worktree path and tear each other's checkout down, and no
+    /// concurrency number would catch that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lane_limit: Option<usize>,
 }

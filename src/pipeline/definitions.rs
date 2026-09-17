@@ -27,12 +27,14 @@
 mod conflict;
 mod pre_optics;
 mod qa;
+mod qa_run;
 mod revision;
 mod task;
 
 pub use conflict::CONFLICT_PIPELINE;
 pub use pre_optics::PRE_OPTICS_PIPELINE;
 pub use qa::{QA_DRYRUN_PIPELINE, QA_PIPELINE};
+pub use qa_run::{QA_RUN_PIPELINE, QA_ROOT_VAR, RUN_ID_VAR, TASK_IDS_VAR, TRIAGE_VAR};
 pub use revision::REVISION_PIPELINE;
 pub use task::TASK_PIPELINE;
 
@@ -130,6 +132,7 @@ pub static BUILT_IN: &[&PipelineDef] = &[
     &REVISION_PIPELINE,
     &QA_PIPELINE,
     &QA_DRYRUN_PIPELINE,
+    &QA_RUN_PIPELINE,
     &PRE_OPTICS_PIPELINE,
     &CONFLICT_PIPELINE,
 ];

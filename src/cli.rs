@@ -115,6 +115,39 @@ pub enum Command {
     Journal(JournalArgs),
     /// Build and open the pipeline viewer, or inspect a pipeline in the terminal
     Pipeline(PipelineArgs),
+    /// Record what a QA-run coordinator WOULD have answered, before it acts
+    QaShadow(QaShadowArgs),
+    /// Deliver a coordinator's answer to the QA session working a task
+    QaAnswer(QaAnswerArgs),
+}
+
+#[derive(Args)]
+pub struct QaShadowArgs {
+    /// The run this question belongs to
+    #[arg(long)]
+    pub run: String,
+    #[arg(long)]
+    pub task: i64,
+    #[arg(long, default_value = "")]
+    pub question: String,
+    /// What you would have answered. "I do not know: <why>" is a real data
+    /// point; an empty answer is not.
+    #[arg(long = "would-answer")]
+    pub would_answer: String,
+    #[arg(long)]
+    pub confidence: Option<String>,
+}
+
+#[derive(Args)]
+pub struct QaAnswerArgs {
+    #[arg(long)]
+    pub task: i64,
+    #[arg(long)]
+    pub answer: String,
+    /// What is being answered. Only `question` is ever delivered — a verdict
+    /// checkpoint is refused whatever this says.
+    #[arg(long, default_value = "question")]
+    pub kind: String,
 }
 
 #[derive(Args)]
@@ -205,6 +238,11 @@ pub struct NotifyArgs {
     pub message: Option<String>,
     #[arg(long, default_value = "info")]
     pub level: String,
+    /// What this IS, as opposed to how loudly to announce it: `info`,
+    /// `question` (the sender is blocked, waiting), or `verdict` (a decision a
+    /// person makes). Anything else reads as `info`.
+    #[arg(long, default_value = "info")]
+    pub kind: String,
     #[arg(long)]
     pub session: Option<String>,
     /// First positional is the title, the rest are joined into the message
@@ -227,6 +265,8 @@ pub fn run() -> Result<()> {
         Some(Command::Pipeline(args)) => {
             pipeline::run(&paths, &config, args, SpawnPolicy::detect())
         }
+        Some(Command::QaShadow(args)) => markers::qa_shadow(&paths, args),
+        Some(Command::QaAnswer(args)) => markers::qa_answer(&paths, &config, args),
     }
 }
 
