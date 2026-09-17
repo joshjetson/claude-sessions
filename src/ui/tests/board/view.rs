@@ -338,11 +338,9 @@ fn ssh_and_the_browser_work_from_any_row_in_a_projects_block() {
 #[test]
 fn the_keys_that_land_later_say_so_rather_than_doing_nothing() {
     let (_dir, mut state) = board_state();
-    for (key, needle) in [('M', "deploy phase"), ('D', "extras phase")] {
-        super::press(&mut state, KeyCode::Char(key));
-        let flash = state.flash.clone().unwrap_or_default();
-        assert!(flash.contains(needle), "{key}: {flash}");
-    }
+    super::press(&mut state, KeyCode::Char('M'));
+    let flash = state.flash.clone().unwrap_or_default();
+    assert!(flash.contains("deploy phase"), "{flash}");
 }
 
 #[test]

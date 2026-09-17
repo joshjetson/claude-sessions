@@ -26,7 +26,7 @@ pub use editor::{
     build_editor_argv, line_args, resolve_editor, resolve_editor_from_env, run_editor, Editor,
     EditorOutcome, EditorSource,
 };
-pub use exec::{CommandOutput, Exec};
+pub use exec::{CommandOutput, Exec, OPEN_COMMAND, OPEN_TIMEOUT};
 pub use iterm2::{
     build_close_script, build_focus_script, build_launch_script, build_send_text_script,
     build_viewer_tab_script, escape_applescript, escape_shell_single, Iterm2Driver,

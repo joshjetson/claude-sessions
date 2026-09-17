@@ -23,10 +23,22 @@ pub struct BoardServices {
     pub odoo: Option<Arc<OdooClient>>,
     pub backend: Option<Arc<dyn TaskBackend>>,
     pub sounds: Sounds,
+    /// The Optics client, when this install has an endpoint and a token.
+    /// `None` is the normal case and simply means no coverage badges.
+    pub optics: Option<Arc<crate::optics::OpticsClient>>,
+    /// Short `HEAD`s per QA worktree. Shared with the UI thread, which reads it
+    /// while building the task menu and never fills it — see
+    /// [`crate::qaden::HeadCache`].
+    pub qa_heads: Arc<crate::qaden::HeadCache>,
 }
 
 impl BoardServices {
-    pub fn new(paths: Paths, odoo: Option<Arc<OdooClient>>, sounds: Sounds) -> Self {
+    pub fn new(
+        paths: Paths,
+        odoo: Option<Arc<OdooClient>>,
+        optics: Option<Arc<crate::optics::OpticsClient>>,
+        sounds: Sounds,
+    ) -> Self {
         let backend = odoo.clone().map(|client| {
             Arc::new(crate::daemon::OdooTaskBackend::new(client)) as Arc<dyn TaskBackend>
         });
@@ -34,7 +46,9 @@ impl BoardServices {
             paths,
             odoo,
             backend,
+            optics,
             sounds,
+            qa_heads: Arc::new(crate::qaden::HeadCache::new()),
         }
     }
 
@@ -45,7 +59,9 @@ impl BoardServices {
             paths,
             odoo: None,
             backend: None,
+            optics: None,
             sounds: Sounds::default(),
+            qa_heads: Arc::new(crate::qaden::HeadCache::new()),
         }
     }
 }

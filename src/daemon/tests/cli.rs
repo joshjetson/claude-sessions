@@ -10,7 +10,7 @@ use std::fs;
 use std::time::{Duration, SystemTime};
 
 use super::*;
-use crate::cli::{notify_text, split_questions, write_blocked_marker, write_done_marker};
+use crate::cli::markers::{notify_text, split_questions, write_blocked_marker, write_done_marker};
 use crate::daemon::{BlockedMarker, DoneMarker};
 use crate::paths::PathEnv;
 

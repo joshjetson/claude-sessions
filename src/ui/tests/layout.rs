@@ -205,11 +205,7 @@ fn header_usage_slot_is_empty_until_a_readout_exists() {
     let without = text(&render(60, 3, |frame| {
         render_header(frame, frame.area(), "D", Stats::default(), None, None);
     }));
-    let readout = UsageReadout {
-        session_pct: Some(42),
-        week_pct: Some(7),
-        fable_pct: None,
-    };
+    let readout = reading(Some(42.0), Some(7.0));
     let with = text(&render(60, 3, |frame| {
         render_header(
             frame,
@@ -228,11 +224,7 @@ fn header_usage_slot_is_empty_until_a_readout_exists() {
 fn header_usage_never_shifts_the_title() {
     // The readout is overlaid on the left, not prepended — so the title's column
     // is identical with and without it.
-    let readout = UsageReadout {
-        session_pct: Some(42),
-        week_pct: Some(7),
-        fable_pct: Some(3),
-    };
+    let readout = reading(Some(42.0), Some(7.0));
     let title_column = |usage: Option<&UsageReadout>| {
         let buffer = render(90, 3, |frame| {
             render_header(
@@ -244,27 +236,48 @@ fn header_usage_never_shifts_the_title() {
                 None,
             );
         });
-        text(&buffer)
-            .lines()
-            .nth(1)
-            .and_then(|row| row.find("Dashboard"))
-            .expect("title")
+        // Columns, not bytes: the readout draws multi-byte block glyphs, so a
+        // byte offset would move even when the title does not.
+        let row = text(&buffer).lines().nth(1).expect("title row").to_string();
+        let at = row.find("Dashboard").expect("title");
+        row[..at].chars().count()
     };
     assert_eq!(title_column(None), title_column(Some(&readout)));
 }
 
 #[test]
-fn usage_readout_falls_back_to_bare_percentages_when_cramped() {
-    let readout = UsageReadout {
-        session_pct: Some(42),
-        week_pct: Some(7),
-        fable_pct: None,
-    };
+fn usage_readout_degrades_form_by_form_as_the_header_narrows() {
+    // The ladder from `usage.rs`: ten-cell bars, six-cell bars, short labels
+    // with five-cell bars, labels and numbers, then bare numbers. The bars go
+    // before the numbers do — the percentage is the information.
+    let readout = reading(Some(42.0), Some(7.0));
     assert_eq!(
         readout.format(80).as_deref(),
-        Some(" session 42%  week 7% ")
+        Some(" session ████░░░░░░ 42%  ·  week █░░░░░░░░░ 7%")
     );
-    assert_eq!(readout.format(12).as_deref(), Some(" s42% w7% "));
+    assert_eq!(
+        readout.format(40).as_deref(),
+        Some(" session ███░░░ 42%  ·  week █░░░░░ 7%")
+    );
+    assert_eq!(
+        readout.format(30).as_deref(),
+        Some(" ses ██░░░ 42% · wk █░░░░ 7%")
+    );
+    assert_eq!(
+        readout.format(26).as_deref(),
+        Some(" session 42%  ·  week 7%")
+    );
+    assert_eq!(readout.format(12).as_deref(), Some(" 42% · 7%"));
     assert_eq!(readout.format(4), None, "no form fits, so nothing is drawn");
     assert_eq!(UsageReadout::default().format(80), None);
+}
+
+/// A reading with the two percentages the header draws.
+fn reading(session: Option<f64>, week: Option<f64>) -> UsageReadout {
+    UsageReadout {
+        ok: true,
+        session,
+        week,
+        ..UsageReadout::default()
+    }
 }

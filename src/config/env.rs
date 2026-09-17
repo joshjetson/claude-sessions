@@ -25,6 +25,9 @@ pub struct EnvOverrides {
     pub optics_token: Option<String>,
     /// `CLAUDE_SESSIONS_NOTIFY_PORT` outranks every configured port.
     pub notify_port: Option<u16>,
+    /// `CLAUDE_SESSIONS_DIAGNOSTICS=1` turns the memory sampler on for one run
+    /// without editing the config file.
+    pub diagnostics: bool,
 }
 
 impl EnvOverrides {
@@ -40,6 +43,7 @@ impl EnvOverrides {
             notify_port: env_string("CLAUDE_SESSIONS_NOTIFY_PORT")
                 .and_then(|v| v.trim().parse::<u16>().ok())
                 .filter(|port| *port != 0),
+            diagnostics: env_string("CLAUDE_SESSIONS_DIAGNOSTICS").as_deref() == Some("1"),
         }
     }
 }

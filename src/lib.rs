@@ -7,18 +7,30 @@
 //! [`config::ConfigHandle`] and hands them down.
 
 pub mod archive;
+pub mod autodev;
 pub mod board;
 pub mod cli;
 pub mod config;
 pub mod daemon;
+pub mod dailylog;
 pub mod db;
+pub mod diagnostics;
+pub mod journal;
+pub mod journal_html;
 pub mod odoo;
+pub mod optics;
 pub mod paths;
 pub mod pipeline;
+pub mod purge;
+pub mod qaden;
 pub mod scan;
 pub mod ssh;
 pub mod term;
 pub mod transcript;
 pub mod types;
 pub mod ui;
+pub mod usage;
 pub mod util;
+
+#[cfg(test)]
+mod test_support;

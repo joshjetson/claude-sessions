@@ -7,6 +7,7 @@
 mod board;
 mod conversation;
 mod dialogs;
+mod extras_dialogs;
 mod harness;
 mod keys;
 mod layout;

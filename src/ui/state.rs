@@ -72,53 +72,11 @@ pub enum Quit {
 
 /// Plan-usage readout for the header.
 ///
-/// Phase 11 ports `usage.js` and fills this in; the slot exists now so adding it
-/// later changes no layout. The header takes `Option<&UsageReadout>` and draws
-/// nothing at all while it is `None`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct UsageReadout {
-    pub session_pct: Option<u8>,
-    pub week_pct: Option<u8>,
-    pub fable_pct: Option<u8>,
-}
-
-impl UsageReadout {
-    /// The widest form that fits `available` columns, down to bare percentages —
-    /// so the readout never collides with the centred title.
-    pub fn format(&self, available: usize) -> Option<String> {
-        let parts: Vec<(char, u8)> = [
-            ('s', self.session_pct),
-            ('w', self.week_pct),
-            ('f', self.fable_pct),
-        ]
-        .into_iter()
-        .filter_map(|(tag, pct)| pct.map(|p| (tag, p)))
-        .collect();
-        if parts.is_empty() {
-            return None;
-        }
-        let long = parts
-            .iter()
-            .map(|(tag, pct)| {
-                let name = match tag {
-                    's' => "session",
-                    'w' => "week",
-                    _ => "fable",
-                };
-                format!("{name} {pct}%")
-            })
-            .collect::<Vec<_>>()
-            .join("  ");
-        let short = parts
-            .iter()
-            .map(|(tag, pct)| format!("{tag}{pct}%"))
-            .collect::<Vec<_>>()
-            .join(" ");
-        [format!(" {long} "), format!(" {short} ")]
-            .into_iter()
-            .find(|candidate| candidate.chars().count() <= available)
-    }
-}
+/// The reading itself is [`crate::usage::UsageSnapshot`] — the header wants
+/// exactly what the `/usage` parser produces, and a second shape here would be
+/// one more thing to keep in step. Aliased rather than re-declared so the
+/// header's `Option<&UsageReadout>` slot reads the way it always has.
+pub use crate::usage::UsageSnapshot as UsageReadout;
 
 /// Header counters. Derived from the session list on every feed update.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -222,6 +180,10 @@ pub struct AppState {
     /// selection or view change.
     pub flash: Option<String>,
     pub usage: Option<UsageReadout>,
+    /// Short `HEAD`s per QA worktree, shared with the action worker. Read here
+    /// while labelling the QA menu row; filled only by the worker, so no
+    /// render path ever spawns `git` (brief §10 mandate #9).
+    pub qa_heads: std::sync::Arc<crate::qaden::HeadCache>,
     pub stats: Stats,
     pub quit: Option<Quit>,
     /// Set by anything that changes what is on screen. The loop draws when it
@@ -256,6 +218,7 @@ impl AppState {
             dialog: None,
             flash: None,
             usage: None,
+            qa_heads: std::sync::Arc::new(crate::qaden::HeadCache::new()),
             stats: Stats::default(),
             quit: None,
             dirty: true,
@@ -311,6 +274,15 @@ impl AppState {
             total_projects: by_project.len(),
         };
         self.by_project = by_project;
+        self.dirty = true;
+    }
+
+    /// Fold a plan-usage reading in.
+    ///
+    /// A failed check keeps the previous numbers and marks them stale rather
+    /// than blanking the readout — see [`crate::usage::UsageSnapshot::merge_over`].
+    pub fn apply_usage(&mut self, usage: crate::usage::UsageSnapshot) {
+        self.usage = Some(usage.merge_over(self.usage.as_ref()));
         self.dirty = true;
     }
 

@@ -165,18 +165,49 @@ fn r_refreshes_everywhere_except_on_a_session_row() {
 }
 
 #[test]
-fn the_phase_placeholders_flash_rather_than_doing_nothing() {
-    // A key that silently does nothing reads as a broken dashboard.
-    for code in [KeyCode::Char('u'), KeyCode::Char('l'), KeyCode::Char('L')] {
+fn u_queues_a_usage_check_and_says_it_is_spending_one() {
+    // A key that silently does nothing reads as a broken dashboard, and this
+    // one costs a request against the quota it reports — so it says so.
+    let (_dir, mut state) = sessions_state();
+    press(&mut state, KeyCode::Char('u'));
+    assert!(state
+        .pending_actions()
+        .iter()
+        .any(|action| matches!(action, Action::RefreshUsage)));
+    let flash = state.flash.clone().unwrap_or_default();
+    assert!(flash.contains("usage"), "{flash}");
+}
+
+#[test]
+fn l_and_shift_l_both_open_the_daily_log() {
+    for code in [KeyCode::Char('l'), KeyCode::Char('L')] {
         let (_dir, mut state) = sessions_state();
         press(&mut state, code);
-        assert!(state.flash.is_some(), "{code:?} said nothing");
+        assert_eq!(
+            state.dialog.as_ref().map(crate::ui::dialogs::Dialog::name),
+            Some("logViewer"),
+            "{code:?}"
+        );
+        // The key that opened it shuts it again.
+        press(&mut state, code);
+        assert!(state.dialog.is_none(), "{code:?} did not close it");
     }
+}
+
+#[test]
+fn shift_x_opens_the_purge_confirmation_rather_than_purging() {
     let (_dir, mut state) = sessions_state();
     with_sessions(&mut state, three_sessions());
     press(&mut state, KeyCode::Char('X'));
-    let flash = state.flash.clone().expect("purge flash");
-    assert!(flash.to_lowercase().contains("purge"), "{flash}");
+    assert_eq!(
+        state.dialog.as_ref().map(crate::ui::dialogs::Dialog::name),
+        Some("purgeConfirm")
+    );
+    // Nothing is killed by opening it.
+    assert!(!state
+        .pending_actions()
+        .iter()
+        .any(|action| matches!(action, Action::Purge(_))));
 }
 
 // --- sessions view ----------------------------------------------------------
@@ -342,4 +373,26 @@ fn page_keys_move_by_the_last_measured_page() {
     }
     assert_eq!(state.conv.scroll_top, 90, "clamped at the last page");
     assert!(state.conv.stick, "reaching the bottom re-sticks");
+}
+
+#[test]
+fn a_failed_usage_check_keeps_the_last_numbers_and_marks_them_stale() {
+    // The readout must not blink out whenever a check times out — the header
+    // keeps what it had and says the numbers are old.
+    let (_dir, mut state) = sessions_state();
+    state.apply_usage(crate::usage::UsageSnapshot {
+        ok: true,
+        session: Some(42.0),
+        week: Some(55.0),
+        ..crate::usage::UsageSnapshot::default()
+    });
+    state.apply_usage(crate::usage::UsageSnapshot {
+        ok: false,
+        error: Some("claude did not answer".into()),
+        ..crate::usage::UsageSnapshot::default()
+    });
+    let usage = state.usage.clone().expect("a readout");
+    assert_eq!(usage.session, Some(42.0));
+    assert!(!usage.ok);
+    assert!(usage.format(80).unwrap().contains("(stale)"));
 }

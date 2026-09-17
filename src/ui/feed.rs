@@ -48,6 +48,9 @@ pub enum FeedEvent {
     /// One Odoo board fetch, from whichever side made it — the daemon's `board`
     /// event, or the in-process worker.
     Board(Box<crate::ui::board::BoardUpdate>),
+    /// A plan-usage reading the daemon took. The embedded transport has no
+    /// usage of its own — the action worker fetches it instead.
+    Usage(Box<crate::usage::UsageSnapshot>),
 }
 
 /// The contract the dashboard consumes. `Send` because the daemon client will
@@ -55,6 +58,15 @@ pub enum FeedEvent {
 pub trait SessionFeed: Send {
     /// Non-blocking: everything that has arrived since the last call.
     fn drain(&mut self) -> Vec<FeedEvent>;
+    /// Ask whoever owns the usage check to take a fresh reading.
+    ///
+    /// `true` means this transport handled it and the answer will arrive as a
+    /// [`FeedEvent::Usage`]; `false` means the caller should run it locally.
+    /// Only the daemon owns a usage hook — running it in both places would
+    /// spend the quota twice.
+    fn refresh_usage(&self) -> bool {
+        false
+    }
     /// Scan now rather than at the next tick.
     fn request_refresh(&self);
     /// A session was just launched — poll faster for a while.

@@ -171,6 +171,9 @@ pub struct RecordingDriver {
     pub launches: Mutex<Vec<LaunchRequest>>,
     pub sent: Mutex<Vec<(SessionRef, String)>>,
     pub focused: AtomicUsize,
+    /// Tabs the driver was asked to close — what a purge must not reach under
+    /// a refusing spawn policy.
+    pub closed: AtomicUsize,
     pub fail: bool,
 }
 
@@ -224,6 +227,7 @@ impl TerminalDriver for RecordingDriver {
     }
 
     fn close(&self, _session: &SessionRef) -> DriverResult {
+        self.closed.fetch_add(1, Ordering::SeqCst);
         DriverResult::ok()
     }
 }

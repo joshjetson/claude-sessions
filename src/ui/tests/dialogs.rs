@@ -3,27 +3,40 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::ConfigHandle;
+use crate::paths::Paths;
 use crate::types::SessionStatus;
 use crate::ui::dialogs::{
-    AddGroup, Dialog, DialogCtx, DialogOutcome, FileViewer, KillConfirm, Rename, Search,
-    SettingsDialog, ShutdownConfirm,
+    AddGroup, DaemonLogs, Dialog, DialogCtx, DialogOutcome, FileViewer, KillConfirm, LogViewer,
+    PurgeConfirm, Rename, Search, SettingsDialog, ShutdownConfirm,
 };
 use crate::ui::state::Action;
 use crate::ui::tests::{render_area, session, temp_config, text};
 use crate::ui::tree::{SelectedRow, SessionsByProject};
 
-fn key(code: KeyCode) -> KeyEvent {
+pub(super) fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn press(dialog: &mut Dialog, code: KeyCode, config: &mut ConfigHandle) -> DialogOutcome {
+pub(super) fn press(
+    dialog: &mut Dialog,
+    code: KeyCode,
+    config: &mut ConfigHandle,
+) -> DialogOutcome {
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let mut ctx = DialogCtx { config };
     dialog.handle_key(key(code), area, &mut ctx)
 }
 
+/// A throwaway config plus the paths that go with it — the log and purge
+/// dialogs read the runtime directory, so they need both.
+pub(super) fn temp_config_paths() -> (tempfile::TempDir, ConfigHandle, Paths) {
+    let (dir, config) = temp_config();
+    let paths = Paths::for_test(dir.path());
+    (dir, config, paths)
+}
+
 /// Every dialog, in the state it opens in.
-fn every_dialog(config: &ConfigHandle) -> Vec<Dialog> {
+fn every_dialog(config: &ConfigHandle, paths: &Paths) -> Vec<Dialog> {
     let row = SelectedRow::Session {
         session_id: "abcd1234".into(),
         pids: vec![4242],
@@ -40,6 +53,9 @@ fn every_dialog(config: &ConfigHandle) -> Vec<Dialog> {
         Dialog::Settings(SettingsDialog::default()),
         Dialog::Shutdown(ShutdownConfirm::default()),
         Dialog::FileViewer(FileViewer::open(" Log ", "/nonexistent/for/the/test.log")),
+        Dialog::LogViewer(LogViewer::open(paths, None, "2026-09-16")),
+        Dialog::PurgeConfirm(PurgeConfirm::new(Vec::new(), Default::default())),
+        Dialog::DaemonLogs(DaemonLogs::open(&paths.auto_dev_runs_dir, 5944, &[])),
     ]
 }
 
@@ -49,8 +65,8 @@ fn the_smoke_matrix_renders_every_dialog() {
     // with a ReferenceError that only fired at RENDER time, so every check that
     // merely imported the module passed while pressing the key wedged the
     // dashboard. Rendering each dialog once catches that whole class.
-    let (_dir, config) = temp_config();
-    for mut dialog in every_dialog(&config) {
+    let (_dir, config, paths) = temp_config_paths();
+    for mut dialog in every_dialog(&config, &paths) {
         let name = dialog.name();
         let buffer = render_area(100, 30, |frame, area| dialog.render(frame, area, &config));
         let painted = text(&buffer);
@@ -65,8 +81,8 @@ fn the_smoke_matrix_renders_every_dialog() {
 fn every_dialog_survives_a_burst_of_keys() {
     // The other half of the matrix: a dialog that panics on Esc-before-load, or
     // on a key it does not know, is just as wedged as one that will not render.
-    let (_dir, mut config) = temp_config();
-    for mut dialog in every_dialog(&config) {
+    let (_dir, mut config, paths) = temp_config_paths();
+    for mut dialog in every_dialog(&config, &paths) {
         for code in [
             KeyCode::Down,
             KeyCode::Up,
@@ -84,8 +100,8 @@ fn every_dialog_survives_a_burst_of_keys() {
 
 #[test]
 fn every_dialog_closes_on_escape() {
-    let (_dir, mut config) = temp_config();
-    for mut dialog in every_dialog(&config) {
+    let (_dir, mut config, paths) = temp_config_paths();
+    for mut dialog in every_dialog(&config, &paths) {
         let name = dialog.name();
         let outcome = press(&mut dialog, KeyCode::Esc, &mut config);
         assert!(

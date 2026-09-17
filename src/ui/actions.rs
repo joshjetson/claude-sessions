@@ -8,19 +8,19 @@
 
 pub mod board;
 mod services;
+mod system;
 
 pub use board::Lookup;
 pub use services::{BoardServices, Sounds};
+use system::{kill_pids, open_with, play, purge, ssh};
 
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::odoo::{Blocker, OdooProject, StageRecord, TaskDetail};
-use crate::ssh::{resolve_ssh_host, ssh_command, SshResolution, SSHING_COMMAND};
-use crate::term::{LaunchRequest, SpawnPolicy, TerminalDriver};
+use crate::term::{Exec, LaunchRequest, SpawnPolicy, TerminalDriver};
 use crate::ui::board::BoardUpdate;
 use crate::ui::state::Action;
 
@@ -33,8 +33,23 @@ pub const KILL_REFRESH_DELAYS: [Duration; 3] = [
     Duration::from_millis(1000),
 ];
 
+/// How long an agent gets between the signal and its tab closing. Closing the
+/// tab under a live process leaves it running headless with nowhere to report.
+pub const PURGE_GRACE: Duration = Duration::from_millis(150);
+
+/// A purge closes tabs as well as killing processes, so the last poll is later
+/// than a plain kill's.
+pub const PURGE_REFRESH_DELAYS: [Duration; 3] = [
+    Duration::from_millis(0),
+    Duration::from_millis(400),
+    Duration::from_millis(1200),
+];
+
 /// What the worker sends back.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `PartialEq` but not `Eq`: a usage reading carries percentages, and a
+/// percentage is a float.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ActionResult {
     Flash(String),
     /// Scan now.
@@ -45,6 +60,8 @@ pub enum ActionResult {
     Board(Box<BoardUpdate>),
     /// Something a dialog was waiting on.
     Data(Box<BoardData>),
+    /// A plan-usage reading this process took.
+    Usage(Box<crate::usage::UsageSnapshot>),
 }
 
 /// An answer addressed to whichever dialog asked for it.
@@ -66,6 +83,16 @@ pub enum BoardData {
     TaskDescription {
         task_id: i64,
         detail: Option<TaskDetail>,
+    },
+    /// Stage names for a set of tasks — what the purge dialog needs for the
+    /// sessions the board's current filter does not cover.
+    TaskStages(std::collections::BTreeMap<i64, String>),
+    /// The QA menu label, once the QAden head probe has run. The menu opens
+    /// with whatever the cache already knew and swaps this in — brief §10
+    /// mandate #9: no blocking spawn while a row is being formatted.
+    QaLabel {
+        task_id: i64,
+        label: String,
     },
     /// `task_id` is what the answer was about, so a failure reaches the dialog
     /// that asked rather than the one that happens to be open.
@@ -128,6 +155,19 @@ impl Drop for ActionWorker {
             let _ = handle.join();
         }
     }
+}
+
+/// Run one action exactly as the worker would. Exists so the spawn-gate tests
+/// can drive the real dispatcher rather than a copy of it.
+#[cfg(test)]
+pub(crate) fn run_for_test(
+    action: Action,
+    driver: &Arc<dyn TerminalDriver>,
+    policy: SpawnPolicy,
+    services: &BoardServices,
+    results: &Sender<ActionResult>,
+) {
+    run(action, driver, policy, services, results);
 }
 
 fn run(
@@ -212,6 +252,9 @@ fn run(
         Action::FetchTaskDescription { task_id } => {
             board::fetch(services, Lookup::TaskDescription { task_id }, results)
         }
+        Action::FetchTaskStages { task_ids } => {
+            board::fetch(services, Lookup::TaskStages { task_ids }, results)
+        }
         Action::Launch(spec) => board::launch(&spec, services, driver, policy, results),
         Action::SendToSession(spec) => {
             board::send_to_session(&spec, services, driver, policy, results)
@@ -222,7 +265,27 @@ fn run(
             stage_id,
             stage_name,
         } => board::move_to_named_stage(services, task_id, stage_id, &stage_name, results),
-        Action::OpenUrl(url) => open_with(&url, policy, results),
+        Action::OpenUrl(url) | Action::OpenPath(url) => open_with(&url, policy, results),
+        Action::RefreshUsage => {
+            // `$HOME` rather than the dashboard's cwd: a repository's CLAUDE.md
+            // or settings must not change what a usage check reports.
+            let snapshot = crate::usage::fetch_usage(
+                &Exec::new(policy),
+                &services.paths.home,
+                crate::usage::FETCH_TIMEOUT,
+            );
+            let _ = results.send(ActionResult::Usage(Box::new(snapshot)));
+        }
+        Action::RefreshQaState { task_id } => {
+            services
+                .qa_heads
+                .refresh_for_task(&Exec::new(policy), &services.paths, task_id);
+            let _ = results.send(ActionResult::Data(Box::new(BoardData::QaLabel {
+                task_id,
+                label: crate::qaden::menu_label_for(&services.paths, task_id, &services.qa_heads),
+            })));
+        }
+        Action::Purge(entries) => purge(&entries, driver, policy, results),
         Action::Ssh { project } => ssh(&project, services, driver, policy, results),
         Action::Sound(level) => {
             if let Some(file) = services.sounds.file(level) {
@@ -241,108 +304,6 @@ fn run(
     }
 }
 
-/// `open <url>` — the one shell-out that is not a terminal driver call.
-fn open_with(target: &str, policy: SpawnPolicy, results: &Sender<ActionResult>) {
-    if let Err(refused) = policy.check("open a browser") {
-        let _ = results.send(ActionResult::Flash(refused.message));
-        return;
-    }
-    if let Err(error) = Command::new("open").arg(target).status() {
-        let _ = results.send(ActionResult::Flash(format!(
-            "Could not open {target}: {error}"
-        )));
-    }
-}
-
-/// A notification sound. Failure is silence, which is the correct failure mode
-/// for a sound.
-fn play(file: &str, policy: SpawnPolicy) {
-    if policy.check("play a sound").is_err() {
-        return;
-    }
-    let _ = Command::new("afplay").arg(file).spawn();
-}
-
-/// Open a terminal on the server a project runs on.
-///
-/// `~/.ssh/config` is the source of truth — the same file `sshing` reads — so a
-/// host resolved here is the host you would pick there. An ambiguous match is
-/// never guessed between: connecting to the wrong server is worse than not
-/// connecting.
-fn ssh(
-    project: &str,
-    services: &BoardServices,
-    driver: &Arc<dyn TerminalDriver>,
-    policy: SpawnPolicy,
-    results: &Sender<ActionResult>,
-) {
-    if let Err(refused) = policy.check(&format!("open an ssh session for {project}")) {
-        let _ = results.send(ActionResult::Flash(refused.message));
-        return;
-    }
-    let config =
-        crate::config::ConfigHandle::load(&services.paths, crate::config::EnvOverrides::from_env());
-    let hosts = crate::ssh::load_ssh_hosts(&crate::ssh::ssh_config_path(&services.paths.home));
-    let (command, say) = match resolve_ssh_host(project, &hosts, config.ssh_hosts()) {
-        SshResolution::Host(host) => {
-            let mut say = String::new();
-            // A malformed HostName produces "could not resolve hostname", which
-            // says nothing about the real cause. Say it before connecting.
-            if let Some(problem) = &host.problem {
-                say = format!("~/.ssh/config: {} Fix: {}", problem.message, problem.fix);
-            }
-            (ssh_command(&host.alias), say)
-        }
-        SshResolution::Ambiguous(aliases) => (
-            SSHING_COMMAND.to_string(),
-            format!(
-                "{project} matches several hosts ({}) — opening sshing to choose.",
-                aliases.join(", ")
-            ),
-        ),
-        SshResolution::NoMatch => (
-            SSHING_COMMAND.to_string(),
-            format!("No ssh host matches {project} — opening sshing."),
-        ),
-    };
-    if !say.is_empty() {
-        let _ = results.send(ActionResult::Flash(say));
-    }
-    let home = services.paths.home.to_string_lossy().into_owned();
-    let request = LaunchRequest::new(home, command.clone()).title(format!("ssh {project}"));
-    let result = driver.launch(&request);
-    if !result.ok {
-        let reason = result.error.unwrap_or_else(|| "unknown reason".into());
-        let _ = results.send(ActionResult::Flash(format!(
-            "Could not open a terminal for {project}: {reason}"
-        )));
-    }
-}
-
 /// The command a `n` launch runs, matching what the Node app typed into a fresh
 /// tab.
 const LAUNCH_COMMAND: &str = "claude --dangerously-skip-permissions";
-
-/// SIGTERM, through the same gate every other child process goes through.
-///
-/// `/bin/kill` rather than a raw syscall on purpose: [`SpawnPolicy`] guards
-/// process *starts*, so routing the signal through one means a test run cannot
-/// kill anything even by accident — which is exactly the failure the policy was
-/// written for.
-fn kill_pids(pids: &[u32], policy: SpawnPolicy) -> Result<(), String> {
-    if pids.is_empty() {
-        return Err("Nothing to kill.".to_string());
-    }
-    policy
-        .check("kill a session")
-        .map_err(|refused| refused.message)?;
-    let mut command = Command::new("kill");
-    command.arg("-TERM");
-    for pid in pids {
-        command.arg(pid.to_string());
-    }
-    match command.status() {
-        Ok(_) => Ok(()),
-        Err(err) => Err(format!("Could not signal the session: {err}")),
-    }
-}

@@ -4,7 +4,7 @@
 //! Each one is a field read over the cached [`Config`]. The Node original
 //! re-read and re-parsed the JSON file inside every one of these.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -107,6 +107,22 @@ impl ConfigHandle {
     pub fn optics_project(&self, project: &str) -> Option<&str> {
         let projects = &self.config.optics.as_ref()?.projects;
         lookup_ci(projects, project).map(|(_, key)| key.as_str())
+    }
+
+    /// The whole Odoo-name -> Optics-key map, for a client that resolves names
+    /// itself rather than asking per project.
+    pub fn optics_projects(&self) -> HashMap<String, String> {
+        self.config
+            .optics
+            .as_ref()
+            .map(|optics| {
+                optics
+                    .projects
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Explicit project -> ssh alias overrides, for projects whose name does not
@@ -329,6 +345,12 @@ impl ConfigHandle {
             enabled: usage.and_then(|u| u.enabled) != Some(false),
             interval: minutes.map(minutes_to_duration),
         }
+    }
+
+    /// Whether to sample memory into `runtime/memory.log`. Either source turns
+    /// it on; the default is off.
+    pub fn diagnostics(&self) -> bool {
+        self.env.diagnostics || self.config.diagnostics == Some(true)
     }
 }
 

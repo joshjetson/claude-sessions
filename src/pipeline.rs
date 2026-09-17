@@ -10,6 +10,7 @@
 //! not a formatting nit.
 
 pub mod definitions;
+pub mod html;
 pub mod project;
 pub mod resolve;
 pub mod skills;
@@ -20,6 +21,7 @@ pub use definitions::{
     built_in, pipeline_skills, PipelineDef, StepDef, StepKind, BUILT_IN, CONFLICT_PIPELINE,
     PRE_OPTICS_PIPELINE, QA_DRYRUN_PIPELINE, QA_PIPELINE, REVISION_PIPELINE, TASK_PIPELINE,
 };
+pub use html::{render_html, sample_vars, ProjectRepo};
 pub use project::{read_project_override, PipelineSource, ProjectOverride};
 pub use resolve::{
     dashboard_step, resolve_pipeline, DashboardStep, ResolvedPipeline, ResolvedStep,

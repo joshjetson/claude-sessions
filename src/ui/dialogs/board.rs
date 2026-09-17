@@ -73,10 +73,10 @@ impl TaskMenu {
         ));
         // The QA label states what selecting it will do — start, resume a
         // round, or open a new one — which depends on QAden run state the board
-        // cannot otherwise show. That reader lands with the extras phase; until
-        // then the label says so rather than implying a round is in progress.
+        // cannot otherwise show. The `run.json` read is local and cheap; the
+        // staleness probe is not, so it arrives later through `accept`.
         entries.push((
-            "🧪  QA — round state lands with the extras phase".into(),
+            crate::qaden::menu_label_for(&state.paths, task.id, &state.qa_heads),
             TaskAction::Start(LaunchKind::Qa),
         ));
         entries.push((
@@ -135,6 +135,27 @@ impl TaskMenu {
             entries,
             list,
         }
+    }
+
+    /// Swap in a QA label the worker resolved. Returns false when the answer
+    /// was for another task — the cursor moved on while the probe ran.
+    pub fn accept(&mut self, data: &crate::ui::dialogs::BoardData) -> bool {
+        let crate::ui::dialogs::BoardData::QaLabel { task_id, label } = data else {
+            return false;
+        };
+        if *task_id != self.task.id {
+            return false;
+        }
+        let Some(index) = self
+            .entries
+            .iter()
+            .position(|(_, action)| *action == TaskAction::Start(LaunchKind::Qa))
+        else {
+            return false;
+        };
+        self.entries[index].0 = label.clone();
+        self.list.rows[index] = Line::raw(label.clone());
+        true
     }
 
     /// The action a row performs, for tests and for the dispatcher.

@@ -69,6 +69,44 @@ pub fn normalise_name(name: &str) -> String {
         .collect()
 }
 
+/// Whole-word substring test — what a `\bneedle\b` regex answered in Node.
+///
+/// The crate carries no regex dependency (one more transitive tree for
+/// `cargo install` to resolve, for patterns this simple), so the handful of
+/// word-boundary matches the port needs — purge stage names, the journal's
+/// section classifier, prose-correction detection — go through here. A
+/// "boundary" is the regex one: the character either side must not be
+/// `[A-Za-z0-9_]`.
+///
+/// `needle` is matched literally, so callers lowercase both sides when they
+/// want a case-insensitive match.
+pub fn word_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let bytes = haystack.as_bytes();
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut from = 0;
+    while let Some(offset) = haystack[from..].find(needle) {
+        let start = from + offset;
+        let end = start + needle.len();
+        let before_ok = start == 0 || !is_word(bytes[start - 1]);
+        let after_ok = end == bytes.len() || !is_word(bytes[end]);
+        if before_ok && after_ok {
+            return true;
+        }
+        // Advance one character, not past the whole match: "aaa" must still
+        // find the "aa" that starts one byte later.
+        from = start + haystack[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    false
+}
+
+/// True when any of `needles` matches as a whole word.
+pub fn any_word_match(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| word_match(haystack, needle))
+}
+
 /// Collapse whitespace and cut to `max_len` *columns*, not characters.
 ///
 /// Width rather than length because a pane budget is columns: a row of CJK

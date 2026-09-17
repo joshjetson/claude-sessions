@@ -65,6 +65,9 @@ fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
         "snapshot" => {
             if let Ok(snapshot) = serde_json::from_str::<Snapshot>(&event.data) {
                 let board = board_update(&snapshot);
+                if let Some(usage) = usage_event(snapshot.usage.clone()) {
+                    let _ = sender.send(usage);
+                }
                 let _ = sender.send(sessions(snapshot.sessions));
                 let _ = sender.send(board);
             }
@@ -94,6 +97,13 @@ fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
                 }
             }
         }
+        "usage" => {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                if let Some(usage) = usage_event(Some(value)) {
+                    let _ = sender.send(usage);
+                }
+            }
+        }
         // deploy and the link events belong to phases that have not landed;
         // an unknown event is never an error.
         _ => {}
@@ -118,7 +128,17 @@ fn board_update(snapshot: &Snapshot) -> FeedEvent {
             .iter()
             .map(|(task_id, blocked)| (*task_id, blocked.questions.clone()))
             .collect(),
+        // The daemon does not read Optics; the dashboard's own worker fetches
+        // coverage alongside its board refresh.
+        optics_tasks: std::collections::HashMap::new(),
     }))
+}
+
+/// The daemon carries usage as opaque JSON so the wire never constrains what a
+/// reading holds; the dashboard is the one that knows its shape.
+fn usage_event(value: Option<serde_json::Value>) -> Option<FeedEvent> {
+    let snapshot: crate::usage::UsageSnapshot = serde_json::from_value(value?).ok()?;
+    Some(FeedEvent::Usage(Box::new(snapshot)))
 }
 
 fn sessions(event: SessionsEvent) -> FeedEvent {
@@ -137,6 +157,15 @@ impl SessionFeed for RemoteFeed {
         self.act(|client| {
             client.refresh(RefreshRequest::default());
         });
+    }
+
+    /// The daemon owns the usage hook, so it takes the reading and announces
+    /// it — one check, however many dashboards are attached.
+    fn refresh_usage(&self) -> bool {
+        self.act(|client| {
+            client.refresh_usage();
+        });
+        true
     }
 
     fn note_launch(&self) {

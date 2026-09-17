@@ -138,10 +138,21 @@ pub fn render_header(
     let mut line = centered(title_spans, cols, band);
 
     // How much room the readout has is the centred title's left edge; the
-    // readout picks the widest form that fits inside it.
+    // readout picks the widest form that fits inside it — bars first, then
+    // shorter labels, then bare percentages, then nothing at all.
     let available = (cols.saturating_sub(title_width)) / 2;
-    if let Some(text) = usage.and_then(|u| u.format(available.saturating_sub(1))) {
-        let left = vec![Span::styled(text, band)];
+    if let Some(segments) =
+        usage.and_then(|u| crate::usage::format_usage(u, available.saturating_sub(1)))
+    {
+        let left: Vec<Span> = segments
+            .iter()
+            .map(|segment| {
+                Span::styled(
+                    segment.text.clone(),
+                    band.fg(color_from_name(segment.color.as_str())),
+                )
+            })
+            .collect();
         let left_width = spans_width(&left);
         let mut merged = left;
         merged.extend(drop_leading(line, left_width));

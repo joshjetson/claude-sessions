@@ -88,12 +88,20 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             Dialog::ProjectFilter(ProjectFilter::new(&state.config)),
         ),
         'x' => dismiss(state, snapshot),
-        // Both land with later phases; a key that silently does nothing reads
-        // as broken, so they say when they arrive.
+        // Lands with the deploy phase; a key that silently does nothing reads
+        // as broken, so it says when it arrives.
         'M' => state.flash("Your open merge requests land with the deploy phase."),
-        'D' => state.flash("Daemon run logs land with the extras phase."),
+        'D' => with_task(state, task, daemon_logs),
         _ => {}
     }
+}
+
+/// The auto-dev-daemon's run logs for a task. Read-only: this dashboard
+/// observes that daemon, it does not drive it.
+fn daemon_logs(state: &mut AppState, task: Task) {
+    let dialog =
+        crate::ui::dialogs::DaemonLogs::open(&state.paths.auto_dev_runs_dir, task.id, &task.tags);
+    open(state, Dialog::DaemonLogs(dialog));
 }
 
 fn with_task(state: &mut AppState, task: Option<Task>, run: impl FnOnce(&mut AppState, Task)) {
@@ -137,7 +145,12 @@ fn on_select(state: &mut AppState, snapshot: &BoardSnapshot) {
         }
         BoardRow::Task { task, .. } | BoardRow::Subtask { task, .. } => {
             let menu = TaskMenu::build(task, state);
+            let task_id = task.id;
             open(state, Dialog::TaskMenu(menu));
+            // The menu opens with whatever the QAden cache already knew; the
+            // `git rev-parse` that decides staleness runs on the worker and
+            // swaps the label in when it lands (brief §10 mandate #9).
+            state.enqueue(Action::RefreshQaState { task_id });
         }
         BoardRow::Inert => {}
     }

@@ -25,6 +25,9 @@ pub struct BoardUpdate {
     pub done_tasks: Vec<i64>,
     pub archived_tasks: Vec<i64>,
     pub blocked_tasks: BTreeMap<i64, Vec<String>>,
+    /// Task id -> recorded Optics processes, when this install has Optics
+    /// configured. Empty is the normal case and means the 🔬 badges are off.
+    pub optics_tasks: HashMap<i64, usize>,
 }
 
 impl BoardUpdate {
@@ -83,8 +86,7 @@ pub struct BoardSlice {
     pub archived_tasks: HashSet<i64>,
     /// Task id -> the questions the readiness gate wants answered.
     pub blocked_tasks: BTreeMap<i64, Vec<String>>,
-    /// Task id -> recorded Optics processes. Phase 11 fills it; the badge slot
-    /// exists now so wiring it later changes no layout.
+    /// Task id -> recorded Optics processes, behind the 🔬N badge.
     pub optics_tasks: HashMap<i64, usize>,
     pub detail: Option<BoardDetail>,
     /// The blink tick. Unread notifications flash on it.
@@ -115,6 +117,11 @@ impl BoardSlice {
         self.archived_tasks = update.archived_tasks.into_iter().collect();
         self.blocked_ids = update.blocked_tasks.keys().copied().collect();
         self.blocked_tasks = update.blocked_tasks;
+        // Coverage is best-effort and arrives with the board it describes; an
+        // empty map from a failed lookup must not wipe what is on screen.
+        if !update.optics_tasks.is_empty() {
+            self.optics_tasks = update.optics_tasks;
+        }
         self.session_status = self
             .links
             .iter()
@@ -173,6 +180,32 @@ impl BoardSlice {
         })
     }
 
+    /// Task id -> stage name for everything the loaded board covers, subtasks
+    /// included. The purge dialog starts from this and only asks Odoo about
+    /// what is missing — the board holds just what the current filter shows.
+    pub fn stages(&self) -> BTreeMap<i64, String> {
+        let mut out = BTreeMap::new();
+        let Some(board) = &self.board else {
+            return out;
+        };
+        for project in board.projects.values() {
+            for (stage_name, stage) in &project.stages {
+                for task in &stage.tasks {
+                    out.insert(task.id, stage_name.clone());
+                    for subtask in &task.subtasks {
+                        let name = if subtask.stage_name.is_empty() {
+                            stage_name.clone()
+                        } else {
+                            subtask.stage_name.clone()
+                        };
+                        out.insert(subtask.id, name);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn link(&self, task_id: i64) -> Option<&TaskLink> {
         self.links.get(&task_id)
     }
@@ -189,7 +222,9 @@ impl BoardSlice {
             optics_tasks: Some(&self.optics_tasks),
             live_task_ids: Some(live),
             blink_on: self.blink_on,
-            auto_dev: None,
+            // The board draws the marker; [`crate::autodev`] decides what it
+            // is from the task's Odoo tags.
+            auto_dev: Some(crate::autodev::board_marker),
             now: None,
         }
     }

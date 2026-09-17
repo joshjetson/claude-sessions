@@ -35,13 +35,13 @@ fn spec_for(dir: &tempfile::TempDir, prompt: Option<&str>) -> LaunchSpec {
     }
 }
 
-struct Harness {
+pub(super) struct Harness {
     _dir: tempfile::TempDir,
-    services: BoardServices,
-    driver: Arc<super::fixtures::RecordingDriver>,
+    pub(super) services: BoardServices,
+    pub(super) driver: Arc<super::fixtures::RecordingDriver>,
 }
 
-fn harness() -> Harness {
+pub(super) fn harness() -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let paths = crate::paths::Paths::for_test(dir.path());
     Harness {

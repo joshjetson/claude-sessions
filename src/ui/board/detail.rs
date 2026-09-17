@@ -84,6 +84,17 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         ));
     }
 
+    // Recorded UI coverage, from the map the board fetch already filled. The
+    // full process list is [`crate::optics::OpticsClient::task_optics`]; the
+    // pane shows the count, which is the part that changes a decision.
+    if let Some(count) = state.optics.filter(|count| *count > 0) {
+        let plural = if count == 1 { "" } else { "es" };
+        rows.push(line(
+            format!("🔬 {count} recorded Optics process{plural} for this task"),
+            Role::Info,
+        ));
+    }
+
     if task.open_blocker_count > 0 {
         rows.push(blank());
         rows.push(line(
@@ -105,6 +116,8 @@ pub struct TaskState<'a> {
     pub running: bool,
     pub archived: bool,
     pub questions: &'a [String],
+    /// Recorded Optics processes, when this install has Optics configured.
+    pub optics: Option<usize>,
 }
 
 /// What the board knows about a task right now.
@@ -123,6 +136,7 @@ pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
             .get(&task_id)
             .map(Vec::as_slice)
             .unwrap_or_default(),
+        optics: state.board.optics_tasks.get(&task_id).copied(),
     }
 }
 

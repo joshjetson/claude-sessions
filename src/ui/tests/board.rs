@@ -10,6 +10,7 @@
 //! - [`view`] — rows, cursor, detail pane and key map
 
 mod dialogs;
+mod extras;
 mod fixtures;
 mod gates;
 mod launch;

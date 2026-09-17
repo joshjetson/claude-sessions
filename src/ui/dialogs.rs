@@ -14,9 +14,11 @@
 pub mod board;
 pub mod folders;
 pub mod gates;
+pub mod log;
 pub mod odoo;
 pub mod pipeline;
 pub mod project_filter;
+pub mod purge;
 pub mod session;
 pub mod settings;
 pub mod shutdown;
@@ -34,9 +36,11 @@ use crate::ui::state::{Action, Quit};
 pub use board::{ContextDialog, TaskAction, TaskMenu};
 pub use folders::{DirPicker, FolderManager, SavedDirPicker, TargetBranch};
 pub use gates::{AlreadyRunning, BlockedBy};
+pub use log::{DaemonLogs, LogViewer};
 pub use odoo::{NotifMenu, Remote, StagePicker};
 pub use pipeline::PipelineView;
 pub use project_filter::{ProjectFilter, ProjectPick};
+pub use purge::PurgeConfirm;
 pub use session::{AddGroup, KillConfirm, Rename, Search};
 pub use settings::SettingsDialog;
 pub use shutdown::ShutdownConfirm;
@@ -120,6 +124,8 @@ pub enum Dialog {
     Settings(SettingsDialog),
     Shutdown(ShutdownConfirm),
     FileViewer(FileViewer),
+    LogViewer(LogViewer),
+    PurgeConfirm(PurgeConfirm),
     // --- board ---
     TaskMenu(TaskMenu),
     Context(ContextDialog),
@@ -133,6 +139,7 @@ pub enum Dialog {
     FolderManager(FolderManager),
     TargetBranch(TargetBranch),
     Pipeline(PipelineView),
+    DaemonLogs(DaemonLogs),
 }
 
 impl Dialog {
@@ -158,6 +165,9 @@ impl Dialog {
                     DialogOutcome::Act(Action::OpenEditor { path, line: 1 })
                 }
             },
+            Dialog::LogViewer(dialog) => dialog.handle_key(key, area, ctx),
+            Dialog::PurgeConfirm(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DaemonLogs(dialog) => dialog.handle_key(key, area, ctx),
             Dialog::TaskMenu(dialog) => dialog.handle_key(key, ctx),
             Dialog::Context(dialog) => dialog.handle_key(key, ctx),
             Dialog::BlockedBy(dialog) => dialog.handle_key(key, ctx),
@@ -180,6 +190,8 @@ impl Dialog {
             Dialog::BlockedBy(dialog) => dialog.accept(data),
             Dialog::StagePicker(dialog) => dialog.accept(data),
             Dialog::ProjectFilter(dialog) => dialog.accept(data),
+            Dialog::PurgeConfirm(dialog) => dialog.accept(data),
+            Dialog::TaskMenu(dialog) => dialog.accept(data),
             _ => false,
         }
     }
@@ -198,6 +210,9 @@ impl Dialog {
                 dialog.reload_if_changed();
                 dialog.render(frame, area);
             }
+            Dialog::LogViewer(dialog) => dialog.render(frame, area),
+            Dialog::PurgeConfirm(dialog) => dialog.render(frame, area),
+            Dialog::DaemonLogs(dialog) => dialog.render(frame, area),
             Dialog::TaskMenu(dialog) => dialog.render(frame, area),
             Dialog::Context(dialog) => dialog.render(frame, area),
             Dialog::BlockedBy(dialog) => dialog.render(frame, area),
@@ -224,6 +239,9 @@ impl Dialog {
             Dialog::Settings(_) => "settings",
             Dialog::Shutdown(_) => "shutdown",
             Dialog::FileViewer(_) => "fileViewer",
+            Dialog::LogViewer(_) => "logViewer",
+            Dialog::PurgeConfirm(_) => "purgeConfirm",
+            Dialog::DaemonLogs(_) => "daemonLogs",
             Dialog::TaskMenu(_) => "taskMenu",
             Dialog::Context(_) => "contextDialog",
             Dialog::BlockedBy(_) => "blockedBy",

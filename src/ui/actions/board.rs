@@ -46,13 +46,46 @@ pub fn refresh_board(
             "No Odoo credentials — set the odoo block in ~/.claude-sessions.json.",
         ),
         Some(client) => match client.fetch_board(options) {
-            Ok(board) => BoardUpdate::loaded(filter, board),
+            Ok(board) => {
+                let mut update = BoardUpdate::loaded(filter, board);
+                update.optics_tasks = optics_coverage(services, update.board.as_ref());
+                update
+            }
             // Best-effort: the previous board stays on screen with the reason
             // beside it rather than the tab going blank.
             Err(error) => BoardUpdate::failed(filter, error.to_string()),
         },
     };
     let _ = results.send(ActionResult::Board(Box::new(update)));
+}
+
+/// Recorded Optics coverage for everything on the board: one query per
+/// project, merged into one map.
+///
+/// Rides the board fetch rather than polling on its own — the answer is only
+/// useful next to the rows it annotates, and it is already off the draw thread
+/// here. `None` for the client is the normal case (Optics is opt-in and needs
+/// both an endpoint and a token), and every error inside resolves to no
+/// coverage: a missing badge is a nuisance, a board that will not render is a
+/// fault.
+fn optics_coverage(
+    services: &BoardServices,
+    board: Option<&crate::types::Board>,
+) -> std::collections::HashMap<i64, usize> {
+    let mut coverage = std::collections::HashMap::new();
+    let (Some(optics), Some(board)) = (&services.optics, board) else {
+        return coverage;
+    };
+    for (project_name, project) in &board.projects {
+        let task_ids: Vec<i64> = project
+            .stages
+            .values()
+            .flat_map(|stage| stage.tasks.iter())
+            .flat_map(|task| std::iter::once(task.id).chain(task.subtasks.iter().map(|sub| sub.id)))
+            .collect();
+        coverage.extend(optics.project_coverage(project_name, &task_ids));
+    }
+    coverage
 }
 
 /// One Odoo lookup a dialog is waiting on.
@@ -85,6 +118,9 @@ pub fn fetch(services: &BoardServices, data: Lookup, results: &Sender<ActionResu
                 stages,
             }),
         Lookup::Projects => client.get_projects().map(BoardData::Projects),
+        Lookup::TaskStages { task_ids } => client
+            .fetch_stages_for_tasks(task_ids)
+            .map(|stages| BoardData::TaskStages(stages.into_iter().collect())),
         Lookup::TaskDescription { task_id } => {
             client
                 .get_task_detail(*task_id)
@@ -107,10 +143,23 @@ pub fn fetch(services: &BoardServices, data: Lookup, results: &Sender<ActionResu
 /// The lookups, as one type so the worker has one arm rather than four.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lookup {
-    Blockers { task_id: i64, blocker_ids: Vec<i64> },
-    Stages { task_id: i64, project_id: i64 },
+    Blockers {
+        task_id: i64,
+        blocker_ids: Vec<i64>,
+    },
+    Stages {
+        task_id: i64,
+        project_id: i64,
+    },
     Projects,
-    TaskDescription { task_id: i64 },
+    TaskDescription {
+        task_id: i64,
+    },
+    /// Which stage each of these tasks is in — the purge dialog's question,
+    /// asked once for every session the board could not account for.
+    TaskStages {
+        task_ids: Vec<i64>,
+    },
 }
 
 impl Lookup {
@@ -119,7 +168,7 @@ impl Lookup {
             Lookup::Blockers { task_id, .. }
             | Lookup::Stages { task_id, .. }
             | Lookup::TaskDescription { task_id } => Some(*task_id),
-            Lookup::Projects => None,
+            Lookup::Projects | Lookup::TaskStages { .. } => None,
         }
     }
 }

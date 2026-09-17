@@ -156,10 +156,22 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         );
     }
 
-    let services = BoardServices::new(paths.clone(), odoo_client(&config), config.sounds());
+    let services = BoardServices::new(
+        paths.clone(),
+        odoo_client(&config),
+        crate::optics::OpticsClient::from_config(&config).map(std::sync::Arc::new),
+        config.sounds(),
+    );
+    // The UI thread reads this cache while labelling the QA menu row and never
+    // fills it; the worker fills it. See [`crate::qaden::HeadCache`].
+    let qa_heads = std::sync::Arc::clone(&services.qa_heads);
+    // One sample a minute into `runtime/memory.log`, and only when asked for.
+    let _diagnostics = crate::diagnostics::start(&paths, "dashboard", config.diagnostics());
+    let usage_interval = config.usage().interval;
     let worker = ActionWorker::start(driver_or_null(&config, policy), policy, services);
     let remote = connect_feed(&paths, &config);
     let mut state = AppState::new(paths.clone(), config);
+    state.qa_heads = qa_heads;
     let mut feed: Box<dyn SessionFeed> = match remote {
         Some(remote) => Box::new(remote),
         None => Box::new(EmbeddedFeed::start(paths, group_paths(&state))),
@@ -177,6 +189,7 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         feed.as_mut(),
         &worker,
         policy,
+        usage_interval,
     );
 
     screen.release()?;
@@ -185,6 +198,7 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     terminal: &mut Tui,
     screen: &mut CrosstermScreen,
@@ -192,9 +206,13 @@ fn event_loop(
     feed: &mut dyn SessionFeed,
     worker: &ActionWorker,
     policy: SpawnPolicy,
+    usage_interval: Option<Duration>,
 ) -> Result<()> {
     let mut conversation: Option<TranscriptCursor> = None;
     let mut last_clock = Instant::now();
+    // `None` is the default and means "only when `u` is pressed": the check is
+    // itself a request against the quota it reports.
+    let mut next_usage = usage_interval.map(|interval| Instant::now() + interval);
 
     loop {
         if state.dirty {
@@ -227,6 +245,7 @@ fn event_loop(
                 }
                 FeedEvent::Notification(notification) => state.push_notification(*notification),
                 FeedEvent::Board(update) => state.apply_board(*update),
+                FeedEvent::Usage(usage) => state.apply_usage(*usage),
             }
         }
 
@@ -238,6 +257,7 @@ fn event_loop(
                     feed.note_launch();
                     state.dirty = true;
                 }
+                ActionResult::Usage(usage) => state.apply_usage(*usage),
                 other => crate::ui::board::apply_result(state, other),
             }
         }
@@ -249,6 +269,13 @@ fn event_loop(
                 state.conv.messages = cursor.messages().to_vec();
                 sync_selected_meta(state);
                 state.dirty = true;
+            }
+        }
+
+        if let (Some(at), Some(interval)) = (next_usage, usage_interval) {
+            if Instant::now() >= at {
+                next_usage = Some(Instant::now() + interval);
+                crate::ui::keys::refresh_usage(state);
             }
         }
 
@@ -279,6 +306,9 @@ fn event_loop(
                         state.flash(error);
                     }
                 }
+                // The daemon owns the usage hook when there is one, so the
+                // check runs once however many dashboards are attached.
+                Action::RefreshUsage if feed.refresh_usage() => {}
                 other => {
                     // A task launch has to be registered with the pending queue
                     // BEFORE the terminal opens, or nothing will claim the

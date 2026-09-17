@@ -161,15 +161,81 @@ fn the_live_session_entries_appear_only_while_one_is_running() {
 }
 
 #[test]
-fn the_qa_label_says_what_is_missing_rather_than_implying_a_round() {
+fn the_qa_label_says_what_selecting_it_will_do() {
+    // A task QAden has never seen offers a plain start; one with a half-finished
+    // round offers to resume it and says how many gaps are open. Getting this
+    // wrong costs the reviewer a round of re-reported FAILs.
     let (_dir, state) = board_state();
-    let menu = TaskMenu::build(&task(5238, "x"), &state);
-    let qa = menu
+    let qa_label = |state: &crate::ui::state::AppState| {
+        TaskMenu::build(&task(5238, "x"), state)
+            .entries
+            .iter()
+            .find(|(label, _)| label.contains("QA") && !label.contains("dry run"))
+            .expect("a QA entry")
+            .0
+            .clone()
+    };
+    assert_eq!(qa_label(&state), "🧪  QA this task");
+
+    let dir = state.paths.qa_task_dir(5238);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("run.json"),
+        r#"{"meta": {"head": "abc1234"}, "cells": {"a": {"verdict": null}, "b": {"verdict": "PASS"}}}"#,
+    )
+    .unwrap();
+    assert!(
+        qa_label(&state).contains("resume round 1, 1 gap open"),
+        "{}",
+        qa_label(&state)
+    );
+}
+
+#[test]
+fn opening_a_task_menu_asks_for_the_qa_head_rather_than_probing_git_inline() {
+    // Brief §10 mandate #9: the Node original ran `git rev-parse` while
+    // formatting this row, so a slow repository froze the whole dashboard.
+    let (_dir, mut state) = board_state();
+    with_tasks(&mut state, vec![task(5238, "Report templates")]);
+    state.board.expanded.insert(crate::board::stage_key(
+        "NoSuchProject-ForTests",
+        "Approved to Start",
+    ));
+    let snapshot = crate::ui::board::snapshot(&state);
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|key| key == "bt:5238")
+        .expect("the task row");
+    state.board_sel.set(&snapshot.keys, index);
+    state.take_actions();
+    super::press(&mut state, KeyCode::Enter);
+    assert!(
+        state
+            .pending_actions()
+            .iter()
+            .any(|action| matches!(action, Action::RefreshQaState { task_id: 5238 })),
+        "{:?}",
+        state.pending_actions()
+    );
+}
+
+#[test]
+fn a_qa_label_answer_for_another_task_is_ignored() {
+    let (_dir, state) = board_state();
+    let mut menu = TaskMenu::build(&task(5238, "x"), &state);
+    assert!(!menu.accept(&BoardData::QaLabel {
+        task_id: 9999,
+        label: "🧪  QA — resume round 4".into(),
+    }));
+    assert!(menu.accept(&BoardData::QaLabel {
+        task_id: 5238,
+        label: "🧪  QA — resume round 4".into(),
+    }));
+    assert!(menu
         .entries
         .iter()
-        .find(|(label, _)| label.contains("QA") && !label.contains("dry run"))
-        .expect("a QA entry");
-    assert!(qa.0.contains("extras phase"), "{}", qa.0);
+        .any(|(label, _)| label == "🧪  QA — resume round 4"));
 }
 
 #[test]

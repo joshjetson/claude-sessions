@@ -6,6 +6,7 @@
 //! nothing without [`SpawnPolicy::check`] agreeing first.
 
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -48,6 +49,18 @@ impl CommandOutput {
     }
 }
 
+/// The platform's "hand this to whatever handles it" command. The Node app was
+/// macOS-only and said `open`; the rest of the world says `xdg-open`.
+pub const OPEN_COMMAND: &str = if cfg!(target_os = "macos") {
+    "open"
+} else {
+    "xdg-open"
+};
+
+/// How long `open` may take. It hands off to another process and returns, so
+/// anything slower than this is a wedged desktop, not a slow launch.
+pub const OPEN_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Runs external commands on behalf of a driver.
 #[derive(Debug, Clone, Copy)]
 pub struct Exec {
@@ -69,11 +82,44 @@ impl Exec {
     /// dashboard, and the pipes are drained on that same thread: a child whose
     /// output fills the pipe buffer blocks until somebody reads it.
     pub fn run(&self, program: &str, args: &[String], timeout: Duration) -> CommandOutput {
+        self.run_in(program, args, None, timeout)
+    }
+
+    /// Open a file or URL with the desktop's default handler.
+    ///
+    /// One implementation for the four callers that need it — the browser
+    /// action, the daily log, and the two generated HTML viewers — so the
+    /// platform choice and the spawn gate are decided once.
+    pub fn open(&self, target: &str) -> CommandOutput {
+        self.run(
+            OPEN_COMMAND,
+            std::slice::from_ref(&target.to_string()),
+            OPEN_TIMEOUT,
+        )
+    }
+
+    /// [`Exec::run`] with an explicit working directory.
+    ///
+    /// A parameter rather than a second near-identical function (WORKING.md
+    /// rule 5). Two callers need it: the usage check runs in `$HOME` so a
+    /// repository's `CLAUDE.md` cannot change what it reports, and the QAden
+    /// staleness probe runs `git -C` against a worktree.
+    pub fn run_in(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: Option<&Path>,
+        timeout: Duration,
+    ) -> CommandOutput {
         if let Err(refused) = self.policy.check(&format!("run {program}")) {
             return CommandOutput::failed(refused.message);
         }
 
-        let child = Command::new(program)
+        let mut command = Command::new(program);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        let child = command
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

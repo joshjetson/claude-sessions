@@ -25,6 +25,10 @@ pub struct PathEnv {
     pub db: Option<PathBuf>,
     /// `CLAUDE_PROJECTS_DIR` — relocates Claude Code's transcript store.
     pub projects_dir: Option<PathBuf>,
+    /// `QA_SCREENSHOT_ROOT` — the QAden plugin's own override, read here so the
+    /// run-state reader and QAden itself agree on where a task's QA directory
+    /// is.
+    pub qa_root: Option<PathBuf>,
 }
 
 impl PathEnv {
@@ -33,6 +37,7 @@ impl PathEnv {
             sessions_home: env_path("CLAUDE_SESSIONS_HOME"),
             db: env_path("CLAUDE_SESSIONS_DB"),
             projects_dir: env_path("CLAUDE_PROJECTS_DIR"),
+            qa_root: env_path("QA_SCREENSHOT_ROOT"),
         }
     }
 }
@@ -74,6 +79,12 @@ pub struct Paths {
     pub projects_dir: PathBuf,
     /// `~/.claude/todos`.
     pub todos_dir: PathBuf,
+    /// Where the QAden plugin keeps a task's QA run: `~/Desktop/QAden` unless
+    /// `QA_SCREENSHOT_ROOT` says otherwise. Read-only to this crate.
+    pub qa_root: PathBuf,
+    /// The separate auto-dev-daemon's per-task run logs. Read-only, and absent
+    /// on any machine that does not run that daemon.
+    pub auto_dev_runs_dir: PathBuf,
     /// `~/.claude-sessions.json`. Note it sits beside the runtime directory
     /// rather than inside it, which is where the Node app kept it.
     pub config_path: PathBuf,
@@ -112,6 +123,15 @@ impl Paths {
                 .clone()
                 .unwrap_or_else(|| claude_dir.join("projects")),
             todos_dir: claude_dir.join("todos"),
+            qa_root: env
+                .qa_root
+                .clone()
+                .unwrap_or_else(|| home.join("Desktop").join("QAden")),
+            auto_dev_runs_dir: home
+                .join(".local")
+                .join("share")
+                .join("auto-dev-daemon")
+                .join("runs"),
             config_path: home.join(".claude-sessions.json"),
             is_isolated: runtime_dir != default_runtime,
             claude_dir,
@@ -134,6 +154,7 @@ impl Paths {
                 sessions_home: Some(root.join("runtime")),
                 db: None,
                 projects_dir: Some(root.join("projects")),
+                qa_root: Some(root.join("qaden")),
             },
         );
         paths.claude_dir = root.join(".claude");
@@ -163,6 +184,11 @@ impl Paths {
     pub fn task_summary_file(&self, task_id: i64) -> PathBuf {
         self.summaries_dir
             .join(format!("task-{task_id}-summary.md"))
+    }
+
+    /// A task's QAden directory, `task-<id>-qa` under the QA root.
+    pub fn qa_task_dir(&self, task_id: i64) -> PathBuf {
+        self.qa_root.join(format!("task-{task_id}-qa"))
     }
 
     /// The marker file `claude-sessions blocked <id>` writes.
@@ -195,6 +221,7 @@ mod tests {
             sessions_home: home.map(PathBuf::from),
             db: db.map(PathBuf::from),
             projects_dir: projects.map(PathBuf::from),
+            qa_root: None,
         }
     }
 
@@ -273,6 +300,7 @@ mod tests {
             &p.done_dir,
             &p.projects_dir,
             &p.todos_dir,
+            &p.qa_root,
             &p.config_path,
         ] {
             assert!(
@@ -282,6 +310,31 @@ mod tests {
             );
         }
         assert!(p.is_isolated());
+    }
+
+    #[test]
+    fn the_qa_root_defaults_beside_the_desktop_and_follows_its_own_variable() {
+        // QAden reads QA_SCREENSHOT_ROOT; so must the reader that follows it,
+        // or a relocated QA directory silently reports "never QA'd".
+        let plain = Paths::resolve(Path::new("/home/dev"), &PathEnv::default());
+        assert_eq!(plain.qa_root, Path::new("/home/dev/Desktop/QAden"));
+        assert_eq!(
+            plain.qa_task_dir(6440),
+            Path::new("/home/dev/Desktop/QAden/task-6440-qa")
+        );
+        assert_eq!(
+            plain.auto_dev_runs_dir,
+            Path::new("/home/dev/.local/share/auto-dev-daemon/runs")
+        );
+
+        let moved = Paths::resolve(
+            Path::new("/home/dev"),
+            &PathEnv {
+                qa_root: Some(PathBuf::from("/tmp/qa")),
+                ..PathEnv::default()
+            },
+        );
+        assert_eq!(moved.qa_task_dir(1), Path::new("/tmp/qa/task-1-qa"));
     }
 
     #[test]

@@ -87,8 +87,11 @@ pub fn apply_result(state: &mut AppState, result: ActionResult) {
                 detail::apply_description(state, task_id, detail.as_ref());
             }
         }
-        // The three the loop owns; `apply_result` is the fallback arm.
-        ActionResult::Flash(_) | ActionResult::Refresh | ActionResult::Launched => {}
+        // The ones the loop owns; `apply_result` is the fallback arm.
+        ActionResult::Flash(_)
+        | ActionResult::Refresh
+        | ActionResult::Launched
+        | ActionResult::Usage(_) => {}
     }
 }
 

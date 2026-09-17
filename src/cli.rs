@@ -7,7 +7,7 @@
 //! completion markers into the real dashboard's directory.
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,11 +16,14 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::config::{ConfigHandle, EnvOverrides};
 use crate::daemon::client::{self, DaemonClient};
-use crate::daemon::{protocol, server, BlockedMarker, DoneMarker, Engine, EngineOptions};
+use crate::daemon::{protocol, server, Engine, EngineOptions};
 use crate::paths::Paths;
 use crate::term::SpawnPolicy;
-use crate::util::iso_now;
 
+mod hooks;
+mod journal;
+pub(crate) mod markers;
+mod pipeline;
 mod signals;
 
 /// How often the daemon's main thread wakes to notice a signal.
@@ -46,10 +49,60 @@ pub enum Command {
     Notify(NotifyArgs),
     /// Report the calling session is blocked on input
     Blocked(BlockedArgs),
-    /// Open the journal viewer
-    Journal,
-    /// Open the pipeline viewer
-    Pipeline,
+    /// Build and open the reasoning-journal viewer
+    Journal(JournalArgs),
+    /// Build and open the pipeline viewer, or inspect a pipeline in the terminal
+    Pipeline(PipelineArgs),
+}
+
+#[derive(Args)]
+pub struct JournalArgs {
+    /// Print a summary instead of building the page
+    #[arg(long)]
+    pub stats: bool,
+    /// Write the page here instead of `<runtime>/journal.html`
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Write the page without opening it
+    #[arg(long = "no-open")]
+    pub no_open: bool,
+}
+
+#[derive(Args)]
+pub struct PipelineArgs {
+    #[command(subcommand)]
+    pub action: Option<PipelineAction>,
+    /// Write the page here instead of `<runtime>/pipeline.html`
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+    /// Write the page without opening it
+    #[arg(long = "no-open")]
+    pub no_open: bool,
+}
+
+#[derive(Subcommand)]
+pub enum PipelineAction {
+    /// Copy the starter override into a repository
+    Init {
+        repo: PathBuf,
+        /// Which built-in pipeline to extend (default: task)
+        #[arg(long)]
+        pipeline: Option<String>,
+    },
+    /// List the skills a step can name
+    Skills {
+        filter: Option<String>,
+        /// Also look in this repository's `.claude/skills`
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
+    /// Print one pipeline's steps
+    Show {
+        id: Option<String>,
+        /// Resolve the project's override from this repository
+        #[arg(long)]
+        repo: Option<PathBuf>,
+    },
 }
 
 #[derive(Args)]
@@ -105,16 +158,14 @@ pub fn run() -> Result<()> {
     match cli.command {
         None => crate::ui::run_dashboard(paths, config, SpawnPolicy::detect()),
         Some(Command::Daemon(args)) => daemon(paths, config, args),
-        Some(Command::Notify(args)) => notify(&paths, &config, args),
-        Some(Command::Done(args)) => done(&paths, args),
-        Some(Command::Blocked(args)) => blocked(&paths, args),
-        Some(Command::Journal) => unlanded("journal viewer"),
-        Some(Command::Pipeline) => unlanded("pipeline viewer"),
+        Some(Command::Notify(args)) => markers::notify(&paths, &config, args),
+        Some(Command::Done(args)) => markers::done(&paths, args),
+        Some(Command::Blocked(args)) => markers::blocked(&paths, args),
+        Some(Command::Journal(args)) => journal::run(&paths, &config, args, SpawnPolicy::detect()),
+        Some(Command::Pipeline(args)) => {
+            pipeline::run(&paths, &config, args, SpawnPolicy::detect())
+        }
     }
-}
-
-fn unlanded(surface: &str) -> Result<()> {
-    anyhow::bail!("the {surface} has not landed yet — porting is underway, follow along at https://github.com/joshjetson/claude-sessions")
 }
 
 /// Exit the way the helper CLIs always have: a line on stderr and status 1.
@@ -185,7 +236,13 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
         Err(error) => fail(format!("claude-sessions daemon: {error}")),
     };
 
-    let engine = Arc::new(Engine::new(EngineOptions::system(paths.clone(), config)));
+    // One sample a minute into `runtime/memory.log`, and only when asked for.
+    let _diagnostics = crate::diagnostics::start(&paths, "daemon", config.diagnostics());
+
+    let mut options = EngineOptions::system(paths.clone(), config);
+    options.usage = Some(hooks::usage_hook(&paths, options.spawn));
+    options.daily_log = Some(hooks::daily_log_hook(&paths));
+    let engine = Arc::new(Engine::new(options));
     let server = server::serve(Arc::clone(&engine), listener)?;
     let _ = protocol::write_daemon_info(&paths, port);
     engine.start();
@@ -206,157 +263,4 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
     // Only if it still points at us: a newer daemon may have taken the port.
     protocol::remove_daemon_info(&paths, std::process::id());
     Ok(())
-}
-
-// --- notify -----------------------------------------------------------------
-
-fn notify(paths: &Paths, config: &ConfigHandle, args: NotifyArgs) -> Result<()> {
-    let (title, message) = notify_text(args.title, args.message, args.rest);
-    if title.is_empty() && message.is_empty() {
-        fail("notify: provide a title and/or message".to_string());
-    }
-    let port = protocol::resolve_port(config, paths, None);
-    let body = serde_json::json!({
-        "title": if title.is_empty() { "Notification".to_string() } else { title },
-        "message": message,
-        "level": args.level,
-        "cwd": cwd(),
-        "taskId": task_id_from_env(),
-        "sessionId": args.session.unwrap_or_default(),
-    });
-    match DaemonClient::new(port).notify(body) {
-        Some(response) => {
-            println!("notify: sent ({})", response.status);
-            Ok(())
-        }
-        None => fail(format!(
-            "notify: dashboard not reachable on 127.0.0.1:{port}"
-        )),
-    }
-}
-
-/// The positional fallback: the first bare argument is the title and whatever
-/// follows is the message, so `notify "Need a decision" "Postgres or SQLite?"`
-/// works with no flags at all.
-pub fn notify_text(
-    title: Option<String>,
-    message: Option<String>,
-    rest: Vec<String>,
-) -> (String, String) {
-    let mut rest = rest.into_iter();
-    let title = title.unwrap_or_else(|| rest.next().unwrap_or_default());
-    let message = message.unwrap_or_else(|| rest.collect::<Vec<_>>().join(" "));
-    (title, message)
-}
-
-// --- done and blocked -------------------------------------------------------
-
-fn done(paths: &Paths, args: DoneArgs) -> Result<()> {
-    let task_id = require_task_id("done", args.task_id);
-    let mut summary = args.summary.unwrap_or_default();
-    if summary.is_empty() {
-        if let Some(file) = args.summary_file {
-            summary = std::fs::read_to_string(&file).unwrap_or_else(|_| {
-                eprintln!(
-                    "done: could not read summary file {} (continuing without it)",
-                    file.display()
-                );
-                String::new()
-            });
-        }
-    }
-    let marker = write_done_marker(paths, task_id, &cwd(), &summary)?;
-    let note = if summary.is_empty() {
-        ""
-    } else {
-        " (with summary)"
-    };
-    println!("done: marked task {task_id}{note} ({})", marker.display());
-    Ok(())
-}
-
-fn blocked(paths: &Paths, args: BlockedArgs) -> Result<()> {
-    let task_id = require_task_id("blocked", args.task_id);
-    let questions = split_questions(&args.questions.unwrap_or_default());
-    let marker = write_blocked_marker(paths, task_id, &cwd(), questions)?;
-    println!(
-        "blocked: flagged task {task_id} as needs-info ({})",
-        marker.display()
-    );
-    Ok(())
-}
-
-/// Write `done/<taskId>.json`. No network: the daemon watches the directory, so
-/// a sign-off works with nothing running and is picked up when something is.
-pub fn write_done_marker(paths: &Paths, task_id: i64, cwd: &str, summary: &str) -> Result<PathBuf> {
-    let marker = DoneMarker {
-        task_id,
-        cwd: cwd.to_string(),
-        summary: summary.to_string(),
-        ts: iso_now(),
-    }
-    // The same cap the daemon applies on read: an 8 MB paste must not become
-    // an 8 MB Odoo comment.
-    .capped();
-    write_marker(&paths.done_marker(task_id), &marker)
-}
-
-pub fn write_blocked_marker(
-    paths: &Paths,
-    task_id: i64,
-    cwd: &str,
-    questions: Vec<String>,
-) -> Result<PathBuf> {
-    let marker = BlockedMarker {
-        task_id,
-        cwd: cwd.to_string(),
-        questions,
-        ts: iso_now(),
-    };
-    write_marker(&paths.blocked_marker(task_id), &marker)
-}
-
-fn write_marker(path: &Path, marker: &impl serde::Serialize) -> Result<PathBuf> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    std::fs::write(path, serde_json::to_string_pretty(marker)?)?;
-    Ok(path.to_path_buf())
-}
-
-/// `"q1 | q2 | q3"` into three questions.
-pub fn split_questions(raw: &str) -> Vec<String> {
-    raw.split('|')
-        .map(|question| question.trim().to_string())
-        .filter(|question| !question.is_empty())
-        .collect()
-}
-
-/// The task id, from the argument or the environment the agent was spawned
-/// with. Without one there is nothing to mark, which is an error.
-fn require_task_id(command: &str, argument: Option<String>) -> i64 {
-    let raw = argument.or_else(task_id_text).unwrap_or_else(|| {
-        fail(format!(
-            "{command}: no task id (pass as argument or set {TASK_ID_ENV})"
-        ))
-    });
-    raw.trim()
-        .parse()
-        .unwrap_or_else(|_| fail(format!("{command}: `{raw}` is not a task id")))
-}
-
-fn task_id_text() -> Option<String> {
-    std::env::var(TASK_ID_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-}
-
-fn task_id_from_env() -> Option<i64> {
-    task_id_text()?.trim().parse().ok()
-}
-
-fn cwd() -> String {
-    std::env::current_dir()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }

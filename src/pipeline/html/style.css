@@ -1,0 +1,62 @@
+
+:root{--bg:#f5f7f7;--surface:#fff;--surface2:#eef2f2;--ink:#131a1c;--soft:#45565a;--faint:#6e8288;--rule:#d3dedd;--accent:#17706b;--accentbg:#dcebe9;--warn:#b0701a;--warnbg:#f7ecd9;--add:#2e7d51;--addbg:#e3f0e8;--mono:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media(prefers-color-scheme:dark){:root{--bg:#101618;--surface:#172023;--surface2:#1e292c;--ink:#e4ecec;--soft:#a8bcbe;--faint:#7d9295;--rule:#2b393c;--accent:#63c5bb;--accentbg:#1c3634;--warn:#e0a44e;--warnbg:#2e2415;--add:#6cc48d;--addbg:#172c20}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:16px/1.6 ui-sans-serif,system-ui,sans-serif;margin:0;padding:0 24px 80px}
+.wrap{max-width:56rem;margin:0 auto}
+header{padding:48px 0 24px;border-bottom:2px solid var(--accent)}
+h1{font-size:2rem;margin:0 0 8px;letter-spacing:-.02em}
+.lede{color:var(--soft);margin:0;max-width:42rem}
+nav{margin:28px 0 0;padding:16px 18px;background:var(--surface);border:1px solid var(--rule);border-radius:6px}
+nav h4{margin:0 0 8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+nav ul{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:6px 18px}
+nav a{color:var(--accent);text-decoration:none;font-weight:600}
+nav a:hover{text-decoration:underline}
+nav .n{color:var(--faint);font-size:12px}
+nav .empty{color:var(--faint);font-size:14px}
+section.pipeline{margin:44px 0 0}
+.pipeline-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px 14px}
+h2{font-size:1.35rem;margin:0;letter-spacing:-.01em}
+.meta{display:flex;gap:6px;flex-wrap:wrap}
+.tag{font:600 11px/1 var(--mono);padding:4px 8px;border:1px solid var(--rule);border-radius:3px;color:var(--soft);background:var(--surface)}
+.tag.scope{color:var(--accent);border-color:var(--accent);background:var(--accentbg)}
+.summary{color:var(--soft);margin:8px 0 20px;max-width:44rem}
+.error{color:var(--warn);background:var(--warnbg);padding:10px 14px;border-radius:4px;font-size:14px}
+.flow{position:relative}
+.step{display:grid;grid-template-columns:26px 1fr;gap:0 14px}
+.rail{position:relative;display:flex;justify-content:center}
+.rail::before{content:"";position:absolute;top:0;bottom:0;width:2px;background:var(--rule)}
+.step:first-child .rail::before{top:22px}
+.step:last-child .rail::before{bottom:calc(100% - 22px)}
+.dot{position:relative;width:11px;height:11px;border-radius:50%;background:var(--accent);margin-top:17px;box-shadow:0 0 0 4px var(--bg)}
+.step.gate .dot{background:var(--warn)}
+.step.added .dot{background:var(--add)}
+.step.dashboard .dot{background:var(--faint);box-shadow:0 0 0 4px var(--bg),0 0 0 6px var(--faint)}
+.step.dashboard .card{border-style:dashed}
+.badge.dash{background:var(--surface2);color:var(--faint)}
+.step.skipped .dot{background:var(--faint)}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:14px 16px;margin:0 0 10px}
+.step.gate .card{border-color:var(--warn)}
+.step.added .card{border-color:var(--add)}
+.step.customised .card{border-color:var(--accent)}
+.step.skipped .card{opacity:.55}
+.card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.idx{font:600 11px var(--mono);color:var(--faint)}
+h3{font-size:1rem;margin:0}
+.badge{font:600 10px/1 var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:3px 6px;border-radius:2px}
+.badge.gate{background:var(--warnbg);color:var(--warn)}
+.badge.custom{background:var(--accentbg);color:var(--accent)}
+.badge.added{background:var(--addbg);color:var(--add)}
+.badge.skip{background:var(--surface2);color:var(--faint)}
+.skill{font:600 12px var(--mono);color:var(--accent);margin:6px 0 0}
+.what{margin:6px 0 0;font-size:.95rem}
+.detail{margin:6px 0 0;font-size:.88rem;color:var(--soft)}
+details{margin:10px 0 0}
+summary{cursor:pointer;font:600 11px var(--mono);color:var(--faint);letter-spacing:.05em;text-transform:uppercase}
+summary:hover{color:var(--accent)}
+pre{background:var(--surface2);border-radius:4px;padding:12px 14px;overflow-x:auto;font:13px/1.55 var(--mono);white-space:pre-wrap;margin:8px 0 0;color:var(--ink)}
+details.full{margin-top:18px}
+.project-name{margin:48px 0 2px;padding-top:24px;border-top:1px solid var(--rule)}
+.path{font:12px var(--mono);color:var(--faint);margin:0}
+footer{margin-top:56px;padding-top:18px;border-top:1px solid var(--rule);font:12px var(--mono);color:var(--faint)}
+code{font:13px var(--mono);background:var(--surface2);padding:1px 5px;border-radius:3px}

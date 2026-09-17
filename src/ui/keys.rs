@@ -11,7 +11,8 @@ use ratatui::layout::Rect;
 use crate::term::SessionRef;
 use crate::ui::board::handle_board;
 use crate::ui::dialogs::{
-    AddGroup, Dialog, DialogCtx, KillConfirm, Rename, Search, SettingsDialog, ShutdownConfirm,
+    AddGroup, Dialog, DialogCtx, KillConfirm, LogViewer, PurgeConfirm, Rename, Search,
+    SettingsDialog, ShutdownConfirm,
 };
 use crate::ui::state::{Action, AppState, Pane, Quit, View};
 use crate::ui::tree::{build_grouped_tree, SelectedRow, TreeItem};
@@ -115,13 +116,23 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
             };
             true
         }
-        // Plan usage is a request against the quota it reports, so it is manual.
+        // Plan usage is itself a request against the quota it reports, so it
+        // is manual unless a `usage.intervalMinutes` is configured.
         KeyCode::Char('u') => {
-            state.flash("Plan usage arrives with the extras phase (usage.js).");
+            refresh_usage(state);
             true
         }
         KeyCode::Char('l') | KeyCode::Char('L') => {
-            state.flash("The daily log viewer arrives with the extras phase.");
+            // A connection of its own: the day list is the union of the
+            // markdown files and the database, and the database knows about
+            // days whose file was moved or deleted.
+            let db = crate::db::Db::open(&state.paths);
+            state.dialog = Some(Dialog::LogViewer(LogViewer::open(
+                &state.paths,
+                Some(&db),
+                &crate::dailylog::ymd(chrono::Local::now()),
+            )));
+            state.dirty = true;
             true
         }
         KeyCode::Char('r') if !renames_instead(state) => {
@@ -135,6 +146,38 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
         }
         _ => false,
     }
+}
+
+/// `u` — take a plan-usage reading, wherever the check actually lives.
+///
+/// Queued as an [`Action`] rather than run here: the check shells out to
+/// `claude`, which takes seconds. The loop hands it to the daemon when there is
+/// one (see [`crate::ui::feed::SessionFeed::refresh_usage`]) so several
+/// dashboards do not each spend the quota.
+pub fn refresh_usage(state: &mut AppState) {
+    if !state.config.usage().enabled {
+        state.flash("Plan usage checks are off (\"usage\": {\"enabled\": false}).");
+        return;
+    }
+    state.enqueue(Action::RefreshUsage);
+    state.flash("Checking plan usage… (this spends a request against it)");
+}
+
+/// `X` — the purge confirmation, primed with every stage the board already
+/// knows and a lookup for the rest.
+fn open_purge(state: &mut AppState) {
+    let targets: Vec<crate::purge::PurgeTarget> = state
+        .sessions()
+        .map(crate::purge::PurgeTarget::from_session)
+        .collect();
+    let known = state.board.stages();
+    let dialog = PurgeConfirm::new(targets, known);
+    let missing = dialog.missing_stages();
+    if !missing.is_empty() {
+        state.enqueue(Action::FetchTaskStages { task_ids: missing });
+    }
+    state.dialog = Some(Dialog::PurgeConfirm(dialog));
+    state.dirty = true;
 }
 
 /// `r` is refresh everywhere except on a session row, where it renames — the one
@@ -201,11 +244,10 @@ fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
                 &state.config,
             )));
         }
-        // X is the bulk form of x. Deciding which sessions have *finished*
-        // means classifying their tasks' stages, which is Phase 11's purge.
-        KeyCode::Char('X') => {
-            state.flash("Purge lands with the board phases — it needs task stages to decide what is finished.");
-        }
+        // X is the bulk form of x: it closes every session whose task has
+        // finished, and nothing else. What "finished" means is
+        // [`crate::purge`]; the dialog only confirms it.
+        KeyCode::Char('X') => open_purge(state),
         KeyCode::Char('r') => {
             if let Some(SelectedRow::Session { session_id, .. }) = &snapshot.row {
                 state.dialog = Some(Dialog::Rename(Rename::new(

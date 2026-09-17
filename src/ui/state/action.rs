@@ -40,6 +40,16 @@ pub enum Action {
         path: String,
         line: u32,
     },
+    /// Take a plan-usage reading. Only reached when no daemon owns the check.
+    RefreshUsage,
+    /// Hand a path to the desktop's default handler — the daily log's `o`.
+    OpenPath(String),
+    /// Close finished sessions: SIGTERM the agent, then close its tab.
+    Purge(Box<Vec<crate::purge::PurgeEntry>>),
+    /// Fill the QAden head cache for a task, then re-label the open menu.
+    RefreshQaState {
+        task_id: i64,
+    },
 
     // --- board ---------------------------------------------------------------
     /// Fetch the Odoo board. The options are built where the config and the
@@ -59,6 +69,10 @@ pub enum Action {
     FetchProjects,
     FetchTaskDescription {
         task_id: i64,
+    },
+    /// Stage names for the sessions a purge is about to judge.
+    FetchTaskStages {
+        task_ids: Vec<i64>,
     },
     /// Start, revise or resume — everything already resolved.
     Launch(Box<LaunchSpec>),

@@ -51,6 +51,10 @@ pub struct Config {
     pub ssh_hosts: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<UsageBlock>,
+    /// Memory sampling into `runtime/memory.log`. Off unless asked for — it is
+    /// a diagnostic, not a feature. See [`crate::diagnostics`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostics: Option<bool>,
     /// `sessions` | `board` | `deploy`; validated in the accessor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_view: Option<String>,
