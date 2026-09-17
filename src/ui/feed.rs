@@ -24,7 +24,9 @@ use crate::scan::{discover_projects, is_compacting, Scanner};
 use crate::transcript::{Collect, TranscriptCursor};
 use crate::types::{Notification, RawSession, Session, SessionStatus};
 use crate::ui::tree::SessionsByProject;
-use crate::util::{activity_label, detect_session_status, parse_timestamp, project_name};
+use crate::util::{
+    activity_label, detect_session_status, parse_timestamp, project_name, trim_trailing_separators,
+};
 
 /// Steady-state scan cadence.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(1000);
@@ -220,7 +222,7 @@ fn scan_loop(
             discovered = group_paths
                 .iter()
                 .map(|path| {
-                    let trimmed = path.trim_end_matches('/').to_string();
+                    let trimmed = trim_trailing_separators(path).to_string();
                     let dirs = discover_projects(std::path::Path::new(&trimmed));
                     (trimmed, dirs)
                 })

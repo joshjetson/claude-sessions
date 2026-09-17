@@ -23,7 +23,7 @@ use crate::config::ConfigHandle;
 use crate::daemon::{StageMoveRequest, MOVE_IN_PROGRESS_STEP};
 use crate::pipeline::BranchFallback;
 use crate::types::{Session, SessionStatus, Task};
-use crate::util::normalise_name;
+use crate::util::{join_dir, normalise_name, path_leaf};
 
 use super::controller::task_sessions;
 use super::spec::PromptContext;
@@ -225,7 +225,7 @@ pub fn guess_dir_for_project(project_name: &str, discovered: &[String]) -> Strin
     discovered
         .iter()
         .find(|path| {
-            let base = normalise_name(path.rsplit('/').next().unwrap_or(path));
+            let base = normalise_name(path_leaf(path));
             !base.is_empty() && (base == target || base.contains(&target) || target.contains(&base))
         })
         .cloned()
@@ -236,7 +236,7 @@ pub fn guess_dir_for_project(project_name: &str, discovered: &[String]) -> Strin
 pub fn all_discovered_dirs(discovered: &BTreeMap<String, Vec<String>>) -> Vec<String> {
     discovered
         .iter()
-        .flat_map(|(group, dirs)| dirs.iter().map(move |dir| format!("{group}/{dir}")))
+        .flat_map(|(group, dirs)| dirs.iter().map(move |dir| join_dir(group, dir)))
         .collect()
 }
 

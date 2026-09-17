@@ -19,8 +19,12 @@
 /// their working directory and their launch environment.
 ///
 /// Unix does this with `ps` and `lsof`. Windows needs WMI command lines and a
-/// PEB read for the cwd — the next Windows phase. Until then the sessions view
-/// lists nothing live, which is why [`DISCOVERY_NOTICE`] exists.
+/// PEB read for the cwd — the next Windows phase.
+///
+/// Where it is off, the sessions list is built from the transcript store
+/// instead ([`crate::scan::Discovery::Transcripts`]): the sessions are there and
+/// their status is live, but nothing that needs a pid or a tty is — which is
+/// what [`DISCOVERY_NOTICE`] says.
 pub const LIVE_DISCOVERY: bool = cfg!(unix);
 
 /// Opening, typing into, focusing and closing a terminal: the tmux and iTerm2
@@ -46,11 +50,17 @@ pub const PROCESS_SIGNALS: bool = cfg!(unix);
 /// against. Refused rather than silently different.
 pub const LOGIN_SHELL: bool = cfg!(unix);
 
-/// Shown where a list of live sessions would be, when discovery cannot see any
-/// processes at all. Deliberately says what still works, and promises nothing
-/// this build cannot do: the sessions list itself needs the discovery phase.
-pub const DISCOVERY_NOTICE: &str = "Live session discovery on native Windows arrives in a \
-                                    coming release — the Board and Deploy tabs work fully today.";
+/// Shown where a list of live sessions would be, when there is nothing in it.
+///
+/// It has one job: say which of the two empty lists this is. On native Windows
+/// sessions are read from transcript activity rather than from the process
+/// table, so an empty list means no transcript has been written recently — not
+/// that the tool is broken — and the things a pid would buy are still missing.
+/// Promises nothing this build cannot do.
+pub const DISCOVERY_NOTICE: &str =
+    "On native Windows the sessions list is built from recent transcript activity, so only \
+     sessions written to in the last few hours appear. Opening, focusing and stopping a \
+     session need process discovery, which arrives in a coming release.";
 
 /// What to tell someone who asked for a terminal and got no driver. On Unix
 /// that is a machine without tmux or iTerm2; on Windows it is the phase.

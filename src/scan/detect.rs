@@ -155,8 +155,8 @@ const SCRATCH_DIR: &str = "cc-daemon-";
 /// Where that directory lives, where the platform puts it somewhere fixed.
 ///
 /// Unix: `/tmp`, which is the whole of Node's
-/// `/\/(private\/)?tmp\/cc-daemon-\d+\//` — on macOS `/private/tmp/…` contains
-/// `/tmp/…` as a substring, so one search answers both spellings.
+/// `/\/(private\/)?tmp\/cc-daemon-\d+\//` — on macOS `/private/tmp/...` contains
+/// `/tmp/...` as a substring, so one search answers both spellings.
 ///
 /// Windows: nowhere fixed. The same directory is created under whatever `%TEMP%`
 /// points at (`C:\Users\dev\AppData\Local\Temp\cc-daemon-7\` by default), and

@@ -1,5 +1,8 @@
-//! The small pure helpers: transcript-directory encoding, display-width aware
-//! truncation, the formatting the panes render, and the session status machine.
+//! The small pure helpers: display-width aware truncation, the formatting the
+//! panes render, and the session status machine. The path ones — the
+//! transcript-directory encoding, the project label and every directory
+//! comparison — live in [`dir`] and are re-exported here, so a caller still
+//! reaches for one module.
 //!
 //! Ported from the Node app's `src/utils.ts`. Nothing here reads the clock — the
 //! caller passes `now` in — so the status machine and the "3m ago" strings are
@@ -12,8 +15,18 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
 
-/// Claude Code's context window, for the "72K tokens (36%)" readout.
+mod dir;
+
+pub use dir::{
+    child_dir_of, cwd_to_project_dir, is_within_dir, join_dir, path_leaf, project_name, same_dir,
+    trim_trailing_separators, SEPARATORS,
+};
+
+/// Claude Code's default context window, for the "72K tokens (36%)" readout.
 pub const CONTEXT_WINDOW: u64 = 200_000;
+
+/// The long-context window the 1M-token models run with.
+pub const LARGE_CONTEXT_WINDOW: u64 = 1_000_000;
 
 /// A transcript younger than this is working, whatever its last entry says —
 /// the file is being appended to right now.
@@ -23,77 +36,6 @@ const FRESH_WRITE: Duration = Duration::from_secs(10);
 const TOOL_CALL_GRACE: Duration = Duration::from_secs(30);
 /// How long a prose reply reads as "your turn" before the session goes idle.
 const REPLY_GRACE: Duration = Duration::from_secs(60);
-
-/// What separates one path segment from the next on this platform.
-///
-/// A backslash is a legal character in a Unix filename, so it is a separator
-/// only where it is actually one — splitting on it everywhere would rename
-/// somebody's directory out from under them. Named once because five things
-/// take a path apart: the transcript directory encoding, the project label, the
-/// tool-call renderer, the journal's tilde expansion and the editor's basename.
-pub const SEPARATORS: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
-
-/// The characters the transcript directory name encodes away. Windows adds the
-/// drive colon, which is illegal in a file name.
-const ENCODED: &[char] = if cfg!(windows) {
-    &['/', '\\', ':']
-} else {
-    &['/']
-};
-
-/// Claude Code stores a project's transcripts in a directory named after the
-/// cwd with every separator replaced by `-`. Everything that finds a transcript
-/// depends on reproducing that encoding exactly.
-///
-/// On Windows the separator is `\` and a path also carries a drive letter, so
-/// both are encoded: `C:\Users\dev\repo` becomes `C--Users-dev-repo`. That
-/// the result is RELATIVE matters as much as its spelling — `Path::join`
-/// discards the base when handed an absolute component, so a name that kept its
-/// drive would point [`crate::paths::Paths::project_transcripts`] at the
-/// repository itself instead of at a directory under `~/.claude/projects`, and
-/// every stray `.jsonl` in somebody's checkout would read as a session.
-///
-/// The Windows spelling still wants confirming against a real Claude Code
-/// install before the discovery phase relies on it; what is certain here is
-/// that it is relative and legal, which is what stops the wrong tree being
-/// read.
-pub fn cwd_to_project_dir(cwd: &str) -> String {
-    cwd.replace(ENCODED, "-")
-}
-
-/// A short name for a working directory: its last two meaningful segments, with
-/// the scaffolding ones dropped so `/Users/someone/dev/repo` reads `someone/repo`.
-pub fn project_name(cwd: &str) -> String {
-    if cwd.is_empty() {
-        return "unknown".to_string();
-    }
-    let parts: Vec<&str> = cwd.split(SEPARATORS).filter(|p| !p.is_empty()).collect();
-    let meaningful: Vec<&str> = parts
-        .iter()
-        .copied()
-        .filter(|p| *p != "Users" && *p != "dev" && !is_drive(p))
-        .collect();
-    if meaningful.len() >= 2 {
-        return meaningful[meaningful.len() - 2..].join("/");
-    }
-    match parts.last() {
-        Some(base) => base.to_string(),
-        None => cwd.to_string(),
-    }
-}
-
-/// `C:` and friends — the first segment of an absolute Windows path, and no
-/// more a name for a project than `Users` is. Only ever true on Windows, where
-/// a directory cannot be called `C:` in the first place.
-fn is_drive(part: &str) -> bool {
-    cfg!(windows) && {
-        let mut chars = part.chars();
-        matches!(
-            (chars.next(), chars.next(), chars.next()),
-            (Some(letter), Some(':'), None) if letter.is_ascii_alphabetic()
-        )
-    }
-}
 
 /// Reduce a human-written name to the part worth comparing: lowercase, letters
 /// and digits only.
@@ -221,15 +163,40 @@ pub fn activity_color(then: DateTime<Utc>, now: DateTime<Utc>) -> Color {
     }
 }
 
-/// "72K tokens (36%)" for the session header. Cache reads and cache creations
-/// count toward the window just as much as fresh prompt tokens do.
+/// Which window an occupancy of `total` tokens is measured against.
+///
+/// Node had one constant and measured everything against it, so a session on a
+/// 1M-token model read `887K (444%)` — the token count was right, the
+/// denominator was not. A session cannot hold more context than it was given,
+/// so the smallest standard window that fits what the last message reported is
+/// the window it is running with. Sessions inside 200K are unaffected, which is
+/// every number the Node app ever printed correctly.
+pub fn context_window(total: u64) -> u64 {
+    if total > CONTEXT_WINDOW {
+        LARGE_CONTEXT_WINDOW
+    } else {
+        CONTEXT_WINDOW
+    }
+}
+
+/// How much of its context window a session is holding, rounded as Node
+/// rounded it. Written once: the tree row and the conversation header both
+/// print it, and they must never disagree.
+pub fn context_percent(total: u64) -> i64 {
+    (total as f64 / context_window(total) as f64 * 100.0).round() as i64
+}
+
+/// "72K tokens (36%)" for the session header, from the LAST message's usage —
+/// the session's current occupancy, not the running total of everything it has
+/// ever sent. Cache reads and cache creations count toward the window just as
+/// much as fresh prompt tokens do.
 pub fn format_context_usage(usage: Option<&Usage>) -> String {
     let Some(usage) = usage else {
         return String::new();
     };
-    let total = usage.total_tokens() as f64;
-    let thousands = (total / 1000.0).round() as u64;
-    let pct = (total / CONTEXT_WINDOW as f64 * 100.0).round() as i64;
+    let total = usage.total_tokens();
+    let thousands = (total as f64 / 1000.0).round() as u64;
+    let pct = context_percent(total);
     format!("{thousands}K tokens ({pct}%)")
 }
 

@@ -101,10 +101,14 @@ fn the_unsupported_source_answers_every_call_with_nothing() {
 #[test]
 fn a_scan_on_an_unsupported_platform_is_empty_rather_than_broken() {
     use crate::paths::Paths;
-    use crate::scan::{Scanner, UnsupportedProcessSource};
+    use crate::scan::{Discovery, Scanner, UnsupportedProcessSource};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut scanner = Scanner::new(UnsupportedProcessSource, Paths::for_test(dir.path()));
+    let mut scanner = Scanner::new(
+        UnsupportedProcessSource,
+        Paths::for_test(dir.path()),
+        Discovery::Processes,
+    );
     assert!(scanner.processes().is_empty());
     assert!(scanner
         .scan_sessions(std::time::SystemTime::now())

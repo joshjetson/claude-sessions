@@ -43,10 +43,11 @@ pub struct TreeSnapshot {
 }
 
 pub fn tree_snapshot(state: &AppState) -> TreeSnapshot {
+    let groups = state.config.groups();
     let items: Vec<TreeItem<'_>> = build_grouped_tree(
         &state.by_project,
         &state.expanded_projects,
-        state.config.groups(),
+        &groups,
         &state.discovered_dirs,
     );
     let keys: Vec<String> = items.iter().map(TreeItem::key).collect();
