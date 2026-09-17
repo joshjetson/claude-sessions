@@ -81,22 +81,81 @@ fn done_and_blocked_are_accepted_and_handled_off_the_request() {
 }
 
 #[test]
-fn deploy_routes_refuse_cleanly_until_they_are_implemented() {
+fn a_deploy_route_refuses_with_409_and_names_the_reason() {
+    // 409, never 400: the request was well formed. "Not configured" and
+    // "already deploying" are states the caller can see and fix, and the
+    // sentence is what the Deploy tab shows.
     let served = served();
-    for path in ["/deploy/start", "/deploy/cancel"] {
-        let response = post(
-            served.port(),
-            path,
-            &json!({ "project": "Anything" }).to_string(),
-        );
-        assert_eq!(response.status, 409, "{path} must be a clean 409");
-        assert_eq!(response.body["ok"], json!(false));
-        assert!(response.body["error"].is_string());
-    }
+    let unknown = post(
+        served.port(),
+        "/deploy/start",
+        &json!({ "project": "Nowhere" }).to_string(),
+    );
+    assert_eq!(unknown.status, 409);
+    assert_eq!(unknown.body["ok"], json!(false));
+    assert!(unknown.body["error"]
+        .as_str()
+        .unwrap()
+        .contains("not configured for deploy"));
+
+    let idle = post(
+        served.port(),
+        "/deploy/cancel",
+        &json!({ "project": "Nowhere" }).to_string(),
+    );
+    assert_eq!(idle.status, 409);
+    assert_eq!(idle.body["error"], json!("No running deploy for Nowhere."));
+}
+
+#[test]
+fn starting_a_deploy_twice_is_a_409_and_the_log_route_reads_the_buffer() {
+    let served = served();
+    // A run put there directly: starting a real one would spawn a process, and
+    // the server suite runs under a refusing policy like everything else.
+    served.engine.inner().state().deploy_runs.insert(
+        "Project A".to_string(),
+        crate::daemon::DeployRunState::started("./deploy.sh", Some(1)),
+    );
+    served
+        .engine
+        .inner()
+        .push_deploy_line("Project A", "building".to_string());
+
+    let again = post(
+        served.port(),
+        "/deploy/start",
+        &json!({ "project": "Project A" }).to_string(),
+    );
+    assert_eq!(again.status, 409);
+
+    // Percent-decoded, and answering with the whole buffer.
     let log = get(served.port(), "/deploy/log/Project%20A");
     assert_eq!(log.status, 200);
     assert_eq!(log.body["project"], json!("Project A"));
-    assert_eq!(log.body["lines"], json!([]));
+    assert_eq!(log.body["lines"], json!(["building"]));
+
+    // A project nobody deployed is an empty log, not a 404.
+    let empty = get(served.port(), "/deploy/log/Nowhere");
+    assert_eq!(empty.status, 200);
+    assert_eq!(empty.body["lines"], json!([]));
+}
+
+#[test]
+fn cancelling_a_running_deploy_is_accepted() {
+    let served = served();
+    served.engine.inner().state().deploy_runs.insert(
+        "Project A".to_string(),
+        crate::daemon::DeployRunState::started("./deploy.sh", Some(1)),
+    );
+    let response = post(
+        served.port(),
+        "/deploy/cancel",
+        &json!({ "project": "Project A" }).to_string(),
+    );
+    // Accepted: the signal is sent (and refused by the spawn policy under
+    // test), and the run's own exit is what reports the outcome.
+    assert_eq!(response.status, 202);
+    assert_eq!(response.body["ok"], json!(true));
 }
 
 #[test]

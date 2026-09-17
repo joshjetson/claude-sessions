@@ -12,6 +12,8 @@ pub mod cli;
 pub mod config;
 pub mod daemon;
 pub mod db;
+pub mod deploy;
+pub mod gitlab;
 pub mod odoo;
 pub mod paths;
 pub mod pipeline;

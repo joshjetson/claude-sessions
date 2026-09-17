@@ -7,22 +7,40 @@
 //! exactly where it is and says which name was looked for, because the column
 //! after "In Progress" is often "Revision Required" and landing a finished task
 //! there is worse than leaving it alone.
+//!
+//! The merge-request safety net is next door in [`merge_request`], because it
+//! is the half that shells out rather than the half that talks to Odoo.
+
+mod merge_request;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
 
+use crate::config::{ConfigHandle, EnvOverrides};
 use crate::daemon::{
     MergeRequestRequest, OdooTaskBackend, StageMove, StageMoveRequest, TaskBackend,
 };
+use crate::gitlab::tests::{client as gitlab_client, ok, FakeRunner};
 use crate::odoo::tests::stub::{Reply, StubServer};
 use crate::odoo::{HttpTransport, OdooClient, StageKind};
+use crate::term::CommandOutput;
 use crate::types::OdooCreds;
 
-/// A backend whose client talks to a stub. The first reply is the
-/// authentication every call begins with.
-fn backend(replies: Vec<Reply>) -> (OdooTaskBackend, StubServer) {
+/// A backend whose client talks to a stub and whose `glab` never runs. The
+/// first reply is the authentication every call begins with.
+pub(crate) fn backend(replies: Vec<Reply>) -> (OdooTaskBackend, StubServer) {
+    let (backend, server, _runner) = backend_with(replies, Vec::new());
+    (backend, server)
+}
+
+/// The same, plus a scripted `git`/`glab` so the merge-request path can be
+/// driven end to end with no process anywhere near the test.
+pub(crate) fn backend_with(
+    replies: Vec<Reply>,
+    commands: Vec<CommandOutput>,
+) -> (OdooTaskBackend, StubServer, Arc<FakeRunner>) {
     let mut all = vec![Reply::result(json!(7))];
     all.extend(replies);
     let server = StubServer::start(all);
@@ -35,7 +53,41 @@ fn backend(replies: Vec<Reply>) -> (OdooTaskBackend, StubServer) {
         },
         Box::new(HttpTransport::new(Duration::from_secs(5))),
     );
-    (OdooTaskBackend::new(Arc::new(client)), server)
+    let (gitlab, runner) = gitlab_client(if commands.is_empty() {
+        vec![ok("")]
+    } else {
+        commands
+    });
+    let dir = tempfile::tempdir().expect("temp dir");
+    let config = ConfigHandle::load_from(
+        &dir.path().join("config.json"),
+        dir.path(),
+        EnvOverrides::default(),
+    );
+    (
+        OdooTaskBackend::new(Arc::new(client), gitlab, config),
+        server,
+        runner,
+    )
+}
+
+pub(crate) fn mr_request() -> MergeRequestRequest {
+    MergeRequestRequest {
+        task_id: 5238,
+        cwd: "/repo".into(),
+        project_id: Some(3),
+        project_name: "Repo".into(),
+    }
+}
+
+/// What Odoo answers a `get_task_gitlab` read with.
+pub(crate) fn gitlab_fields(url: &str) -> Reply {
+    Reply::result(json!([{
+        "id": 5238,
+        "gitlab_branch_name": "task-5238-widget",
+        "gitlab_merge_request_url": if url.is_empty() { json!(false) } else { json!(url) },
+        "gitlab_merge_request_state": false,
+    }]))
 }
 
 fn stages() -> Reply {
@@ -274,23 +326,4 @@ fn the_completion_comment_reaches_the_tasks_chatter_as_html() {
     assert_eq!(args[6]["body"], json!("<p>done</p>"));
     // Without this Odoo renders the markup as literal text.
     assert_eq!(args[6]["body_is_html"], json!(true));
-}
-
-#[test]
-fn opening_a_merge_request_is_deferred_rather_than_half_implemented() {
-    // Phase 10 owns the `glab` wrapper and the branch-state rules that go with
-    // it. Answering "no merge request" makes the completion notification say
-    // "no MR detected", which is true; a half-implementation here would open
-    // merge requests off the wrong branch.
-    let (backend, server) = backend(Vec::new());
-    let answer = backend
-        .ensure_merge_request(&MergeRequestRequest {
-            task_id: 5238,
-            cwd: "/repo".into(),
-            project_id: Some(3),
-            project_name: "Repo".into(),
-        })
-        .expect("an answer");
-    assert_eq!(answer, None);
-    assert!(server.calls().is_empty());
 }

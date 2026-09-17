@@ -66,9 +66,6 @@ const PUMP_TICK: Duration = Duration::from_millis(200);
 /// Concurrent connections. Loopback with a handful of clients never
 /// approaches it; it exists so a misbehaving one cannot spawn threads forever.
 const MAX_CONNECTIONS: usize = 128;
-/// Until Phase 10 supervises deploys, every deploy action is a clean refusal.
-const NO_DEPLOYS: &str = "deploys are not available in this build";
-
 // --- the server -------------------------------------------------------------
 
 struct Shared<S: ProcessSource> {

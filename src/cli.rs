@@ -23,6 +23,38 @@ use crate::util::iso_now;
 
 mod signals;
 
+/// The daemon's engine, with the outside world wired in where it is
+/// configured.
+///
+/// Every hook is optional on purpose: an install with no Odoo credentials still
+/// scans sessions, archives transcripts and raises notifications, and one with
+/// no `gitlabHost` does all of that plus the board. The deploy hook is the only
+/// one that needs both, because it reads a task's merge request through `glab`.
+fn daemon_options(paths: Paths, config: ConfigHandle) -> EngineOptions {
+    let mut options = EngineOptions::system(paths, config);
+    let creds = options.config.odoo_creds();
+    if !creds.is_complete() {
+        return options;
+    }
+    let odoo = Arc::new(crate::odoo::OdooClient::new(creds));
+    let gitlab = crate::gitlab::Gitlab::for_config(&options.config, options.spawn);
+    options.backend = Arc::new(crate::daemon::OdooTaskBackend::new(
+        Arc::clone(&odoo),
+        gitlab.clone(),
+        options.config.clone(),
+    ));
+    // Cloned into the hook rather than borrowed: the engine outlives this
+    // function, and a deploy fetch happens on a worker thread.
+    let specs_config = options.config.clone();
+    options.fetch_deploy = Some(Box::new(move || {
+        let specs = crate::deploy::deploy_specs(&specs_config);
+        let mut board = crate::deploy::fetch_deploy_board(&odoo, &specs)?;
+        crate::deploy::enrich_with_live_mrs(&gitlab, &mut board);
+        Ok(board)
+    }));
+    options
+}
+
 /// How often the daemon's main thread wakes to notice a signal.
 const SIGNAL_POLL: Duration = Duration::from_millis(200);
 /// The environment variable a spawned agent carries its task id in.
@@ -185,7 +217,7 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
         Err(error) => fail(format!("claude-sessions daemon: {error}")),
     };
 
-    let engine = Arc::new(Engine::new(EngineOptions::system(paths.clone(), config)));
+    let engine = Arc::new(Engine::new(daemon_options(paths.clone(), config)));
     let server = server::serve(Arc::clone(&engine), listener)?;
     let _ = protocol::write_daemon_info(&paths, port);
     engine.start();

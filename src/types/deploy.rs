@@ -27,6 +27,10 @@ pub struct MergeRequest {
     pub merge_status: String,
     /// Head pipeline status: `success` | `failed` | `running` | `pending` | …
     pub pipeline: String,
+    /// The MR's author. Routinely not the task's assignee, which is the whole
+    /// reason GitLab is read through to rather than trusting Odoo's copy.
+    #[serde(default)]
+    pub author: String,
 }
 
 /// A task on the Deploy tab.
@@ -93,12 +97,53 @@ pub enum DeployRunStatus {
     Fail,
 }
 
-/// A deploy command the dashboard started and is supervising.
+/// A deploy command the dashboard started and the engine is supervising.
+///
+/// One type for the engine's record and the wire form. The engine keeps up to
+/// [`MAX_RUN_LINES`](crate::daemon::MAX_RUN_LINES) of output in a ring buffer
+/// and ships the trailing [`WIRE_RUN_LINES`](crate::daemon::WIRE_RUN_LINES)
+/// here, with `total_lines` saying how much was cut — a chatty deploy (docker
+/// build, gradle) emits tens of thousands of lines and the pane only ever shows
+/// a screenful.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeployRun {
+    #[serde(default)]
+    pub project: String,
+    /// The literal command, so the output pane can show what is running.
+    #[serde(default)]
+    pub command: String,
     pub status: DeployRunStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i32>,
     pub started_at: String,
+    /// The trailing window of output.
+    #[serde(default)]
+    pub lines: Vec<String>,
+    /// How many lines the run has produced in total, `lines.len()` included.
+    #[serde(default)]
+    pub total_lines: usize,
+}
+
+impl DeployRun {
+    /// A run that has just been started and has produced nothing yet.
+    pub fn started(
+        project: impl Into<String>,
+        command: impl Into<String>,
+        started_at: impl Into<String>,
+    ) -> DeployRun {
+        DeployRun {
+            project: project.into(),
+            command: command.into(),
+            status: DeployRunStatus::Running,
+            exit_code: None,
+            started_at: started_at.into(),
+            lines: Vec::new(),
+            total_lines: 0,
+        }
+    }
+
+    pub fn is_running(&self) -> bool {
+        self.status == DeployRunStatus::Running
+    }
 }

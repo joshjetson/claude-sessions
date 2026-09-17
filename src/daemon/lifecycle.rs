@@ -112,10 +112,16 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
     }
 
     /// Stop the loop and wait for everything in flight.
+    ///
+    /// Running deploys are SIGTERMed first, because stopping the daemon kills
+    /// its children either way — doing it deliberately is what makes the
+    /// shutdown dialog's warning true, and what gives the deploy a chance to
+    /// tear down rather than being orphaned.
     pub fn stop(&self) {
         if !self.started.swap(false, Ordering::SeqCst) {
             return;
         }
+        self.inner.terminate_deploys();
         self.inner.shutdown.stop();
         for handle in lock(&self.loops).drain(..) {
             let _ = handle.join();

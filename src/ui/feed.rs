@@ -48,6 +48,15 @@ pub enum FeedEvent {
     /// One Odoo board fetch, from whichever side made it — the daemon's `board`
     /// event, or the in-process worker.
     Board(Box<crate::ui::board::BoardUpdate>),
+    /// The deploy board settled on the daemon.
+    Deploy(Box<crate::ui::deploy::DeployUpdate>),
+    /// One supervised deploy changed state.
+    DeployRun(Box<crate::types::DeployRun>),
+    /// One line of a deploy's output.
+    DeployOutput { project: String, line: String },
+    /// Something to say that arrived asynchronously — a deploy the daemon
+    /// refused, say. The feed has no other way back to the pane.
+    Flash(String),
 }
 
 /// The contract the dashboard consumes. `Send` because the daemon client will
@@ -73,6 +82,24 @@ pub trait SessionFeed: Send {
     /// transport has anything to stop: an embedded engine dies with the
     /// process, and the daemon is meant to outlive the dashboard otherwise.
     fn shutdown_daemon(&self) {}
+
+    /// Ask the engine to run a project's deploy command.
+    ///
+    /// `Some(message)` is a refusal to show now; `None` means it was handed
+    /// over and the answer will arrive as an event. The default refuses,
+    /// because a deploy belongs to the daemon: a child of the dashboard dies
+    /// with it, and that is exactly what the daemon exists to prevent.
+    fn start_deploy(&self, project: &str) -> Option<String> {
+        Some(format!(
+            "Deploying {project} needs the background daemon, so the deploy              outlives this dashboard. Enable daemon.enabled in ~/.claude-sessions.json."
+        ))
+    }
+
+    /// Stop a running deploy. The engine owns the child, so it does the
+    /// killing.
+    fn cancel_deploy(&self, project: &str) {
+        let _ = project;
+    }
 }
 
 enum Command {

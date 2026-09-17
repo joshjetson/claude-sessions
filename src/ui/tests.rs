@@ -6,6 +6,7 @@
 
 mod board;
 mod conversation;
+mod deploy;
 mod dialogs;
 mod harness;
 mod keys;

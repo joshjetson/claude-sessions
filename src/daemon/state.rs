@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Board, Notification, Session, Task};
+use crate::types::{Board, DeployBoard, Notification, Session, Task};
 
 /// How long a queued launch waits for its session before it is given up on —
 /// the same window the fast poll runs for.
@@ -245,9 +245,13 @@ pub struct EngineState {
     tasks_by_id: HashMap<i64, Task>,
     /// Phase 11 defines the shape; the engine carries it to clients unopened.
     pub usage: Option<serde_json::Value>,
-    /// Phase 10 (deploy supervision) fills this slot the same way.
-    pub deploy: Option<serde_json::Value>,
+    /// The Deploy tab. MANUAL only — nothing polls it, because every refresh
+    /// spends a GitLab API call per open merge request.
+    pub deploy: Option<DeployBoard>,
     pub deploy_error: Option<String>,
+    /// Deploys this engine started and is supervising, keyed by the configured
+    /// project name.
+    pub deploy_runs: BTreeMap<String, super::deploy::DeployRunState>,
 }
 
 /// A live task session as the previous tick saw it.

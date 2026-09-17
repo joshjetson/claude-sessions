@@ -8,9 +8,12 @@
 
 use std::sync::Arc;
 
+use crate::config::ConfigHandle;
 use crate::daemon::TaskBackend;
+use crate::gitlab::Gitlab;
 use crate::odoo::OdooClient;
 use crate::paths::Paths;
+use crate::term::{Exec, SpawnPolicy};
 use crate::types::NotificationLevel;
 
 /// What the worker needs beyond a terminal driver.
@@ -22,29 +25,45 @@ pub struct BoardServices {
     pub paths: Paths,
     pub odoo: Option<Arc<OdooClient>>,
     pub backend: Option<Arc<dyn TaskBackend>>,
+    /// The `glab` wrapper. Always present, but answers
+    /// [`GitlabError::NotConfigured`](crate::gitlab::GitlabError::NotConfigured)
+    /// when no host is set — a hint the Deploy tab shows, never a crash.
+    pub gitlab: Gitlab,
     pub sounds: Sounds,
 }
 
 impl BoardServices {
-    pub fn new(paths: Paths, odoo: Option<Arc<OdooClient>>, sounds: Sounds) -> Self {
+    pub fn new(
+        paths: Paths,
+        config: &ConfigHandle,
+        odoo: Option<Arc<OdooClient>>,
+        policy: SpawnPolicy,
+    ) -> Self {
+        let gitlab = Gitlab::for_config(config, policy);
         let backend = odoo.clone().map(|client| {
-            Arc::new(crate::daemon::OdooTaskBackend::new(client)) as Arc<dyn TaskBackend>
+            Arc::new(crate::daemon::OdooTaskBackend::new(
+                client,
+                gitlab.clone(),
+                config.clone(),
+            )) as Arc<dyn TaskBackend>
         });
         BoardServices {
             paths,
             odoo,
             backend,
-            sounds,
+            gitlab,
+            sounds: config.sounds(),
         }
     }
 
     /// Nothing configured: the dashboard still runs, the board says why it is
-    /// empty.
+    /// empty, and every GitLab action says what to set.
     pub fn offline(paths: Paths) -> Self {
         BoardServices {
             paths,
             odoo: None,
             backend: None,
+            gitlab: Gitlab::new(None, Arc::new(Exec::new(SpawnPolicy::Refuse))),
             sounds: Sounds::default(),
         }
     }

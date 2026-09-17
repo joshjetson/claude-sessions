@@ -6,12 +6,18 @@
 //! nothing without [`SpawnPolicy::check`] agreeing first.
 
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use super::spawn::SpawnPolicy;
+
+/// How much of a child's output is kept. `glab api` on a busy project can
+/// answer with megabytes; the Node wrapper capped `maxBuffer` at the same size
+/// and this is that cap, applied per stream.
+pub const MAX_OUTPUT: usize = 20 * 1024 * 1024;
 
 /// What a driver learns from running a command. Mirrors the Node wrapper's
 /// resolved object: never a rejection, always a verdict — a terminal that
@@ -48,6 +54,51 @@ impl CommandOutput {
     }
 }
 
+/// One command to run: the program, its argv, and the three things a caller
+/// occasionally needs to change about the environment it runs in.
+///
+/// An options struct rather than a second `run_with_env_and_cwd` (WORKING.md
+/// rule 5): the terminal drivers want none of it, the `glab` wrapper wants the
+/// host in the child's environment, and `git` wants a working directory.
+#[derive(Debug, Clone)]
+pub struct ExecRequest<'a> {
+    pub program: &'a str,
+    pub args: &'a [String],
+    pub timeout: Duration,
+    pub cwd: Option<&'a Path>,
+    /// Added to the inherited environment, not replacing it.
+    pub env: &'a [(String, String)],
+}
+
+impl<'a> ExecRequest<'a> {
+    pub fn new(program: &'a str, args: &'a [String], timeout: Duration) -> Self {
+        ExecRequest {
+            program,
+            args,
+            timeout,
+            cwd: None,
+            env: &[],
+        }
+    }
+
+    pub fn in_dir(mut self, cwd: Option<&'a Path>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
+    pub fn with_env(mut self, env: &'a [(String, String)]) -> Self {
+        self.env = env;
+        self
+    }
+}
+
+/// Anything that can run a command. The one seam a test substitutes: the
+/// `glab` wrapper is built on argv builders plus this, so its retry rules are
+/// exercised with a recorded script and no process anywhere near the test.
+pub trait Runner: Send + Sync {
+    fn run_request(&self, request: &ExecRequest<'_>) -> CommandOutput;
+}
+
 /// Runs external commands on behalf of a driver.
 #[derive(Debug, Clone, Copy)]
 pub struct Exec {
@@ -69,12 +120,32 @@ impl Exec {
     /// dashboard, and the pipes are drained on that same thread: a child whose
     /// output fills the pipe buffer blocks until somebody reads it.
     pub fn run(&self, program: &str, args: &[String], timeout: Duration) -> CommandOutput {
+        self.run_request(&ExecRequest::new(program, args, timeout))
+    }
+}
+
+impl Runner for Exec {
+    fn run_request(&self, request: &ExecRequest<'_>) -> CommandOutput {
+        let ExecRequest {
+            program,
+            args,
+            timeout,
+            cwd,
+            env,
+        } = *request;
         if let Err(refused) = self.policy.check(&format!("run {program}")) {
             return CommandOutput::failed(refused.message);
         }
 
-        let child = Command::new(program)
-            .args(args)
+        let mut command = Command::new(program);
+        command.args(args);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -88,11 +159,11 @@ impl Exec {
         thread::spawn(move || {
             let mut stdout = String::new();
             let mut stderr = String::new();
-            if let Some(mut pipe) = child.stdout.take() {
-                let _ = pipe.read_to_string(&mut stdout);
+            if let Some(pipe) = child.stdout.take() {
+                let _ = pipe.take(MAX_OUTPUT as u64).read_to_string(&mut stdout);
             }
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_string(&mut stderr);
+            if let Some(pipe) = child.stderr.take() {
+                let _ = pipe.take(MAX_OUTPUT as u64).read_to_string(&mut stderr);
             }
             let status = child.wait();
             let _ = tx.send((status, stdout, stderr));

@@ -23,9 +23,8 @@ const MAX_SESSIONS_LISTED: usize = 5;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ShutdownConfirm {
-    /// Deploy runs that would be killed. Phase 10 supervises deploys; until then
-    /// this is always empty and the dialog says so, which is the honest answer
-    /// for a build with no deploy runner in it.
+    /// Deploy runs that would be killed — the ones actually RUNNING, never
+    /// padded with finished ones, or the warning becomes noise nobody reads.
     pub running_deploys: Vec<String>,
     /// Task ids with a live session. These SURVIVE — they are separate
     /// processes and the daemon only watches them.
@@ -44,6 +43,12 @@ impl ShutdownConfirm {
             running_deploys: Vec::new(),
             task_sessions,
         }
+    }
+
+    /// The deploys the engine is supervising right now.
+    pub fn with_deploys(mut self, running: Vec<String>) -> Self {
+        self.running_deploys = running;
+        self
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> DialogOutcome {

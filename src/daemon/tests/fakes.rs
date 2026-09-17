@@ -130,6 +130,9 @@ pub(crate) struct RecordingBackend {
     pub(crate) mr_url: Arc<Mutex<Option<String>>>,
     pub(crate) stage: Arc<Mutex<Option<StageMove>>>,
     pub(crate) detail: Arc<Mutex<TaskDetail>>,
+    /// Makes the next `set_task_state` fail, for the "Odoo refused one of them"
+    /// path the deploy report has to survive.
+    pub(crate) state_error: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,11 +141,23 @@ pub(crate) enum BackendCall {
     MergeRequest(MergeRequestRequest),
     MoveStage(StageMoveRequest),
     Comment { task_id: i64, html: String },
+    State { task_id: i64, state: String },
 }
 
 impl RecordingBackend {
     pub(crate) fn calls(&self) -> Vec<BackendCall> {
         self.calls.lock().unwrap().clone()
+    }
+
+    /// Every task this backend was asked to set the state of, in order.
+    pub(crate) fn state_writes(&self) -> Vec<(i64, String)> {
+        self.calls()
+            .into_iter()
+            .filter_map(|call| match call {
+                BackendCall::State { task_id, state } => Some((task_id, state)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The HTML posted to a task's chatter, if any.
@@ -192,6 +207,17 @@ impl TaskBackend for RecordingBackend {
             task_id,
             html: html.to_string(),
         });
+        Ok(())
+    }
+
+    fn set_task_state(&self, task_id: i64, state: &str) -> Result<(), String> {
+        self.calls.lock().unwrap().push(BackendCall::State {
+            task_id,
+            state: state.to_string(),
+        });
+        if let Some(error) = self.state_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         Ok(())
     }
 }

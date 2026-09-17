@@ -19,12 +19,13 @@ use crate::paths::Paths;
 use crate::types::{ConversationMessage, DefaultView, Notification, NotificationStatus};
 use crate::ui::board::slice::{BoardSlice, BoardUpdate};
 use crate::ui::conversation::ConversationMeta;
+use crate::ui::deploy::slice::{DeploySlice, DeployUpdate};
 use crate::ui::dialogs::Dialog;
 use crate::ui::tree::SessionsByProject;
 
 mod action;
 
-pub use action::Action;
+pub use action::{Action, MergeTarget};
 
 /// How many notifications the feed keeps. A `VecDeque` rather than Node's
 /// `unshift` + `length = 200` (brief §10 mandate #12).
@@ -217,6 +218,8 @@ pub struct AppState {
     /// The board tab's own state, kept in its own type so neither this file nor
     /// [`crate::ui::board`] becomes the god object Node's `state.js` was.
     pub board: BoardSlice,
+    /// The same for the Deploy tab.
+    pub deploy: DeploySlice,
     pub dialog: Option<Dialog>,
     /// Transient message shown in the right-hand pane, cleared on the next
     /// selection or view change.
@@ -253,6 +256,7 @@ impl AppState {
             selected_session_file: None,
             notifications: VecDeque::new(),
             board: BoardSlice::default(),
+            deploy: DeploySlice::default(),
             dialog: None,
             flash: None,
             usage: None,
@@ -319,6 +323,11 @@ impl AppState {
     pub fn apply_board(&mut self, update: BoardUpdate) {
         self.board.apply(update);
         self.dirty = true;
+    }
+
+    /// The same for the Deploy tab, which has the same two sources.
+    pub fn apply_deploy(&mut self, update: DeployUpdate) {
+        crate::ui::deploy::apply_result(self, update);
     }
 
     /// The notification with this id, for the feed rows and the menu.

@@ -8,12 +8,19 @@
 //! and is not handled will not compile.
 //!
 //! Split by area: [`session`] is the sessions tree's, [`board`] / [`folders`] /
-//! [`odoo`] / [`pipeline`] belong to the board tab, and Phase 10 adds the
-//! deploy ones the same way.
+//! [`odoo`] / [`pipeline`] belong to the board tab, and [`deploy`] /
+//! [`deploy_config`] / [`merge`] / [`deploy_confirm`] / [`mrs`] to the Deploy
+//! tab — its menus, its config editor, its two merge confirmations, its deploy
+//! and conflict confirmations, and the open-merge-request browser.
 
 pub mod board;
+pub mod deploy;
+pub mod deploy_config;
+pub mod deploy_confirm;
 pub mod folders;
 pub mod gates;
+pub mod merge;
+pub mod mrs;
 pub mod odoo;
 pub mod pipeline;
 pub mod project_filter;
@@ -32,8 +39,13 @@ use crate::ui::board::{SessionTarget, StartRequest};
 use crate::ui::state::{Action, Quit};
 
 pub use board::{ContextDialog, TaskAction, TaskMenu};
+pub use deploy::{DeployAction, DeployMenu, DeployTaskAction, DeployTaskMenu};
+pub use deploy_config::{DeployConfig, DeployField};
+pub use deploy_confirm::{DeployConfirm, ResolveConflictConfirm};
 pub use folders::{DirPicker, FolderManager, SavedDirPicker, TargetBranch};
 pub use gates::{AlreadyRunning, BlockedBy};
+pub use merge::{MergeAllConfirm, MergeConfirm, MERGE_ALL_LISTED};
+pub use mrs::OpenMrs;
 pub use odoo::{NotifMenu, Remote, StagePicker};
 pub use pipeline::PipelineView;
 pub use project_filter::{ProjectFilter, ProjectPick};
@@ -58,6 +70,20 @@ pub struct PickedDir {
 pub struct TaskCommand {
     pub task: Box<crate::types::Task>,
     pub action: TaskAction,
+}
+
+/// The same for the Deploy tab's project menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployCommand {
+    pub project: String,
+    pub action: DeployAction,
+}
+
+/// …and for its task menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeployTaskCommand {
+    pub task: Box<crate::types::DeployTask>,
+    pub action: DeployTaskAction,
 }
 
 /// What a dialog did with a key.
@@ -99,6 +125,15 @@ pub enum DialogOutcome {
     /// The board's project filter changed: what is on screen answers the old
     /// one, so it is dropped and refetched.
     FilterChanged,
+    /// A Deploy-tab project-menu entry.
+    Deploy(Box<DeployCommand>),
+    /// A Deploy-tab task-menu entry.
+    DeployTask(Box<DeployTaskCommand>),
+    /// Close and hand this task's conflicted MR to an agent.
+    ResolveConflicts(Box<crate::types::DeployTask>),
+    /// Close and open the deploy config for this project — what the
+    /// unconfigured deploy confirmation's second button does.
+    Configure(String),
 }
 
 /// What a dialog is allowed to reach while handling a key.
@@ -133,6 +168,15 @@ pub enum Dialog {
     FolderManager(FolderManager),
     TargetBranch(TargetBranch),
     Pipeline(PipelineView),
+    OpenMrs(OpenMrs),
+    // --- deploy ---
+    DeployMenu(DeployMenu),
+    DeployTaskMenu(DeployTaskMenu),
+    MergeConfirm(MergeConfirm),
+    MergeAllConfirm(MergeAllConfirm),
+    DeployConfirm(DeployConfirm),
+    DeployConfig(DeployConfig),
+    ResolveConflict(ResolveConflictConfirm),
 }
 
 impl Dialog {
@@ -170,6 +214,14 @@ impl Dialog {
             Dialog::FolderManager(dialog) => dialog.handle_key(key, ctx),
             Dialog::TargetBranch(dialog) => dialog.handle_key(key, ctx),
             Dialog::Pipeline(dialog) => dialog.handle_key(key, ctx),
+            Dialog::OpenMrs(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DeployMenu(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DeployTaskMenu(dialog) => dialog.handle_key(key, ctx),
+            Dialog::MergeConfirm(dialog) => dialog.handle_key(key, ctx),
+            Dialog::MergeAllConfirm(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DeployConfirm(dialog) => dialog.handle_key(key, ctx),
+            Dialog::DeployConfig(dialog) => dialog.handle_key(key, ctx),
+            Dialog::ResolveConflict(dialog) => dialog.handle_key(key, ctx),
         }
     }
 
@@ -180,6 +232,7 @@ impl Dialog {
             Dialog::BlockedBy(dialog) => dialog.accept(data),
             Dialog::StagePicker(dialog) => dialog.accept(data),
             Dialog::ProjectFilter(dialog) => dialog.accept(data),
+            Dialog::OpenMrs(dialog) => dialog.accept(data),
             _ => false,
         }
     }
@@ -210,6 +263,14 @@ impl Dialog {
             Dialog::FolderManager(dialog) => dialog.render(frame, area),
             Dialog::TargetBranch(dialog) => dialog.render(frame, area),
             Dialog::Pipeline(dialog) => dialog.render(frame, area),
+            Dialog::OpenMrs(dialog) => dialog.render(frame, area),
+            Dialog::DeployMenu(dialog) => dialog.render(frame, area),
+            Dialog::DeployTaskMenu(dialog) => dialog.render(frame, area),
+            Dialog::MergeConfirm(dialog) => dialog.render(frame, area),
+            Dialog::MergeAllConfirm(dialog) => dialog.render(frame, area),
+            Dialog::DeployConfirm(dialog) => dialog.render(frame, area),
+            Dialog::DeployConfig(dialog) => dialog.render(frame, area),
+            Dialog::ResolveConflict(dialog) => dialog.render(frame, area),
         }
     }
 
@@ -236,6 +297,14 @@ impl Dialog {
             Dialog::FolderManager(_) => "folderManager",
             Dialog::TargetBranch(_) => "targetBranch",
             Dialog::Pipeline(_) => "pipeline",
+            Dialog::OpenMrs(_) => "openMRs",
+            Dialog::DeployMenu(_) => "deployMenu",
+            Dialog::DeployTaskMenu(_) => "deployTaskMenu",
+            Dialog::MergeConfirm(_) => "mergeConfirm",
+            Dialog::MergeAllConfirm(_) => "mergeAllConfirm",
+            Dialog::DeployConfirm(_) => "deployConfirm",
+            Dialog::DeployConfig(_) => "deployConfig",
+            Dialog::ResolveConflict(_) => "resolveConflictConfirm",
         }
     }
 }

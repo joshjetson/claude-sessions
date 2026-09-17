@@ -47,6 +47,10 @@ pub enum LaunchKind {
     PreOptics,
     /// `C` — reopen the conversation and send NOTHING. Not a pipeline.
     Conversation { session_id: String },
+    /// `R` on the Deploy tab — reconcile a merge request's conflicts. Prefers
+    /// the session that wrote the branch, because it already knows why every
+    /// hunk looks the way it does; falls back to a fresh one.
+    Conflict { session_id: String },
 }
 
 impl LaunchKind {
@@ -57,6 +61,7 @@ impl LaunchKind {
             LaunchKind::Qa => Some("qa"),
             LaunchKind::QaDry => Some("qa-dry"),
             LaunchKind::PreOptics => Some("pre-optics"),
+            LaunchKind::Conflict { .. } => Some("conflict"),
             LaunchKind::Conversation { .. } => None,
         }
     }
@@ -69,6 +74,10 @@ impl LaunchKind {
             LaunchKind::Revision { session_id } | LaunchKind::Conversation { session_id } => {
                 format!("--resume {session_id} {SKIP}")
             }
+            // The one resume that may have nothing to resume: a conflicted MR
+            // whose task was never archived still needs resolving.
+            LaunchKind::Conflict { session_id } if session_id.is_empty() => SKIP.to_string(),
+            LaunchKind::Conflict { session_id } => format!("--resume {session_id} {SKIP}"),
             // See the note on the variant: QA answers prompts rather than
             // skipping them.
             LaunchKind::Qa | LaunchKind::QaDry | LaunchKind::PreOptics => String::new(),
@@ -113,7 +122,9 @@ impl LaunchKind {
     pub fn resumes(&self) -> bool {
         matches!(
             self,
-            LaunchKind::Revision { .. } | LaunchKind::Conversation { .. }
+            LaunchKind::Revision { .. }
+                | LaunchKind::Conversation { .. }
+                | LaunchKind::Conflict { .. }
         )
     }
 }
@@ -254,6 +265,8 @@ pub fn prompt_context(
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
         .collect(),
+        // Filled in only by the conflict flow, which knows its merge request.
+        mr: None,
     }
 }
 

@@ -25,6 +25,7 @@
 //! | `lifecycle` | start, stop, and the one timer thread |
 //! | `markers` | the `done/` and `blocked/` marker directories |
 //! | `backend` | what a task flow needs from Odoo, and the implementation of it |
+//! | `deploy` | supervising a project's production deploy command |
 //! | `completion` | what happens when a task finishes |
 //! | `summary` | an agent's sign-off text as the HTML Odoo's chatter wants |
 //! | `notify` | the notification feed |
@@ -45,6 +46,7 @@ mod alerts;
 mod backend;
 mod caches;
 mod completion;
+mod deploy;
 mod engine;
 mod events;
 mod lifecycle;
@@ -67,15 +69,20 @@ pub use alerts::{
     StallOptions,
 };
 pub use backend::{
-    MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove, StageMoveRequest, TaskBackend,
-    TaskDetail, MOVE_IN_PROGRESS_STEP, MOVE_QA_STEP,
+    resolve_target_branch, MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove,
+    StageMoveRequest, TaskBackend, TaskDetail, MOVE_IN_PROGRESS_STEP, MOVE_QA_STEP,
 };
 pub use client::{
     DaemonClient, DaemonTarget, Health, SseEvent, SseMessage, SseParser, Subscription,
 };
 pub use completion::{DailyLogHook, DailyLogRecord};
+pub use deploy::{
+    running_deploys, DeployRunState, DEPLOY_SHELL, DEPLOY_SHELL_FLAGS, MAX_RUN_LINES,
+    WIRE_RUN_LINES,
+};
 pub use engine::{
-    AssignedFetch, BoardFetch, Engine, EngineOptions, EngineStats, RefreshRequest, UsageHook,
+    AssignedFetch, BoardFetch, DeployFetch, Engine, EngineOptions, EngineStats, RefreshRequest,
+    UsageHook,
 };
 pub use events::{wire_session, EngineEvent, SessionStats, SessionsEvent, Snapshot};
 pub use markers::{BlockedMarker, DoneMarker, MARKER_SETTLE};

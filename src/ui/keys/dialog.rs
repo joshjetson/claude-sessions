@@ -9,7 +9,8 @@ use std::path::PathBuf;
 
 use crate::ui::board::SessionTarget;
 use crate::ui::dialogs::{
-    ContextDialog, Dialog, DialogOutcome, FolderManager, TargetBranch, TaskAction, TaskCommand,
+    ContextDialog, DeployConfig, DeployTaskAction, DeployTaskCommand, Dialog, DialogOutcome,
+    FolderManager, MergeConfirm, TargetBranch, TaskAction, TaskCommand,
 };
 use crate::ui::state::{Action, AppState, Pane, View};
 
@@ -69,7 +70,133 @@ pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome
             state.board.set_filter(filter);
             crate::ui::board::keys::refresh(state);
         }
+        DialogOutcome::Deploy(command) => {
+            crate::ui::dialogs::deploy::run_deploy_command(state, &command.project, command.action)
+        }
+        DialogOutcome::DeployTask(command) => run_deploy_task_command(state, *command),
+        DialogOutcome::ResolveConflicts(task) => resolve_conflicts(state, &task),
+        DialogOutcome::Configure(project) => {
+            state.dialog = Some(Dialog::DeployConfig(DeployConfig::new(&project, state)));
+            state.dirty = true;
+        }
     }
+}
+
+/// The Deploy task menu's entries, carried out.
+fn run_deploy_task_command(state: &mut AppState, command: DeployTaskCommand) {
+    let task = *command.task;
+    match command.action {
+        DeployTaskAction::Merge => {
+            let readiness = crate::deploy::merge_readiness(&task);
+            if readiness.ready {
+                state.dialog = Some(Dialog::MergeConfirm(MergeConfirm::new(&task)));
+                state.dirty = true;
+            } else {
+                // The blocker, not "cannot merge": the reason is the point.
+                state.flash(format!("Cannot merge #{}: {}", task.id, readiness.reason));
+            }
+        }
+        DeployTaskAction::ResolveConflicts => {
+            state.dialog = Some(Dialog::ResolveConflict(
+                crate::ui::dialogs::ResolveConflictConfirm::build(&task, state),
+            ));
+            state.dirty = true;
+        }
+        DeployTaskAction::GoToSession => crate::ui::board::keys::go_to_session(state, task.id),
+        DeployTaskAction::OpenMr => state.enqueue(Action::OpenUrl(task.mr_url.clone())),
+        DeployTaskAction::OpenTask => {
+            let url = crate::ui::board::task_url(state, task.id);
+            if url.is_empty() {
+                state.flash("No Odoo URL configured — set odoo.url in ~/.claude-sessions.json.");
+            } else {
+                state.enqueue(Action::OpenUrl(url));
+            }
+        }
+        // The stage picker is the board's, and it takes a board task — the
+        // Deploy tab knows the id and the project, which is all it needs.
+        DeployTaskAction::MoveStage => {
+            let stub = crate::types::Task {
+                id: task.id,
+                name: task.name.clone(),
+                project_id: task.project_id,
+                project_name: task.project_name.clone(),
+                stage_name: task.stage_name.clone(),
+                ..crate::types::Task::default()
+            };
+            crate::ui::board::keys::move_stage(state, stub);
+        }
+        DeployTaskAction::DeployProject => {
+            let project = task.project_name.clone();
+            state.dialog = Some(Dialog::DeployConfirm(
+                crate::ui::dialogs::DeployConfirm::build(&project, state),
+            ));
+            state.dirty = true;
+        }
+        DeployTaskAction::Close => {}
+    }
+}
+
+/// Hand a conflicted merge request to an agent.
+///
+/// Goes through the same `Resume` action `v` and `C` use, so the archive
+/// lookup — which self-heals a stale record and restores the transcript Claude
+/// Code needs on disk for `--resume` — happens exactly once in this codebase.
+fn resolve_conflicts(state: &mut AppState, task: &crate::types::DeployTask) {
+    let Some(mr) = &task.mr else {
+        return state.flash(format!("#{} has no merge request loaded.", task.id));
+    };
+    let stub = crate::types::Task {
+        id: task.id,
+        name: task.name.clone(),
+        project_id: task.project_id,
+        project_name: task.project_name.clone(),
+        stage_name: task.stage_name.clone(),
+        ..crate::types::Task::default()
+    };
+    let mut prompt = crate::ui::board::prompt_context(
+        &state.config,
+        &state.paths,
+        &stub,
+        crate::ui::board::task_url(state, task.id),
+        "",
+    );
+    prompt.mr = Some(crate::pipeline::MergeRequestVars {
+        iid: mr.iid,
+        url: task.mr_url.clone(),
+        source_branch: mr.source_branch.clone(),
+        target_branch: mr.target_branch.clone(),
+    });
+    // Where the agent will run: the folder the dashboard last saw this task
+    // worked in, else the project's first configured repository. The archive
+    // record wins over both when it names one.
+    let link_cwd = state
+        .board
+        .link(task.id)
+        .map(|link| link.cwd.clone())
+        .filter(|cwd| !cwd.is_empty())
+        .or_else(|| {
+            state
+                .config
+                .odoo_project_dir_list(&task.project_name)
+                .first()
+                .cloned()
+        })
+        .unwrap_or_default();
+    if link_cwd.is_empty() {
+        return state.flash(format!(
+            "No folder known for {} — add one with the task menu's repo folders.",
+            task.project_name
+        ));
+    }
+    state.enqueue(Action::Resume(Box::new(crate::ui::board::ResumeRequest {
+        prompt,
+        purpose: crate::ui::board::ResumePurpose::Conflict,
+        link_cwd,
+        // Conflict resolution never moves the stage: the task is already in
+        // Deployed and the merge is what is outstanding, not the work.
+        stage_move: None,
+        known_session_ids: state.sessions().map(|s| s.session_id.clone()).collect(),
+    })));
 }
 
 /// The task-menu entries the board, not the dialog, carries out.

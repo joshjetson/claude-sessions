@@ -61,7 +61,7 @@ impl Fixture {
             DeployRun {
                 status,
                 exit_code,
-                started_at: "2026-09-16T11:00:00.000Z".to_string(),
+                ..DeployRun::started("Aurora", "./deploy.sh", "2026-09-16T11:00:00.000Z")
             },
         );
         self

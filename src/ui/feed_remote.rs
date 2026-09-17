@@ -17,14 +17,18 @@ use std::thread;
 
 use crate::daemon::client::{self, DaemonClient, SseEvent, SseMessage, Subscription};
 use crate::daemon::{BoardFilter, PendingRequest, RefreshRequest, SessionsEvent, Snapshot};
-use crate::types::Notification;
+use crate::types::{DeployRun, Notification};
 use crate::ui::board::BoardUpdate;
+use crate::ui::deploy::DeployUpdate;
 use crate::ui::feed::{FeedEvent, SessionFeed};
 
 /// A dashboard's view of a running daemon.
 pub struct RemoteFeed {
     client: DaemonClient,
     events: Receiver<FeedEvent>,
+    /// The other end of `events`, so an action posted on a worker thread can
+    /// report a refusal back into the pane.
+    sender: Sender<FeedEvent>,
     /// Held so the stream stays open; dropping it closes the subscription.
     _subscription: Subscription,
 }
@@ -32,6 +36,7 @@ pub struct RemoteFeed {
 impl RemoteFeed {
     pub fn connect(port: u16) -> Self {
         let (sender, events) = mpsc::channel();
+        let reply = sender.clone();
         let stream_client = DaemonClient::new(port);
         let subscription = client::subscribe(port, move |message| {
             if let SseMessage::Event(event) = message {
@@ -41,6 +46,7 @@ impl RemoteFeed {
         RemoteFeed {
             client: DaemonClient::new(port),
             events,
+            sender: reply,
             _subscription: subscription,
         }
     }
@@ -57,6 +63,21 @@ impl RemoteFeed {
             .name("claude-sessions-action".into())
             .spawn(move || action(client));
     }
+
+    /// The same, for an action whose refusal has to reach the pane. The daemon
+    /// answers deploy actions with 409 and a sentence; swallowing it would
+    /// leave a keypress looking like it did nothing.
+    fn act_reporting(&self, action: impl FnOnce(DaemonClient) -> Option<String> + Send + 'static) {
+        let client = self.client;
+        let sender = self.sender.clone();
+        let _ = thread::Builder::new()
+            .name("claude-sessions-action".into())
+            .spawn(move || {
+                if let Some(message) = action(client) {
+                    let _ = sender.send(FeedEvent::Flash(message));
+                }
+            });
+    }
 }
 
 /// One SSE event as whatever the dashboard understands, or nothing.
@@ -65,8 +86,16 @@ fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
         "snapshot" => {
             if let Ok(snapshot) = serde_json::from_str::<Snapshot>(&event.data) {
                 let board = board_update(&snapshot);
+                let deploy = deploy_update(&snapshot);
+                // Runs first: a deploy started before this dashboard connected
+                // has output to show, and an `deploy-output` line with no run
+                // to attach it to is dropped.
+                for run in snapshot.deploy_runs.values() {
+                    let _ = sender.send(FeedEvent::DeployRun(Box::new(run.clone())));
+                }
                 let _ = sender.send(sessions(snapshot.sessions));
                 let _ = sender.send(board);
+                let _ = sender.send(deploy);
             }
         }
         "sessions" => {
@@ -94,8 +123,29 @@ fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
                 }
             }
         }
-        // deploy and the link events belong to phases that have not landed;
-        // an unknown event is never an error.
+        // The deploy board rides the snapshot for the same reason the board
+        // does: the event is a light "it settled" signal.
+        "deploy" => {
+            if let Some(snapshot) = client.state() {
+                let _ = sender.send(deploy_update(&snapshot));
+            }
+        }
+        "deploy-run" => {
+            if let Ok(run) = serde_json::from_str::<DeployRun>(&event.data) {
+                let _ = sender.send(FeedEvent::DeployRun(Box::new(run)));
+            }
+        }
+        "deploy-output" => {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) {
+                let project = value["project"].as_str().unwrap_or_default().to_string();
+                let line = value["line"].as_str().unwrap_or_default().to_string();
+                if !project.is_empty() {
+                    let _ = sender.send(FeedEvent::DeployOutput { project, line });
+                }
+            }
+        }
+        // The link events belong to a phase that has not landed; an unknown
+        // event is never an error.
         _ => {}
     }
 }
@@ -118,6 +168,15 @@ fn board_update(snapshot: &Snapshot) -> FeedEvent {
             .iter()
             .map(|(task_id, blocked)| (*task_id, blocked.questions.clone()))
             .collect(),
+    }))
+}
+
+/// The deploy half of a snapshot, in the shape the dashboard applies.
+fn deploy_update(snapshot: &Snapshot) -> FeedEvent {
+    FeedEvent::Deploy(Box::new(DeployUpdate {
+        board: snapshot.deploy.clone(),
+        error: snapshot.deploy_error.clone(),
+        loading: false,
     }))
 }
 
@@ -169,5 +228,31 @@ impl SessionFeed for RemoteFeed {
 
     fn shutdown_daemon(&self) {
         self.client.shutdown();
+    }
+
+    fn start_deploy(&self, project: &str) -> Option<String> {
+        let project = project.to_string();
+        self.act_reporting(move |client| {
+            let response = client.start_deploy(&project)?;
+            if response.accepted() {
+                return None;
+            }
+            // The daemon's own sentence: "already deploying", "no command
+            // configured", or the spawn policy's refusal.
+            Some(
+                response.body["error"]
+                    .as_str()
+                    .unwrap_or("the daemon refused the deploy")
+                    .to_string(),
+            )
+        });
+        None
+    }
+
+    fn cancel_deploy(&self, project: &str) {
+        let project = project.to_string();
+        self.act(move |client| {
+            client.cancel_deploy(&project);
+        });
     }
 }

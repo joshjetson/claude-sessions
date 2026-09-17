@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use crate::daemon::StageMoveRequest;
 use crate::pipeline::{
-    branch_instruction, resolve_pipeline, PromptVars, ResolvedPipeline, UnknownPipeline,
+    branch_instruction, resolve_pipeline, MergeRequestVars, PromptVars, ResolvedPipeline,
+    UnknownPipeline,
 };
 use crate::term::SessionRef;
 
@@ -37,6 +38,9 @@ pub struct PromptContext {
     /// `taskName` / `projectName` / `stageName`, for a project override's
     /// `{{...}}` placeholders.
     pub extras: BTreeMap<String, String>,
+    /// The merge request a conflict-resolution run is about. Only the
+    /// `conflict` pipeline reads it.
+    pub mr: Option<MergeRequestVars>,
 }
 
 impl PromptContext {
@@ -52,6 +56,10 @@ impl PromptContext {
             target_branch: self.target_branch.clone(),
             repo_path: Some(repo.to_string()),
             extras: self.extras.clone(),
+            mr: self.mr.clone(),
+            // The conflict pipeline words itself differently when the session
+            // that wrote the branch is the one being resumed.
+            resumed: matches!(kind, LaunchKind::Conflict { session_id } if !session_id.is_empty()),
             ..PromptVars::new(self.task_id, self.task_url.clone())
         }
     }
@@ -122,9 +130,10 @@ pub struct SendSpec {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumeRequest {
     pub prompt: PromptContext,
-    /// `false` sends no prompt at all and moves no stage: reading a
-    /// conversation is not starting work on it (test-pinned).
-    pub revision: bool,
+    /// What picking the conversation back up is FOR. One enum rather than a
+    /// `revision: bool` plus a conflict flag: the three differ in the pipeline
+    /// they run, what they say, and whether a missing archive stops them.
+    pub purpose: ResumePurpose,
     /// Where the dashboard last saw this task worked, for when the archive
     /// record names no folder of its own.
     pub link_cwd: String,
@@ -132,6 +141,36 @@ pub struct ResumeRequest {
     /// worker, which is the first thing to learn where the session actually is.
     pub stage_move: Option<StageMoveRequest>,
     pub known_session_ids: Vec<String>,
+}
+
+/// Why a conversation is being picked back up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResumePurpose {
+    /// `C` — sends no prompt at all and moves no stage: reading a conversation
+    /// is not starting work on it (test-pinned).
+    Conversation,
+    /// `v` — the revision instructions.
+    Revision,
+    /// `R` on the Deploy tab. The only one that proceeds with NO archive: a
+    /// conflicted merge request still has to be resolved even if the task that
+    /// wrote it was never archived.
+    Conflict,
+}
+
+impl ResumePurpose {
+    pub fn kind(&self, session_id: &str) -> LaunchKind {
+        let session_id = session_id.to_string();
+        match self {
+            ResumePurpose::Conversation => LaunchKind::Conversation { session_id },
+            ResumePurpose::Revision => LaunchKind::Revision { session_id },
+            ResumePurpose::Conflict => LaunchKind::Conflict { session_id },
+        }
+    }
+
+    /// Whether a task with nothing archived can still be started.
+    pub fn starts_fresh(&self) -> bool {
+        matches!(self, ResumePurpose::Conflict)
+    }
 }
 
 impl ResumeRequest {
@@ -142,15 +181,7 @@ impl ResumeRequest {
         cwd: &str,
         archive_path: Option<String>,
     ) -> Result<LaunchSpec, UnknownPipeline> {
-        let kind = if self.revision {
-            LaunchKind::Revision {
-                session_id: session_id.to_string(),
-            }
-        } else {
-            LaunchKind::Conversation {
-                session_id: session_id.to_string(),
-            }
-        };
+        let kind = self.purpose.kind(session_id);
         let task_id = self.prompt.task_id;
         Ok(LaunchSpec {
             task_id,
@@ -163,18 +194,26 @@ impl ResumeRequest {
                 request
             }),
             known_session_ids: self.known_session_ids.clone(),
-            say: if self.revision {
-                format!(
+            say: match self.purpose {
+                ResumePurpose::Revision => format!(
                     "Resumed #{task_id} ({}) with revision notes.",
                     short(session_id)
-                )
-            } else {
+                ),
                 // Said explicitly because it is the surprising part: this is
                 // the one path that asks the agent for nothing.
-                format!(
+                ResumePurpose::Conversation => format!(
                     "Resuming #{task_id} ({}) — no prompt sent.",
                     short(session_id)
-                )
+                ),
+                // Which session, by id — or that there was none. Resuming the
+                // wrong repo silently is the failure mode worth preventing.
+                ResumePurpose::Conflict if session_id.is_empty() => format!(
+                    "Started a session in {cwd} to resolve #{task_id}'s conflicts (no prior transcript)."
+                ),
+                ResumePurpose::Conflict => format!(
+                    "Resumed #{task_id}'s original session ({}) in {cwd} to resolve its conflicts.",
+                    short(session_id)
+                ),
             },
         })
     }

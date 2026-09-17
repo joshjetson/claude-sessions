@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::{BlockedTask, EngineState, TaskLink};
 use super::{lock, NOTIFICATION_LIMIT};
-use crate::types::{Board, Notification, NotificationStatus, Session};
+use crate::types::{Board, DeployBoard, DeployRun, Notification, NotificationStatus, Session};
 
 /// Sessions are sent to clients without their parsed transcript payload.
 ///
@@ -70,9 +70,13 @@ pub struct Snapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deploy: Option<serde_json::Value>,
+    pub deploy: Option<DeployBoard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deploy_error: Option<String>,
+    /// Every deploy the engine is supervising, each carrying its trailing
+    /// output window rather than its whole log.
+    #[serde(default)]
+    pub deploy_runs: BTreeMap<String, DeployRun>,
 }
 
 impl Snapshot {
@@ -96,6 +100,7 @@ impl Snapshot {
             usage: state.usage.clone(),
             deploy: state.deploy.clone(),
             deploy_error: state.deploy_error.clone(),
+            deploy_runs: super::deploy::wire_runs(&state.deploy_runs),
         }
     }
 }
@@ -165,13 +170,17 @@ pub enum EngineEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
-    /// Phase 10.
+    /// The deploy board settled — reloaded, or failed to. The board itself
+    /// rides the snapshot, exactly as the `Board` event's does.
     Deploy {
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
+    /// A supervised deploy changed state: started, finished, or reported on
+    /// what it shipped. Carries the run because the pane redraws from it.
     DeployRun {
         project: String,
+        run: Box<DeployRun>,
     },
     DeployOutput {
         project: String,

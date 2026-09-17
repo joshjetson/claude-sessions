@@ -336,13 +336,25 @@ fn ssh_and_the_browser_work_from_any_row_in_a_projects_block() {
 }
 
 #[test]
-fn the_keys_that_land_later_say_so_rather_than_doing_nothing() {
+fn a_key_that_lands_later_says_so_rather_than_doing_nothing() {
     let (_dir, mut state) = board_state();
-    for (key, needle) in [('M', "deploy phase"), ('D', "extras phase")] {
-        super::press(&mut state, KeyCode::Char(key));
-        let flash = state.flash.clone().unwrap_or_default();
-        assert!(flash.contains(needle), "{key}: {flash}");
-    }
+    super::press(&mut state, KeyCode::Char('D'));
+    let flash = state.flash.clone().unwrap_or_default();
+    assert!(flash.contains("extras phase"), "{flash}");
+}
+
+#[test]
+fn m_opens_the_merge_request_browser_and_asks_for_the_list() {
+    let (_dir, mut state) = board_state();
+    super::press(&mut state, KeyCode::Char('M'));
+    assert_eq!(
+        state.dialog.as_ref().map(crate::ui::dialogs::Dialog::name),
+        Some("openMRs")
+    );
+    assert!(state
+        .take_actions()
+        .iter()
+        .any(|action| matches!(action, Action::FetchOpenMrs)));
 }
 
 #[test]

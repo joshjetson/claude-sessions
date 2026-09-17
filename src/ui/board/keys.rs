@@ -71,8 +71,8 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             }
         }),
         'm' => with_task(state, task, move_stage),
-        'g' => with_task(state, task, go_to_session),
-        'G' => with_task(state, task, focus_terminal),
+        'g' => with_task(state, task, |state, task| go_to_session(state, task.id)),
+        'G' => with_task(state, task, |state, task| focus_terminal(state, task.id)),
         'P' => pipeline_view(state, snapshot),
         'S' => ssh(state, snapshot),
         'f' => {
@@ -88,9 +88,17 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             Dialog::ProjectFilter(ProjectFilter::new(&state.config)),
         ),
         'x' => dismiss(state, snapshot),
-        // Both land with later phases; a key that silently does nothing reads
-        // as broken, so they say when they arrive.
-        'M' => state.flash("Your open merge requests land with the deploy phase."),
+        // Not a picker: Enter opens one in a browser and the dialog stays
+        // open, so a morning's worth of review links can be opened in a row.
+        'M' => {
+            state.enqueue(Action::FetchOpenMrs);
+            open(
+                state,
+                Dialog::OpenMrs(crate::ui::dialogs::OpenMrs::loading()),
+            );
+        }
+        // Lands with a later phase; a key that silently does nothing reads as
+        // broken, so it says when it arrives.
         'D' => state.flash("Daemon run logs land with the extras phase."),
         _ => {}
     }
@@ -243,8 +251,8 @@ pub(crate) fn task_shortcut(
     action: crate::ui::dialogs::TaskAction,
 ) {
     match action {
-        crate::ui::dialogs::TaskAction::GoToSession => go_to_session(state, task.clone()),
-        crate::ui::dialogs::TaskAction::FocusTerminal => focus_terminal(state, task.clone()),
+        crate::ui::dialogs::TaskAction::GoToSession => go_to_session(state, task.id),
+        crate::ui::dialogs::TaskAction::FocusTerminal => focus_terminal(state, task.id),
         _ => {}
     }
 }
@@ -260,24 +268,27 @@ pub(crate) fn move_stage(state: &mut AppState, task: Task) {
     );
 }
 
-fn go_to_session(state: &mut AppState, task: Task) {
-    let link = state.board.link(task.id);
-    match controller::go_to_task_session(state.sessions(), task.id, link) {
+/// `g` — jump to the live session working a task. Shared with the Deploy tab,
+/// which asks the same question of the same links, so the wording of "there
+/// isn't one" is written once.
+pub(crate) fn go_to_session(state: &mut AppState, task_id: i64) {
+    let link = state.board.link(task_id);
+    match controller::go_to_task_session(state.sessions(), task_id, link) {
         controller::SessionTarget::Session {
             session_id,
             session_file,
             project,
         } => crate::ui::keys::go_to_session(state, &session_id, session_file, &project),
         _ => state.flash(format!(
-            "No live session for #{} (it may have ended).",
-            task.id
+            "No live session for #{task_id} (it may have ended)."
         )),
     }
 }
 
-fn focus_terminal(state: &mut AppState, task: Task) {
-    let link = state.board.link(task.id);
-    match controller::focus_task_terminal(state.sessions(), task.id, link) {
+/// `G` — raise that session's terminal instead of its conversation.
+pub(crate) fn focus_terminal(state: &mut AppState, task_id: i64) {
+    let link = state.board.link(task_id);
+    match controller::focus_task_terminal(state.sessions(), task_id, link) {
         Ok(target) => {
             if target.others > 1 {
                 state.flash(format!(
@@ -294,8 +305,7 @@ fn focus_terminal(state: &mut AppState, task: Task) {
             super::spec::short(&session_id)
         )),
         Err(_) => state.flash(format!(
-            "No live session for #{} (it may have ended).",
-            task.id
+            "No live session for #{task_id} (it may have ended)."
         )),
     }
 }
