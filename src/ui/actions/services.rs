@@ -8,9 +8,12 @@
 
 use std::sync::Arc;
 
+use crate::config::ConfigHandle;
 use crate::daemon::TaskBackend;
+use crate::gitlab::Gitlab;
 use crate::odoo::OdooClient;
 use crate::paths::Paths;
+use crate::term::{Exec, SpawnPolicy};
 use crate::types::NotificationLevel;
 
 /// What the worker needs beyond a terminal driver.
@@ -22,6 +25,10 @@ pub struct BoardServices {
     pub paths: Paths,
     pub odoo: Option<Arc<OdooClient>>,
     pub backend: Option<Arc<dyn TaskBackend>>,
+    /// The `glab` wrapper. Always present, but answers
+    /// [`GitlabError::NotConfigured`](crate::gitlab::GitlabError::NotConfigured)
+    /// when no host is set — a hint the Deploy tab shows, never a crash.
+    pub gitlab: Gitlab,
     pub sounds: Sounds,
     /// The Optics client, when this install has an endpoint and a token.
     /// `None` is the normal case and simply means no coverage badges.
@@ -35,30 +42,38 @@ pub struct BoardServices {
 impl BoardServices {
     pub fn new(
         paths: Paths,
+        config: &ConfigHandle,
         odoo: Option<Arc<OdooClient>>,
         optics: Option<Arc<crate::optics::OpticsClient>>,
-        sounds: Sounds,
+        policy: SpawnPolicy,
     ) -> Self {
+        let gitlab = Gitlab::for_config(config, policy);
         let backend = odoo.clone().map(|client| {
-            Arc::new(crate::daemon::OdooTaskBackend::new(client)) as Arc<dyn TaskBackend>
+            Arc::new(crate::daemon::OdooTaskBackend::new(
+                client,
+                gitlab.clone(),
+                config.clone(),
+            )) as Arc<dyn TaskBackend>
         });
         BoardServices {
             paths,
             odoo,
             backend,
+            gitlab,
             optics,
-            sounds,
+            sounds: config.sounds(),
             qa_heads: Arc::new(crate::qaden::HeadCache::new()),
         }
     }
 
     /// Nothing configured: the dashboard still runs, the board says why it is
-    /// empty.
+    /// empty, and every GitLab action says what to set.
     pub fn offline(paths: Paths) -> Self {
         BoardServices {
             paths,
             odoo: None,
             backend: None,
+            gitlab: Gitlab::new(None, Arc::new(Exec::new(SpawnPolicy::Refuse))),
             optics: None,
             sounds: Sounds::default(),
             qa_heads: Arc::new(crate::qaden::HeadCache::new()),

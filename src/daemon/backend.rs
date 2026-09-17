@@ -20,6 +20,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::config::ConfigHandle;
+use crate::gitlab::{can_open_mr_from, Gitlab, FALLBACK_TARGET};
 use crate::odoo::{OdooClient, StageKind};
 use crate::pipeline::dashboard_step;
 
@@ -40,6 +42,20 @@ pub struct MergeRequestRequest {
     pub cwd: PathBuf,
     pub project_id: Option<i64>,
     pub project_name: String,
+}
+
+/// Where a merge request opened by the safety net should land.
+///
+/// The order is the Node original's and each step is a fallback for the one
+/// before: the user's explicit `targetBranches` entry, then whatever the Odoo
+/// project's linked repository calls its default branch, then `development`.
+pub fn resolve_target_branch(configured: Option<&str>, project_default: Option<String>) -> String {
+    configured
+        .filter(|branch| !branch.is_empty())
+        .map(str::to_string)
+        .or(project_default)
+        .filter(|branch| !branch.is_empty())
+        .unwrap_or_else(|| FALLBACK_TARGET.to_string())
 }
 
 /// A task that may need moving to another stage.
@@ -145,6 +161,13 @@ pub trait TaskBackend: Send + Sync {
 
     /// Post the completion comment on the task's chatter, as HTML.
     fn post_comment(&self, task_id: i64, html: &str) -> Result<(), String>;
+
+    /// Write a task's `state` — the axis the stage is NOT.
+    ///
+    /// The deploy flow's only Odoo write: a task whose merge request shipped
+    /// becomes `03_approved` ("Complete"), and its stage is left exactly where
+    /// it is.
+    fn set_task_state(&self, task_id: i64, state: &str) -> Result<(), String>;
 }
 
 /// The backend until a later phase installs a real one: every remote step is a
@@ -173,6 +196,10 @@ impl TaskBackend for NullBackend {
     fn post_comment(&self, _task_id: i64, _html: &str) -> Result<(), String> {
         Ok(())
     }
+
+    fn set_task_state(&self, _task_id: i64, _state: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// Everything the completion and launch flows need from Odoo.
@@ -182,15 +209,28 @@ impl TaskBackend for NullBackend {
 /// behind a board refresh.
 pub struct OdooTaskBackend {
     client: Arc<OdooClient>,
+    gitlab: Gitlab,
+    /// Only the `targetBranches` map is read out of it, on the one path that
+    /// opens a merge request. Held rather than copied so an edit through the
+    /// dialog takes effect without a restart.
+    config: ConfigHandle,
 }
 
 impl OdooTaskBackend {
-    pub fn new(client: Arc<OdooClient>) -> Self {
-        OdooTaskBackend { client }
+    pub fn new(client: Arc<OdooClient>, gitlab: Gitlab, config: ConfigHandle) -> Self {
+        OdooTaskBackend {
+            client,
+            gitlab,
+            config,
+        }
     }
 
     pub fn client(&self) -> &Arc<OdooClient> {
         &self.client
+    }
+
+    pub fn gitlab(&self) -> &Gitlab {
+        &self.gitlab
     }
 }
 
@@ -211,20 +251,48 @@ impl TaskBackend for OdooTaskBackend {
         })
     }
 
-    /// Phase 10 replaces this with the `glab` wrapper.
+    /// The safety net: a finished task with no merge request gets one.
     ///
-    /// Deliberately NOT a shell-out to `glab` from here: opening a merge
-    /// request needs the branch-state rules (skip when Odoo already holds a
-    /// URL, skip on development/main/master or a detached HEAD) that live with
-    /// the rest of the GitLab integration. Returning "no merge request" makes
-    /// the completion notification say "no MR detected", which is true and
-    /// harmless, where a half-implementation here would open MRs off the wrong
-    /// branch.
+    /// Three skips, and each one is the difference between a useful safety net
+    /// and a machine that opens junk merge requests:
+    ///
+    /// * Odoo already holds a URL — the MR exists, and a second one against the
+    ///   same branch is noise somebody has to close.
+    /// * The branch is `development`, `main` or `master` — those are where
+    ///   merge requests LAND. Opening one from them means something upstream
+    ///   went wrong, and a merge request would not fix it.
+    /// * Detached HEAD — there is no branch to push, so there is nothing to
+    ///   open a merge request from.
+    ///
+    /// Not finding a merge request is a normal outcome, not an error: the
+    /// completion notification says "no merge request detected", which is true.
     fn ensure_merge_request(
         &self,
-        _request: &MergeRequestRequest,
+        request: &MergeRequestRequest,
     ) -> Result<Option<String>, String> {
-        Ok(None)
+        if request.cwd.as_os_str().is_empty() {
+            return Ok(None);
+        }
+        if let Some(gitlab) = self.client.get_task_gitlab(request.task_id) {
+            if !gitlab.merge_request_url.is_empty() {
+                return Ok(Some(gitlab.merge_request_url));
+            }
+        }
+        let Some(branch) = self.gitlab.current_branch(&request.cwd) else {
+            return Ok(None);
+        };
+        if !can_open_mr_from(&branch) {
+            return Ok(None);
+        }
+        let target = resolve_target_branch(
+            self.config.target_branch(&request.project_name),
+            request
+                .project_id
+                .and_then(|id| self.client.get_project_default_branch(id)),
+        );
+        self.gitlab
+            .create_mr(&request.cwd, &branch, &target)
+            .map_err(|err| err.to_string())
     }
 
     fn move_to_stage(&self, request: &StageMoveRequest) -> Result<StageMove, String> {
@@ -284,6 +352,12 @@ impl TaskBackend for OdooTaskBackend {
     fn post_comment(&self, task_id: i64, html: &str) -> Result<(), String> {
         self.client
             .post_comment(task_id, html)
+            .map_err(|err| err.to_string())
+    }
+
+    fn set_task_state(&self, task_id: i64, state: &str) -> Result<(), String> {
+        self.client
+            .set_task_state(task_id, state)
             .map_err(|err| err.to_string())
     }
 }

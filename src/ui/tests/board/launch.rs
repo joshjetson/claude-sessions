@@ -326,7 +326,7 @@ fn resuming_a_task_with_no_archive_says_so_and_opens_nothing() {
             task_id: 991001,
             ..Default::default()
         },
-        revision: false,
+        purpose: crate::ui::board::ResumePurpose::Conversation,
         link_cwd: String::new(),
         stage_move: None,
         known_session_ids: Vec::new(),

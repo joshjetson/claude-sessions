@@ -275,18 +275,25 @@ pub fn resume(
     let db = Db::open(&services.paths);
     let archive = Archive::new(&services.paths, &db);
     let mut refs = TaskRefCache::default();
-    let Some(meta) = archive.ensure_live_session(task_id, &mut refs) else {
-        let _ = results.send(ActionResult::Flash(if request.revision {
-            format!("No archived transcript for #{task_id} yet — nothing to resume.")
-        } else {
-            format!("No conversation archived for #{task_id} yet — nothing to resume.")
+    let meta = archive.ensure_live_session(task_id, &mut refs);
+    // Conflict resolution is the one purpose that proceeds with nothing
+    // archived: the merge request still has to be reconciled.
+    if meta.is_none() && !request.purpose.starts_fresh() {
+        let _ = results.send(ActionResult::Flash(match request.purpose {
+            crate::ui::board::ResumePurpose::Revision => {
+                format!("No archived transcript for #{task_id} yet — nothing to resume.")
+            }
+            _ => format!("No conversation archived for #{task_id} yet — nothing to resume."),
         }));
         return;
-    };
-    let cwd = if meta.cwd.is_empty() {
-        request.link_cwd.clone()
-    } else {
-        meta.cwd.clone()
+    }
+    let session_id = meta
+        .as_ref()
+        .map(|meta| meta.session_id.clone())
+        .unwrap_or_default();
+    let cwd = match meta.as_ref().map(|meta| meta.cwd.clone()) {
+        Some(cwd) if !cwd.is_empty() => cwd,
+        _ => request.link_cwd.clone(),
     };
     if cwd.is_empty() {
         let _ = results.send(ActionResult::Flash(
@@ -297,7 +304,7 @@ pub fn resume(
     let archive_path = archive
         .archive_path(task_id)
         .map(|path| path.to_string_lossy().into_owned());
-    match request.spec(&meta.session_id, &cwd, archive_path) {
+    match request.spec(&session_id, &cwd, archive_path) {
         Ok(spec) => launch(&spec, services, driver, policy, results),
         Err(error) => {
             let _ = results.send(ActionResult::Flash(error.to_string()));

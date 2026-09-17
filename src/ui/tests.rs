@@ -6,6 +6,7 @@
 
 mod board;
 mod conversation;
+mod deploy;
 mod dialogs;
 mod extras_dialogs;
 mod harness;

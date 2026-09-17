@@ -41,7 +41,7 @@ pub use launch::{
     working_stage_move, DirChoice, Gate, LaunchKind, RacingSession,
 };
 pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate};
-pub use spec::{short, LaunchSpec, PromptContext, ResumeRequest, SendSpec};
+pub use spec::{short, LaunchSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec};
 pub use start::{start, task_url, StartRequest};
 pub use view::{label, snapshot, window, BoardRow, BoardSnapshot, BoardWindow};
 
@@ -87,6 +87,7 @@ pub fn apply_result(state: &mut AppState, result: ActionResult) {
                 detail::apply_description(state, task_id, detail.as_ref());
             }
         }
+        ActionResult::Deploy(update) => state.apply_deploy(*update),
         // The ones the loop owns; `apply_result` is the fallback arm.
         ActionResult::Flash(_)
         | ActionResult::Refresh

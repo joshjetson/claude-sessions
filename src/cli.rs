@@ -26,6 +26,38 @@ pub(crate) mod markers;
 mod pipeline;
 mod signals;
 
+/// The daemon's engine, with the outside world wired in where it is
+/// configured.
+///
+/// Every hook is optional on purpose: an install with no Odoo credentials still
+/// scans sessions, archives transcripts and raises notifications, and one with
+/// no `gitlabHost` does all of that plus the board. The deploy hook is the only
+/// one that needs both, because it reads a task's merge request through `glab`.
+fn daemon_options(paths: Paths, config: ConfigHandle) -> EngineOptions {
+    let mut options = EngineOptions::system(paths, config);
+    let creds = options.config.odoo_creds();
+    if !creds.is_complete() {
+        return options;
+    }
+    let odoo = Arc::new(crate::odoo::OdooClient::new(creds));
+    let gitlab = crate::gitlab::Gitlab::for_config(&options.config, options.spawn);
+    options.backend = Arc::new(crate::daemon::OdooTaskBackend::new(
+        Arc::clone(&odoo),
+        gitlab.clone(),
+        options.config.clone(),
+    ));
+    // Cloned into the hook rather than borrowed: the engine outlives this
+    // function, and a deploy fetch happens on a worker thread.
+    let specs_config = options.config.clone();
+    options.fetch_deploy = Some(Box::new(move || {
+        let specs = crate::deploy::deploy_specs(&specs_config);
+        let mut board = crate::deploy::fetch_deploy_board(&odoo, &specs)?;
+        crate::deploy::enrich_with_live_mrs(&gitlab, &mut board);
+        Ok(board)
+    }));
+    options
+}
+
 /// How often the daemon's main thread wakes to notice a signal.
 const SIGNAL_POLL: Duration = Duration::from_millis(200);
 /// The environment variable a spawned agent carries its task id in.
@@ -239,7 +271,7 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
     // One sample a minute into `runtime/memory.log`, and only when asked for.
     let _diagnostics = crate::diagnostics::start(&paths, "daemon", config.diagnostics());
 
-    let mut options = EngineOptions::system(paths.clone(), config);
+    let mut options = daemon_options(paths.clone(), config);
     options.usage = Some(hooks::usage_hook(&paths, options.spawn));
     options.daily_log = Some(hooks::daily_log_hook(&paths));
     let engine = Arc::new(Engine::new(options));

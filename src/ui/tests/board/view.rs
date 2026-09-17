@@ -336,11 +336,17 @@ fn ssh_and_the_browser_work_from_any_row_in_a_projects_block() {
 }
 
 #[test]
-fn the_keys_that_land_later_say_so_rather_than_doing_nothing() {
+fn m_opens_the_merge_request_browser_and_asks_for_the_list() {
     let (_dir, mut state) = board_state();
     super::press(&mut state, KeyCode::Char('M'));
-    let flash = state.flash.clone().unwrap_or_default();
-    assert!(flash.contains("deploy phase"), "{flash}");
+    assert_eq!(
+        state.dialog.as_ref().map(crate::ui::dialogs::Dialog::name),
+        Some("openMRs")
+    );
+    assert!(state
+        .take_actions()
+        .iter()
+        .any(|action| matches!(action, Action::FetchOpenMrs)));
 }
 
 #[test]

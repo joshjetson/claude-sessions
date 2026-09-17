@@ -66,6 +66,47 @@ pub fn hint(text: &str) -> Line<'static> {
     Line::from(Span::styled(text.to_string(), gray()))
 }
 
+/// One line in a named theme colour.
+pub fn coloured(text: impl Into<String>, color: &str) -> Line<'static> {
+    Line::from(Span::styled(
+        text.into(),
+        Style::default().fg(color_from_name(color)),
+    ))
+}
+
+pub fn bold(text: impl Into<String>) -> Line<'static> {
+    Line::from(Span::styled(
+        text.into(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))
+}
+
+/// The shape every irreversible confirmation shares: what will happen, then a
+/// choice that starts on Cancel.
+///
+/// Written once because there are five of them and the property that matters —
+/// Enter-mashing cancels — has to hold for all five.
+pub fn render_confirm(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    border: &str,
+    lines: &[Line<'static>],
+    choice: &InlineChoice,
+) {
+    let mut all = lines.to_vec();
+    all.push(Line::default());
+    all.extend(choice.lines());
+    render_modal(
+        frame,
+        area,
+        title,
+        color_from_name(border),
+        all,
+        dialog_width(area, 74),
+    );
+}
+
 // --- SelectList -------------------------------------------------------------
 
 /// A windowed, keyboard-driven list. The window is computed from the visible

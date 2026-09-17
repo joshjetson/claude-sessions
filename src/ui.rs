@@ -17,6 +17,7 @@
 //! - [`feed`], [`feed_remote`] — where sessions come from: this machine, or a
 //!   daemon over SSE.
 //! - [`board`] — the Odoo task board: rows, detail, the launch flow.
+//! - [`deploy`] — the Deploy tab: live MR badges, merging, the deploy runner.
 //! - [`actions`], [`run`] — the worker thread and the event loop.
 
 pub mod actions;
@@ -24,6 +25,7 @@ pub mod app;
 pub mod board;
 pub mod components;
 pub mod conversation;
+pub mod deploy;
 pub mod dialogs;
 pub mod feed;
 pub mod feed_remote;

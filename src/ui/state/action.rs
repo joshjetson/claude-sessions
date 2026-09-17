@@ -13,6 +13,19 @@ use crate::term::SessionRef;
 use crate::types::{NotificationLevel, NotificationStatus};
 use crate::ui::board::{LaunchSpec, ResumeRequest, SendSpec};
 
+/// One merge request the Deploy tab is about to merge.
+///
+/// Resolved on the UI thread from the row the cursor is on, so the worker
+/// merges exactly what the confirmation dialog listed — not whatever the board
+/// says by the time the merge runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeTarget {
+    pub task_id: i64,
+    pub name: String,
+    pub iid: i64,
+    pub project_path: String,
+}
+
 /// Work the UI thread refuses to do itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
@@ -107,4 +120,27 @@ pub enum Action {
         ids: Vec<String>,
         status: Option<NotificationStatus>,
     },
+
+    // --- deploy --------------------------------------------------------------
+    /// Reload the deploy board. Manual only: one GitLab call per open MR.
+    RefreshDeploy,
+    /// Merge these, in order, one at a time.
+    ///
+    /// One variant for `m` and `M` rather than two: merging one is merging a
+    /// list of one, and the sequential-so-failures-are-attributable rule should
+    /// exist once (WORKING.md rule 5).
+    MergeMrs {
+        project: String,
+        targets: Vec<MergeTarget>,
+    },
+    /// Run a project's deploy command — on the daemon when there is one, so it
+    /// outlives this dashboard.
+    StartDeploy {
+        project: String,
+    },
+    CancelDeploy {
+        project: String,
+    },
+    /// The current user's open merge requests, for the board tab's `M`.
+    FetchOpenMrs,
 }

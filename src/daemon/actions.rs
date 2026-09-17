@@ -70,8 +70,12 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.publish(EngineEvent::Board { loading, error });
     }
 
-    /// The same for the deploy tab, whose shape Phase 10 defines.
-    pub fn set_deploy(&self, deploy: Option<serde_json::Value>, error: Option<String>) {
+    /// Hand the engine a freshly fetched deploy board.
+    ///
+    /// The mirror of [`set_board`](Engine::set_board), and the seam a dashboard
+    /// that fetched the board itself pushes through. A failed fetch keeps the
+    /// previous board and puts the reason beside it.
+    pub fn set_deploy(&self, deploy: Option<crate::types::DeployBoard>, error: Option<String>) {
         {
             let mut state = self.inner.state();
             if deploy.is_some() {

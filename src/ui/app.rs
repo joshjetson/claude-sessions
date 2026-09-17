@@ -58,19 +58,7 @@ fn draw_list(frame: &mut Frame, state: &mut AppState, area: Rect) {
     match state.view {
         View::Sessions => draw_sessions(frame, state, area),
         View::Board => draw_board(frame, state, area),
-        View::Deploy => render_list(
-            frame,
-            area,
-            " Deploy ",
-            placeholder_lines(&[
-                "The deploy board arrives with the deploy phase.",
-                "",
-                "It brings Deployed-stage tasks, live MR badges and the",
-                "deploy runner's output pane.",
-            ]),
-            None,
-            state.focus == Pane::Tree,
-        ),
+        View::Deploy => draw_deploy(frame, state, area),
     }
 }
 
@@ -152,6 +140,22 @@ fn draw_board(frame: &mut Frame, state: &mut AppState, area: Rect) {
     );
 }
 
+/// The Deploy tab's list. Only the window is formatted, like the board's.
+fn draw_deploy(frame: &mut Frame, state: &mut AppState, area: Rect) {
+    let content_h = area.height.saturating_sub(2) as usize;
+    let label = crate::ui::deploy::label(&state.deploy);
+    let view = crate::ui::deploy::window(state, state.list_scroll, content_h);
+    state.list_scroll = view.top;
+    render_list(
+        frame,
+        area,
+        &label,
+        view.lines,
+        Some(view.selected.saturating_sub(view.top)),
+        state.focus == Pane::Tree,
+    );
+}
+
 fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let inner_w = area.width.saturating_sub(2) as usize;
     let content_h = area.height.saturating_sub(2) as usize;
@@ -200,10 +204,27 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
                 ]),
             ),
         },
-        (None, View::Deploy) => (
-            " Deploy ".to_string(),
-            placeholder_lines(&["Deploy phase pending."]),
-        ),
+        (None, View::Deploy) => match &state.deploy.detail {
+            Some(detail) => (
+                detail.label.clone(),
+                detail
+                    .rows
+                    .iter()
+                    .map(|row| crate::ui::spans::row_line(row))
+                    .collect(),
+            ),
+            None => (
+                " Deploy ".to_string(),
+                placeholder_lines(&[
+                    "Press r to load the deploy board — it never refreshes on its own,",
+                    "because every refresh costs a GitLab call per open merge request.",
+                    "",
+                    "→ preview   Enter menu   m merge   M merge all ready",
+                    "R resolve conflicts   d deploy   X cancel   L output",
+                    "g session   G terminal   o open MR   t open task   c configure",
+                ]),
+            ),
+        },
     };
 
     let wrapped: Vec<Vec<ratatui::text::Span<'static>>> = lines
@@ -275,7 +296,20 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
             ("p", "projects"),
             ("r", "refresh"),
         ]),
-        View::Deploy => hints.push(("r", "refresh")),
+        View::Deploy => hints.extend([
+            ("←→", "expand"),
+            ("Enter", "menu"),
+            ("m/M", "merge"),
+            ("R", "conflicts"),
+            ("d", "deploy"),
+            ("X", "cancel"),
+            ("L", "output"),
+            ("g/G", "session"),
+            ("o", "MR"),
+            ("t", "task"),
+            ("c", "config"),
+            ("r", "refresh"),
+        ]),
     }
     hints.extend([("q", "quit"), ("Q", "stop all")]);
     hints

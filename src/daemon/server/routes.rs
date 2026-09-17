@@ -20,7 +20,7 @@ use crate::daemon::{
     RefreshRequest, TaskLinkPatch, TaskLinkStatus,
 };
 
-use super::{Shared, NO_DEPLOYS, SHUTDOWN_DELAY};
+use super::{Shared, SHUTDOWN_DELAY};
 
 pub(super) fn route<S: ProcessSource + Send + 'static>(
     shared: &Arc<Shared<S>>,
@@ -92,10 +92,14 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         }
         ("POST", "/refresh") => {
             let body = body();
-            // The board is fetched by its own worker: the sessions tick no
-            // longer acts on the flag (Phase 9b), so honour it here.
+            // The board and the deploy board are fetched by their own workers:
+            // the sessions tick does not act on either flag, so honour them
+            // here.
             if flag(&body, "board") {
                 engine.refresh_board();
+            }
+            if flag(&body, "deploy") {
+                engine.refresh_deploy_board();
             }
             engine.refresh(RefreshRequest {
                 force_discovery: flag(&body, "forceDiscovery"),
@@ -130,16 +134,17 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
             );
             accepted()
         }
-        ("POST", "/deploy/start") | ("POST", "/deploy/cancel") => {
-            (409, json!({ "ok": false, "error": NO_DEPLOYS }))
+        // 202/409, never 400: "already deploying" and "no command configured"
+        // are states the caller can see and fix, not malformed requests.
+        ("POST", "/deploy/start") => deployed(engine.start_deploy(&text(&body(), "project", ""))),
+        ("POST", "/deploy/cancel") => deployed(engine.cancel_deploy(&text(&body(), "project", ""))),
+        ("GET", _) if path.starts_with("/deploy/log/") => {
+            // The WHOLE ring buffer, not the trailing window the events carry:
+            // this route exists for the times the window is not enough.
+            let project = protocol::percent_decode(&path["/deploy/log/".len()..]);
+            let lines = engine.deploy_log(&project);
+            (200, json!({ "project": project, "lines": lines }))
         }
-        ("GET", _) if path.starts_with("/deploy/log/") => (
-            200,
-            json!({
-                "project": protocol::percent_decode(&path["/deploy/log/".len()..]),
-                "lines": Vec::<String>::new(),
-            }),
-        ),
         ("POST", "/shutdown") => {
             let stop = Arc::clone(&shared.stop);
             let _ = thread::Builder::new()
@@ -165,6 +170,15 @@ fn answer(result: ActionResult) -> (u16, Value) {
 
 fn accepted() -> (u16, Value) {
     (202, json!({ "ok": true }))
+}
+
+/// A deploy action's answer. A refusal is 409 rather than 400: the request was
+/// well formed and the caller can act on the reason.
+fn deployed(result: ActionResult) -> (u16, Value) {
+    (
+        if result.ok { 202 } else { 409 },
+        json!({ "ok": result.ok, "error": result.error }),
+    )
 }
 
 /// The legacy `/notify` contract, unchanged since it was its own server: the

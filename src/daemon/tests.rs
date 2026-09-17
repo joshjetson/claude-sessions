@@ -21,6 +21,7 @@ mod board;
 mod cli;
 mod client;
 mod completion;
+mod deploy;
 mod fakes;
 mod linking;
 mod markers;
@@ -79,6 +80,9 @@ pub(crate) struct Setup {
     pub(crate) assigned: Option<super::engine::AssignedFetch>,
     pub(crate) usage: Option<super::engine::UsageHook>,
     pub(crate) board: Option<super::engine::BoardFetch>,
+    pub(crate) deploy: Option<super::engine::DeployFetch>,
+    /// Refused everywhere but the one test that drives a real child process.
+    pub(crate) spawn: Option<SpawnPolicy>,
 }
 
 pub(crate) fn engine() -> TestEngine {
@@ -104,13 +108,14 @@ pub(crate) fn engine_with(setup: Setup) -> TestEngine {
         backend: Arc::new(backend.clone()),
         fetch_assigned: setup.assigned,
         fetch_board: setup.board,
+        fetch_deploy: setup.deploy,
         daily_log: Some(Box::new(move |record| {
             log.lock().unwrap().push(record.clone())
         })),
         usage: setup.usage,
-        // Nothing in this crate spawns from the daemon yet; the policy is
-        // refused everywhere in tests regardless.
-        spawn: SpawnPolicy::Refuse,
+        // Refused everywhere but the one deploy test that deliberately runs a
+        // real short-lived `sh`.
+        spawn: setup.spawn.unwrap_or(SpawnPolicy::Refuse),
         ..EngineOptions::with_scanner(
             paths.clone(),
             config,

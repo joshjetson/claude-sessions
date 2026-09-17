@@ -7,6 +7,7 @@
 //! flash message and a refresh request.
 
 pub mod board;
+pub mod deploy;
 mod services;
 mod system;
 
@@ -58,6 +59,8 @@ pub enum ActionResult {
     Launched,
     /// A board fetch landed.
     Board(Box<BoardUpdate>),
+    /// A deploy-board fetch landed.
+    Deploy(Box<crate::ui::deploy::DeployUpdate>),
     /// Something a dialog was waiting on.
     Data(Box<BoardData>),
     /// A plan-usage reading this process took.
@@ -94,6 +97,8 @@ pub enum BoardData {
         task_id: i64,
         label: String,
     },
+    /// The current user's open merge requests, for the board tab's `M`.
+    OpenMrs(Vec<crate::gitlab::OpenMr>),
     /// `task_id` is what the answer was about, so a failure reaches the dialog
     /// that asked rather than the one that happens to be open.
     Failed {
@@ -295,6 +300,17 @@ fn run(
         Action::WritePipelineTemplate { repo, pipeline_id } => {
             board::write_pipeline_template(&repo, &pipeline_id, results)
         }
+
+        // --- deploy -------------------------------------------------------------
+        Action::RefreshDeploy => deploy::refresh(services, results),
+        Action::MergeMrs { project, targets } => {
+            deploy::merge(services, &project, &targets, results)
+        }
+        Action::FetchOpenMrs => deploy::open_mrs(services, results),
+        // Starting and cancelling belong to the ENGINE, not to this worker: a
+        // deploy has to outlive the dashboard, so the feed posts it to the
+        // daemon and the loop handles the answer.
+        Action::StartDeploy { .. } | Action::CancelDeploy { .. } => {}
         // The engine owns the notification list and persists it; the daemon
         // client that writes a status change through arrives with Phase 6. The
         // local copy has already been updated for immediate feedback.

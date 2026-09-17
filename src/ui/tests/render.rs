@@ -97,11 +97,14 @@ fn an_empty_tree_says_so_rather_than_drawing_a_blank_pane() {
 }
 
 #[test]
-fn a_view_that_is_not_built_yet_names_the_phase_that_brings_it() {
+fn the_deploy_tab_says_it_only_loads_when_asked() {
+    // The one tab that never refreshes on its own: every load costs a GitLab
+    // call per open merge request, so an empty pane has to say why.
     let (_dir, mut state) = sessions_state();
     state.view = View::Deploy;
     let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
-    assert!(painted.contains("deploy phase"), "{painted}");
+    assert!(painted.contains("Deploy"), "{painted}");
+    assert!(painted.contains("Press r to load"), "{painted}");
 }
 
 #[test]

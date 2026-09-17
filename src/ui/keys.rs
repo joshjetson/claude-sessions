@@ -22,6 +22,17 @@ mod dialog;
 use dialog::apply_dialog_outcome;
 pub use dialog::go_to_session;
 
+/// Carry out a dialog outcome without a dialog being open — how a test drives
+/// the half of a flow that lives in the dispatcher.
+#[cfg(test)]
+pub(crate) fn apply_outcome_for_test(
+    state: &mut AppState,
+    outcome: crate::ui::dialogs::DialogOutcome,
+) {
+    let placeholder = Dialog::Shutdown(ShutdownConfirm::default());
+    apply_dialog_outcome(state, placeholder, outcome);
+}
+
 /// A read-only look at the sessions tree as it stands right now.
 pub struct TreeSnapshot {
     pub keys: Vec<String>,
@@ -78,9 +89,7 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
     match state.view {
         View::Sessions => handle_sessions(state, key),
         View::Board => handle_board(state, key),
-        // Phase 10 owns the deploy view; until then its pane is a placeholder
-        // and only the global keys apply.
-        View::Deploy => {}
+        View::Deploy => crate::ui::deploy::handle_deploy(state, key),
     }
 }
 
@@ -100,9 +109,13 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
         }
         // Shift-Q stops the daemon too, which can kill work — so it confirms.
         KeyCode::Char('Q') => {
-            state.dialog = Some(Dialog::Shutdown(ShutdownConfirm::from_sessions(
-                state.sessions(),
-            )));
+            // The deploys it names are the ones actually running: stopping the
+            // daemon kills its children, and saying so is the whole reason
+            // this confirmation exists.
+            state.dialog = Some(Dialog::Shutdown(
+                ShutdownConfirm::from_sessions(state.sessions())
+                    .with_deploys(state.deploy.running_deploys()),
+            ));
             true
         }
         KeyCode::Tab if !key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -122,6 +135,10 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
             refresh_usage(state);
             true
         }
+        // On the Deploy tab `L` is the running deploy's output; lowercase `l`
+        // stays the standup log everywhere. The Node original special-cases it
+        // in exactly this order, before the global arm below.
+        KeyCode::Char('L') if state.view == View::Deploy => false,
         KeyCode::Char('l') | KeyCode::Char('L') => {
             // A connection of its own: the day list is the union of the
             // markdown files and the database, and the database knows about
@@ -137,10 +154,14 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
         }
         KeyCode::Char('r') if !renames_instead(state) => {
             state.enqueue(Action::Refresh);
-            // On the board tab `r` is also the retry the error message asks
-            // for, so it refetches rather than only rescanning processes.
-            if state.view == View::Board {
-                crate::ui::board::keys::refresh(state);
+            // On the board and deploy tabs `r` is also the retry the error
+            // message asks for, so it refetches rather than only rescanning
+            // processes. On the Deploy tab it is the ONLY thing that ever
+            // refetches: every load spends a GitLab call per open MR.
+            match state.view {
+                View::Board => crate::ui::board::keys::refresh(state),
+                View::Deploy => crate::ui::deploy::keys::refresh(state),
+                View::Sessions => {}
             }
             true
         }

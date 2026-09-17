@@ -16,7 +16,7 @@ use crate::db::Db;
 use crate::paths::Paths;
 use crate::scan::{ProcessSource, Scanner, SystemProcessSource};
 use crate::term::SpawnPolicy;
-use crate::types::{Board, Task};
+use crate::types::{Board, DeployBoard, Task};
 
 use super::backend::{NullBackend, TaskBackend};
 use super::caches::Caches;
@@ -43,6 +43,13 @@ pub type UsageHook = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 /// instead of failing a request every 45 seconds.
 pub type BoardFetch = Box<dyn Fn(BoardFilter) -> Result<Board, String> + Send + Sync>;
 
+/// The Deploy tab's query — Odoo for the Deployed-stage tasks, then `glab` for
+/// each merge request's live state. Behind the same injection seam as
+/// [`BoardFetch`], and for one extra reason: it is the only engine hook that
+/// costs a GitLab API call per open merge request, so a daemon with no GitLab
+/// configured simply has none installed.
+pub type DeployFetch = Box<dyn Fn() -> Result<DeployBoard, String> + Send + Sync>;
+
 /// What a client asked a refresh to cover.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RefreshRequest {
@@ -51,7 +58,8 @@ pub struct RefreshRequest {
     /// board is fetched by [`Engine::refresh_board`], which hands the round
     /// trip to a worker rather than making the caller wait seconds for it.
     pub board: bool,
-    /// Phase 10 reads this.
+    /// A client asking for the deploy board too. Never set by a timer: the
+    /// deploy board is refreshed on request only.
     pub deploy: bool,
 }
 
@@ -118,6 +126,7 @@ pub(crate) struct EngineInner<S: ProcessSource> {
     pub(crate) backend: Arc<dyn TaskBackend>,
     pub(crate) fetch_assigned: Option<AssignedFetch>,
     pub(crate) fetch_board: Option<BoardFetch>,
+    pub(crate) fetch_deploy: Option<DeployFetch>,
     pub(crate) daily_log: Option<DailyLogHook>,
     pub(crate) usage: Option<UsageHook>,
     pub(crate) spawn: SpawnPolicy,
@@ -189,12 +198,17 @@ pub struct EngineOptions<S: ProcessSource = SystemProcessSource> {
     pub paths: Paths,
     pub config: ConfigHandle,
     pub scanner: Scanner<S>,
-    /// Phases 9b and 10 replace this with the real Odoo/GitLab implementation.
+    /// The Odoo/GitLab implementation of what the completion and deploy flows
+    /// need. [`NullBackend`] is a supported configuration: a daemon with no
+    /// credentials still scans, archives and notifies.
     pub backend: Arc<dyn TaskBackend>,
     pub fetch_assigned: Option<AssignedFetch>,
     /// The board poll. `None` leaves the board tab empty and says so, which is
     /// what a daemon with no Odoo credentials should do.
     pub fetch_board: Option<BoardFetch>,
+    /// The deploy-board query. `None` leaves the Deploy tab empty and says so,
+    /// which is what an install with no GitLab should do.
+    pub fetch_deploy: Option<DeployFetch>,
     /// Phase 11 wires the standup log in here.
     pub daily_log: Option<DailyLogHook>,
     pub usage: Option<UsageHook>,
@@ -218,6 +232,7 @@ impl<S: ProcessSource> EngineOptions<S> {
             backend: Arc::new(NullBackend),
             fetch_assigned: None,
             fetch_board: None,
+            fetch_deploy: None,
             daily_log: None,
             usage: None,
             spawn: SpawnPolicy::detect(),
@@ -251,6 +266,7 @@ impl<S: ProcessSource> Engine<S> {
                 backend: options.backend,
                 fetch_assigned: options.fetch_assigned,
                 fetch_board: options.fetch_board,
+                fetch_deploy: options.fetch_deploy,
                 daily_log: options.daily_log,
                 usage: options.usage,
                 spawn: options.spawn,
@@ -293,8 +309,8 @@ impl<S: ProcessSource> Engine<S> {
         &self.inner.db
     }
 
-    /// Whether this process may start child processes. Phases 9b and 10 gate
-    /// their launches and deploys on it; the engine itself starts nothing.
+    /// Whether this process may start child processes. The launch flow and the
+    /// deploy supervisor both gate on it.
     pub fn spawn_policy(&self) -> SpawnPolicy {
         self.inner.spawn
     }

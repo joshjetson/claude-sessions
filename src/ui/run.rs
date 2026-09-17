@@ -158,9 +158,10 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
 
     let services = BoardServices::new(
         paths.clone(),
+        &config,
         odoo_client(&config),
         crate::optics::OpticsClient::from_config(&config).map(std::sync::Arc::new),
-        config.sounds(),
+        policy,
     );
     // The UI thread reads this cache while labelling the QA menu row and never
     // fills it; the worker fills it. See [`crate::qaden::HeadCache`].
@@ -246,6 +247,17 @@ fn event_loop(
                 FeedEvent::Notification(notification) => state.push_notification(*notification),
                 FeedEvent::Board(update) => state.apply_board(*update),
                 FeedEvent::Usage(usage) => state.apply_usage(*usage),
+                FeedEvent::Deploy(update) => state.apply_deploy(*update),
+                FeedEvent::DeployRun(run) => {
+                    let project = run.project.clone();
+                    state.deploy.set_run(*run);
+                    crate::ui::deploy::redraw(state, &project);
+                }
+                FeedEvent::DeployOutput { project, line } => {
+                    state.deploy.push_line(&project, line);
+                    crate::ui::deploy::redraw(state, &project);
+                }
+                FeedEvent::Flash(message) => state.flash(message),
             }
         }
 
@@ -295,6 +307,14 @@ fn event_loop(
                     feed.note_launch();
                     worker.submit(action);
                 }
+                // Deploys belong to the engine, not to the worker: the child
+                // has to outlive this dashboard.
+                Action::StartDeploy { project } => {
+                    if let Some(message) = feed.start_deploy(&project) {
+                        state.flash(message);
+                    }
+                }
+                Action::CancelDeploy { project } => feed.cancel_deploy(&project),
                 Action::OpenEditor { path, line } => {
                     // The only action the main thread runs itself: it has to
                     // hand over the terminal, which the worker cannot do.

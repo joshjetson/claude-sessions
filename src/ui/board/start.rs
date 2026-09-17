@@ -17,7 +17,7 @@ use super::launch::{
     all_discovered_dirs, gate_start, prompt_context, resolve_task_dir, working_stage_move,
     DirChoice, Gate, LaunchKind,
 };
-use super::spec::{short, LaunchSpec, ResumeRequest};
+use super::spec::{short, LaunchSpec, ResumePurpose, ResumeRequest};
 
 /// What a dialog asks the board to do once the user has decided.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,7 +170,11 @@ fn resume(state: &mut AppState, request: StartRequest) {
     );
     state.enqueue(Action::Resume(Box::new(ResumeRequest {
         prompt,
-        revision,
+        purpose: if revision {
+            ResumePurpose::Revision
+        } else {
+            ResumePurpose::Conversation
+        },
         link_cwd: state
             .board
             .link(task.id)

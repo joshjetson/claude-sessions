@@ -15,7 +15,7 @@
 
 mod fetch;
 mod queries;
-mod records;
+pub mod records;
 mod rpc;
 mod stages;
 

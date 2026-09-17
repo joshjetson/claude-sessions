@@ -315,7 +315,11 @@ impl DaemonClient {
         .is_some_and(|response| response.accepted())
     }
 
-    /// Phase 10 makes these succeed; today they are a clean refusal.
+    /// Start a deploy on the daemon, so it outlives this dashboard.
+    ///
+    /// The refusal (409) is returned rather than swallowed: "already
+    /// deploying" and "no command configured" are both things the user needs
+    /// to be told, in the daemon's own words.
     pub fn start_deploy(&self, project: &str) -> Option<Response> {
         self.post("/deploy/start", json!({ "project": project }))
     }
@@ -324,11 +328,22 @@ impl DaemonClient {
         self.post("/deploy/cancel", json!({ "project": project }))
     }
 
+    /// Everything the daemon still holds for a run — the whole ring buffer,
+    /// not the trailing window the events carry.
     pub fn deploy_log(&self, project: &str) -> Vec<String> {
-        let encoded = project.replace(' ', "%20").replace('/', "%2F");
+        let encoded = crate::gitlab::encode_uri_component(project);
         self.get(&format!("/deploy/log/{encoded}"))
             .and_then(|response| serde_json::from_value(response.body.get("lines")?.clone()).ok())
             .unwrap_or_default()
+    }
+
+    /// Ask the daemon to reload the deploy board. Manual by design: every
+    /// refresh spends a GitLab API call per open merge request.
+    pub fn refresh_deploy(&self) -> bool {
+        self.refresh(RefreshRequest {
+            deploy: true,
+            ..RefreshRequest::default()
+        })
     }
 
     pub fn shutdown(&self) -> bool {

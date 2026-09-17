@@ -198,8 +198,9 @@ fn resuming_a_conversation_sends_no_prompt_and_moves_no_stage() {
     else {
         panic!("no resume");
     };
-    assert!(
-        !request.revision,
+    assert_eq!(
+        request.purpose,
+        crate::ui::board::ResumePurpose::Conversation,
         "the conversation path asked for a revision"
     );
     assert!(
@@ -230,7 +231,7 @@ fn a_revision_resumed_into_a_tab_does_carry_both() {
     else {
         panic!("no resume");
     };
-    assert!(request.revision);
+    assert_eq!(request.purpose, crate::ui::board::ResumePurpose::Revision);
     assert!(request.stage_move.is_some());
     let spec = request.spec("archived", "/tmp", None).expect("a spec");
     assert!(spec.prompt.is_some());
