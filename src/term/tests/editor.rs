@@ -32,6 +32,31 @@ mod fake {
         (dir, bin)
     }
 
+    /// `cargo test` forks from many threads at once, so another test's child
+    /// can inherit this script's write fd for the instant between open and
+    /// close - exec then fails with "text file busy". Real editors are not
+    /// written milliseconds before they run; only the fixture needs the retry.
+    pub(super) fn run_fake_editor(
+        editor: &Editor,
+        file: &str,
+        line: u32,
+        policy: crate::term::SpawnPolicy,
+    ) -> crate::term::EditorOutcome {
+        let mut last = crate::term::run_editor(editor, file, line, policy);
+        for _ in 0..40 {
+            let busy = last
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("busy") || e.contains("Busy"));
+            if !busy {
+                return last;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            last = crate::term::run_editor(editor, file, line, policy);
+        }
+        last
+    }
+
     pub(super) fn editor_at(bin: &Path, args: &[&str]) -> Editor {
         Editor {
             cmd: bin.display().to_string(),
@@ -42,7 +67,7 @@ mod fake {
 }
 
 #[cfg(unix)]
-use fake::{editor_at, fake_editor};
+use fake::{editor_at, fake_editor, run_fake_editor};
 #[cfg(unix)]
 use std::fs;
 
@@ -151,7 +176,7 @@ fn runs_the_editor_against_the_file_and_reports_success() {
     let file = dir.path().join("pipeline.json");
     fs::write(&file, "original\n").expect("write");
 
-    let result = crate::term::run_editor(
+    let result = run_fake_editor(
         &editor_at(&bin, &[]),
         &file.display().to_string(),
         0,
@@ -171,7 +196,7 @@ fn passes_editor_arguments_before_the_filename() {
     fs::write(&file, "").expect("write");
     let path = file.display().to_string();
 
-    crate::term::run_editor(&editor_at(&bin, &["--flag"]), &path, 0, ALLOWED);
+    run_fake_editor(&editor_at(&bin, &["--flag"]), &path, 0, ALLOWED);
     assert_eq!(
         fs::read_to_string(&file).expect("read"),
         format!("--flag {path}")
@@ -182,7 +207,7 @@ fn passes_editor_arguments_before_the_filename() {
 #[cfg(unix)]
 fn a_non_zero_exit_is_reported_not_thrown() {
     let (dir, bin) = fake_editor("exit 3");
-    let result = crate::term::run_editor(
+    let result = run_fake_editor(
         &editor_at(&bin, &[]),
         &dir.path().join("x").display().to_string(),
         0,
