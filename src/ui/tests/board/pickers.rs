@@ -147,7 +147,12 @@ fn the_pipeline_viewer_writes_a_template_and_opens_an_editor_when_it_has_one() {
     else {
         panic!("e did not open an editor");
     };
-    assert!(path.ends_with(".claude-sessions/pipeline.json"), "{path}");
+    // Compared by component rather than by spelling: the separator differs by
+    // platform, and what is being asserted is which file, not how it is written.
+    assert!(
+        std::path::Path::new(&path).ends_with(".claude-sessions/pipeline.json"),
+        "{path}"
+    );
     // The template was written first, so `e` lands in a file that exists…
     assert!(std::path::Path::new(&path).exists(), "{path}");
     // …on the step that was selected, not the top.

@@ -29,6 +29,19 @@ use crate::util::cwd_to_project_dir;
 
 const HOUR: Duration = Duration::from_secs(3600);
 
+/// A fixture working directory that survives `std::path::absolute`, which the
+/// ancestor search applies before encoding a transcript directory name.
+///
+/// A Unix-rooted literal like `/repo/atlas` picks up the current drive on
+/// Windows and no longer encodes to the directory the fixture wrote, so the
+/// search finds nothing and the test measures the fixture rather than the code.
+/// On Unix this is the identity — `absolute` is lexical and touches no disk.
+fn rooted(path: &str) -> String {
+    std::path::absolute(path)
+        .map(|absolute| absolute.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string())
+}
+
 /// One archive over a throwaway tree, with the transcript-head cache a daemon
 /// shares between the scanner and this module.
 struct TestArchive {

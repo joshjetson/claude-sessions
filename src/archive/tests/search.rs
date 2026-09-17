@@ -32,15 +32,8 @@ fn the_ancestor_search_finds_the_repo_from_a_subfolder() {
     // An agent that ran `cd` into a subfolder before finishing reports a cwd no
     // session directory matches — Claude keys them by exact path.
     //
-    // The repo is absolutised first because the search is: it walks the parents
-    // of `std::path::absolute(cwd)`, which on Windows prefixes the current
-    // drive. Handing it a cwd that is already rooted the way the walk will root
-    // it is what makes the fixture and the search agree on one platform as much
-    // as the other — and on Unix it is the same string either way.
-    let repo = std::path::absolute("/repo/portal")
-        .expect("absolute")
-        .to_string_lossy()
-        .into_owned();
+    // Rooted for the platform: the search absolutises before it encodes.
+    let repo = rooted("/repo/portal");
     let mut t = open();
     let own = t.transcript(Some(4033), &repo);
 
