@@ -143,6 +143,7 @@ fn keys_identify_a_row_across_refreshes() {
         session_id: None,
         task_id: None,
         level: crate::types::NotificationLevel::Info,
+        kind: crate::types::NotificationKind::Info,
         ts: String::new(),
         status: crate::types::NotificationStatus::Unread,
     };

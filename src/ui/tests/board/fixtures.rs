@@ -15,8 +15,8 @@ use tempfile::TempDir;
 use crate::daemon::{TaskLink, TaskLinkStatus};
 use crate::term::{DriverResult, LaunchRequest, SessionRef, TerminalDriver};
 use crate::types::{
-    Board, BoardProject, BoardStage, Notification, NotificationLevel, NotificationStatus, Session,
-    SessionStatus, Task,
+    Board, BoardProject, BoardStage, Notification, NotificationKind, NotificationLevel,
+    NotificationStatus, Session, SessionStatus, Task,
 };
 use crate::ui::board::{BoardUpdate, StartRequest};
 use crate::ui::state::{Action, AppState, View};
@@ -145,6 +145,7 @@ pub fn notification(id: &str, task_id: Option<i64>) -> Notification {
         session_id: None,
         task_id,
         level: NotificationLevel::Warn,
+        kind: NotificationKind::Info,
         ts: "2026-09-16T14:05:06.000Z".to_string(),
         status: NotificationStatus::Unread,
     }

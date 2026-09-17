@@ -20,7 +20,7 @@ pub use board::{Board, BoardProject, BoardStage, OdooCreds, Task};
 pub use deploy::{
     DeployBoard, DeployProjectState, DeployRun, DeployRunStatus, DeployTask, MergeRequest,
 };
-pub use notify::{Notification, NotificationLevel, NotificationStatus};
+pub use notify::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
 pub use session::{RawSession, Session, SessionFile, SessionStatus};
 pub use transcript::{
     ConversationMessage, CumulativeUsage, EntryKind, LastEntry, MessageRole, ParsedSession,
