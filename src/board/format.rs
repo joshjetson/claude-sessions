@@ -349,6 +349,7 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
             let id_text = format!("#{}", entry.task_id);
 
             row.plain(" ".repeat(INDENT as usize))
+                .plain(name.clone())
                 .plain(pad(&name, name_width + 1))
                 .styled(id_text.clone(), Role::Id)
                 .plain(pad(&id_text, ID_COL as usize));
@@ -411,9 +412,16 @@ fn prefixed(text: impl Into<String>, role: Role) -> Row {
     row.build()
 }
 
-/// Pad to a fixed column on the DISPLAY width, never the byte length: the
-/// glyphs in these rows are multi-byte, and counting bytes pushes every column
-/// out by their length.
+/// The SPACES that carry `text` out to a fixed column — not the text itself.
+///
+/// Callers push the text and then this. Pushing only this is how the run rows
+/// once rendered as a column of bare ids at ragged indentation: the leftover
+/// padding stood in for the name, so the "indent" varied with the length of the
+/// name nobody could see.
+///
+/// Measured on the DISPLAY width, never the byte length: the glyphs in these
+/// rows are multi-byte, and counting bytes pushes every column out by their
+/// length.
 fn pad(text: &str, width: usize) -> String {
     let used = unicode_width::UnicodeWidthStr::width(text);
     " ".repeat(width.saturating_sub(used).max(1))
