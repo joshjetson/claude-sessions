@@ -60,16 +60,34 @@ mirror:
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_COMMIT_TAG
   script:
-    - test -f "$GITHUB_MIRROR_KEY" || { echo "GITHUB_MIRROR_KEY variable is not set"; exit 1; }
-    - chmod 600 "$GITHUB_MIRROR_KEY"
-    - mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-    - export GIT_SSH_COMMAND="ssh -i $GITHUB_MIRROR_KEY -o IdentitiesOnly=yes"
-    - git remote add github git@github.com:joshjetson/claude-sessions.git 2>/dev/null || true
+    - REPO=joshjetson/claude-sessions
+    - |
+      if [ -n "$GITHUB_MIRROR_TOKEN" ]; then
+        # HTTPS transport: plain 443, the most firewall-friendly route.
+        REMOTE="https://x-access-token:${GITHUB_MIRROR_TOKEN}@github.com/${REPO}.git"
+      else
+        test -f "$GITHUB_MIRROR_KEY" || { echo "set GITHUB_MIRROR_TOKEN (https) or GITHUB_MIRROR_KEY (ssh)"; exit 1; }
+        chmod 600 "$GITHUB_MIRROR_KEY"
+        mkdir -p ~/.ssh
+        # This runner sits behind a firewall: port 22 egress may be closed, so
+        # try SSH-over-443 first and classic 22 second, and say what failed.
+        if ssh-keyscan -p 443 ssh.github.com >> ~/.ssh/known_hosts 2>/dev/null; then
+          REMOTE="ssh://git@ssh.github.com:443/${REPO}.git"
+        elif ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null; then
+          REMOTE="git@github.com:${REPO}.git"
+        else
+          echo "no SSH route to GitHub from this runner (tried ssh.github.com:443 and github.com:22)."
+          echo "either open egress, or create a fine-grained PAT (contents read/write on ${REPO})"
+          echo "and store it as CI variable GITHUB_MIRROR_TOKEN - this job then mirrors over HTTPS."
+          exit 1
+        fi
+        export GIT_SSH_COMMAND="ssh -i $GITHUB_MIRROR_KEY -o IdentitiesOnly=yes"
+      fi
     - |
       if [ -n "$CI_COMMIT_TAG" ]; then
-        git push github "refs/tags/$CI_COMMIT_TAG"
+        git push "$REMOTE" "refs/tags/$CI_COMMIT_TAG"
       else
         # Non-fast-forward means GitHub moved independently; surface it here
         # rather than force-pushing over it - reconcile, never clobber.
-        git push github "HEAD:refs/heads/main"
+        git push "$REMOTE" "HEAD:refs/heads/main"
       fi
