@@ -317,6 +317,16 @@ impl Entry {
             .collect()
     }
 
+    /// Whether any content block is a tool result.
+    fn has_tool_result(&self) -> bool {
+        let Some(Content::Blocks(blocks)) = self.message.as_ref().map(|m| &m.content) else {
+            return false;
+        };
+        blocks
+            .iter()
+            .any(|block| matches!(block, ContentBlock::ToolResult(_)))
+    }
+
     /// The projection the status machine and the activity label consume. Keeping
     /// only this much means the daemon can hold one per session without pinning
     /// whole message bodies in memory.
@@ -327,6 +337,7 @@ impl Entry {
             role: self.message.as_ref().and_then(|m| m.role),
             has_message: self.message.is_some(),
             tool_uses: self.tool_use_names(),
+            has_tool_result: self.has_tool_result(),
             progress: self.data.clone(),
         }
     }

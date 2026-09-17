@@ -135,6 +135,11 @@ pub struct LastEntry {
     /// the last one; the status machine only asks whether the list is empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_uses: Vec<String>,
+    /// This entry is a tool's OUTPUT rather than something a person typed.
+    /// A `user` entry is either one or the other, and the status machine reads
+    /// them completely differently.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_tool_result: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<ProgressData>,
 }
@@ -157,6 +162,22 @@ impl LastEntry {
 
     pub fn has_tool_use(&self) -> bool {
         !self.tool_uses.is_empty()
+    }
+
+    /// The agent asked the person a question, or put a plan up for approval.
+    ///
+    /// Unambiguous: control has been handed back. Checked ahead of every
+    /// recency rule, because otherwise the row reads "working" for the first
+    /// ten seconds of every question asked.
+    pub fn awaits_user_decision(&self) -> bool {
+        self.tool_uses
+            .iter()
+            .any(|name| matches!(name.as_str(), "AskUserQuestion" | "ExitPlanMode"))
+    }
+
+    /// A `user` entry that is a tool's output, not a person's input.
+    pub fn is_tool_result(&self) -> bool {
+        matches!(self.kind, EntryKind::User) && self.has_tool_result
     }
 }
 
