@@ -40,6 +40,12 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
             json!({
                 "ok": true,
                 "daemon": true,
+                // Which program is on this port, and which build of it. Added
+                // fields on an existing contract: an older client ignores
+                // them, and a current one refuses to mirror a daemon that
+                // does not answer them. See [`protocol::IMPLEMENTATION`].
+                "impl": protocol::IMPLEMENTATION,
+                "version": protocol::VERSION,
                 "pid": std::process::id(),
                 "uptime": shared.started.elapsed().as_secs_f64(),
                 "clients": shared.clients.len(),

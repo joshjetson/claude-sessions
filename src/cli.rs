@@ -244,6 +244,15 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
         Some("status") => {
             let Some(info) = client::probe(port, client::PROBE_TIMEOUT) else {
                 println!("no daemon on :{port}");
+                // Whatever it printed on the way down is the only thing that
+                // can explain why there is nothing there now.
+                if let Some(error) = protocol::daemon_log_last_error(&paths) {
+                    println!(
+                        "last error in {}:",
+                        protocol::daemon_log_path(&paths).display()
+                    );
+                    println!("  {error}");
+                }
                 std::process::exit(1);
             };
             println!(
@@ -252,6 +261,14 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
                 info.uptime.round(),
                 info.clients
             );
+            // WHICH daemon, always — the question nobody thought to ask while
+            // two programs of the same name shared one port.
+            println!("  running: {}", info.describe());
+            if !info.is_this_implementation() {
+                println!(
+                    "  this build will NOT mirror it: a dashboard started now scans on its own."
+                );
+            }
             Ok(())
         }
         Some("stop") => {
@@ -259,6 +276,10 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
                 println!("no daemon on :{port}");
                 std::process::exit(1);
             };
+            // Named before it is stopped, and stopped either way: an explicit
+            // command is exactly how somebody clears a port that the wrong
+            // program is holding.
+            println!("stopping {} on :{port}", info.describe());
             if !DaemonClient::new(port).shutdown() {
                 fail(format!("could not stop the daemon on :{port}"));
             }

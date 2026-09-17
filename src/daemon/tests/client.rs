@@ -287,3 +287,133 @@ fn the_dashboard_feed_mirrors_a_daemon_over_the_wire() {
     feed.shutdown_daemon();
     assert!(served.server.wait_for_shutdown(PATIENCE));
 }
+
+// --- a peer that accepts and says nothing ------------------------------------
+
+/// The v1.0.1 wedge. Something takes the daemon's port and never answers — a
+/// daemon that died after `bind`, a half-open socket a sleeping laptop left
+/// behind, a stranger on 41777 — and the dashboard's only source of sessions
+/// is a reader thread parked in a syscall nobody will end. The screen shows an
+/// empty list and no error, for as long as it is left open.
+#[test]
+fn a_peer_that_accepts_and_never_answers_does_not_hold_the_feed() {
+    use crate::test_support::StubDaemon;
+
+    let silent = StubDaemon::silent();
+    let (tx, rx) = std::sync::mpsc::channel();
+    // The real deadline named explicitly, so the give-up path is exercised
+    // without the test waiting it out; the constant itself is pinned below.
+    let mut subscription =
+        client::subscribe_with(silent.port(), Duration::from_millis(200), move |message| {
+            let _ = tx.send(message);
+        });
+
+    let first = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the subscriber never gave up on a silent socket");
+    assert_eq!(
+        first,
+        client::SseMessage::Disconnected,
+        "a socket that never sent a response head must never be reported connected"
+    );
+    // …and it keeps trying rather than dying, so the daemon coming up later is
+    // still picked up.
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).ok(),
+        Some(client::SseMessage::Disconnected)
+    );
+
+    // Closing is immediate too: the socket is shut down from this side rather
+    // than waited out.
+    let closing = std::time::Instant::now();
+    subscription.close();
+    assert!(
+        closing.elapsed() < PATIENCE,
+        "closing the subscription hung"
+    );
+}
+
+#[test]
+fn the_handshake_deadline_is_nothing_like_the_streaming_one() {
+    // A quiet stream is healthy — the daemon pings every 25 seconds — so the
+    // streaming deadline is deliberately long. A silent handshake is never
+    // healthy, and sharing one deadline is what made the wedge last a minute
+    // at a time. The relationship is the fix; this pins it.
+    assert!(
+        client::HANDSHAKE_TIMEOUT * 10 < client::READ_TIMEOUT,
+        "the handshake deadline has drifted into the streaming one"
+    );
+    assert!(client::HANDSHAKE_TIMEOUT >= Duration::from_secs(1));
+}
+
+// --- who is on the port ------------------------------------------------------
+
+/// The incident this whole change exists for. Two programs ship under the name
+/// `claude-sessions` and both bind the same port, so a dashboard of one
+/// attached to a daemon of the other: connected, subscribed, and empty
+/// forever, with nothing anywhere saying why.
+#[test]
+fn a_daemon_that_does_not_say_which_program_it_is_is_refused_and_named() {
+    use crate::test_support::StubDaemon;
+
+    let stranger = StubDaemon::unmarked();
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+
+    // Autostart is on, which makes this the harder case: the port is taken, so
+    // starting our own would fail to bind, and attaching is what used to
+    // happen instead.
+    let refusal = client::ensure_daemon(&paths, stranger.port(), true)
+        .expect_err("a daemon with no implementation marker was accepted");
+    assert!(
+        refusal.contains(&format!("Port {}", stranger.port())),
+        "the refusal must name the port: {refusal}"
+    );
+    assert!(
+        refusal.contains("Node tool"),
+        "the refusal must name what is probably there: {refusal}"
+    );
+    assert!(
+        refusal.contains("daemon.port"),
+        "the refusal must say what to do about it: {refusal}"
+    );
+}
+
+#[test]
+fn a_daemon_of_this_build_says_so_and_is_accepted() {
+    let served = served();
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+
+    let health = client::probe(served.port(), PATIENCE).expect("no daemon answered");
+    assert_eq!(
+        health.implementation,
+        crate::daemon::protocol::IMPLEMENTATION
+    );
+    assert_eq!(health.version, env!("CARGO_PKG_VERSION"));
+    assert!(health.is_this_implementation());
+    assert!(
+        health.describe().contains(env!("CARGO_PKG_VERSION")),
+        "{}",
+        health.describe()
+    );
+
+    let target = client::ensure_daemon(&paths, served.port(), false).expect("refused our own");
+    assert_eq!(target.port, served.port());
+    assert!(!target.spawned);
+}
+
+#[test]
+fn health_without_a_marker_describes_itself_as_the_older_tool() {
+    let legacy: client::Health =
+        serde_json::from_str(crate::test_support::UNMARKED_HEALTH).expect("legacy health");
+    assert!(legacy.ok);
+    assert!(!legacy.is_this_implementation());
+    assert!(legacy.describe().contains("older claude-sessions"));
+
+    // A third implementation names itself, and is still not this one.
+    let other: client::Health =
+        serde_json::from_str(r#"{"ok":true,"impl":"something-else","version":"9"}"#).unwrap();
+    assert!(!other.is_this_implementation());
+    assert!(other.describe().contains("something-else"));
+}

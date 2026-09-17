@@ -27,7 +27,19 @@ use super::{loopback, BACKOFF_MAX, BACKOFF_MIN, PROBE_TIMEOUT};
 /// `shutdown()` can end. A half-open socket used to wedge the feed thread for
 /// good, and closing the subscription relied on `shutdown()` waking a blocked
 /// `read` — which Unix guarantees and Winsock does not.
-const READ_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const READ_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long the HANDSHAKE gets: the response head, and nothing after it.
+///
+/// Separate from [`READ_TIMEOUT`], and far shorter, because the two reads are
+/// nothing alike. A quiet stream is normal once it is running and the daemon's
+/// keep-alive is what proves the socket; a daemon that has accepted the
+/// connection and not yet said `200` is not quiet, it is wrong — a process
+/// wedged after `bind`, a stranger squatting the port, a half-open socket a
+/// sleeping laptop left behind. Under one deadline for both, that case held
+/// the dashboard's only source of sessions for a minute at a time with nothing
+/// on screen to say so.
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// One server-sent event: the name and its still-serialised payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,7 +152,17 @@ impl Drop for Subscription {
 }
 
 /// Subscribe to `/events`, reconnecting with backoff until closed.
-pub fn subscribe(port: u16, mut handler: impl FnMut(SseMessage) + Send + 'static) -> Subscription {
+pub fn subscribe(port: u16, handler: impl FnMut(SseMessage) + Send + 'static) -> Subscription {
+    subscribe_with(port, HANDSHAKE_TIMEOUT, handler)
+}
+
+/// [`subscribe`] with the handshake deadline named, so a test can drive the
+/// give-up path without waiting out the real one.
+pub(crate) fn subscribe_with(
+    port: u16,
+    handshake: Duration,
+    mut handler: impl FnMut(SseMessage) + Send + 'static,
+) -> Subscription {
     let stopped = Arc::new(AtomicBool::new(false));
     let socket: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
     let (flag, slot) = (Arc::clone(&stopped), Arc::clone(&socket));
@@ -150,7 +172,7 @@ pub fn subscribe(port: u16, mut handler: impl FnMut(SseMessage) + Send + 'static
         .spawn(move || {
             let mut backoff = BACKOFF_MIN;
             while !flag.load(Ordering::SeqCst) {
-                if stream_events(port, &flag, &slot, &mut handler) {
+                if stream_events(port, handshake, &flag, &slot, &mut handler) {
                     backoff = BACKOFF_MIN;
                 }
                 if flag.load(Ordering::SeqCst) {
@@ -174,6 +196,7 @@ pub fn subscribe(port: u16, mut handler: impl FnMut(SseMessage) + Send + 'static
 /// what resets the backoff.
 fn stream_events(
     port: u16,
+    handshake: Duration,
     stopped: &AtomicBool,
     slot: &Mutex<Option<TcpStream>>,
     handler: &mut impl FnMut(SseMessage),
@@ -181,10 +204,11 @@ fn stream_events(
     let Ok(mut stream) = TcpStream::connect_timeout(&loopback(port), PROBE_TIMEOUT) else {
         return false;
     };
-    // A quiet stream is normal — the daemon's `: ping` every 25 seconds is what
-    // proves the socket is still there — so the deadline below is long enough
-    // never to interrupt one. See [`READ_TIMEOUT`] for why there is one at all.
-    let _ = stream.set_read_timeout(Some(READ_TIMEOUT));
+    // Three deadlines cover the three ways this can hang, and they are three
+    // because they mean different things: the connect above, the handshake
+    // here, and the long one below for a running stream.
+    let _ = stream.set_read_timeout(Some(handshake));
+    let _ = stream.set_write_timeout(Some(handshake));
     let head = format!(
         "GET /events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\n\r\n"
     );
@@ -205,6 +229,10 @@ fn stream_events(
     if head.parts().1 != "200" {
         return false;
     }
+    // Answered: from here a quiet socket is a healthy one, and the deadline
+    // becomes the long one that only exists so this thread is never parked in
+    // a syscall somebody else has to end.
+    let _ = reader.get_ref().set_read_timeout(Some(READ_TIMEOUT));
     handler(SseMessage::Connected);
 
     let mut parser = SseParser::new();

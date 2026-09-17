@@ -280,13 +280,26 @@ pub fn render_content(
 
 /// The one-row status bar. `hints` are drawn dim and their keys bright, which is
 /// what makes a dense row of shortcuts scannable at a glance.
-pub fn render_status(frame: &mut Frame, area: Rect, clock: &str, hints: &[(&str, &str)]) {
+/// The status bar. `feed` names where the sessions on screen came from and how
+/// stale they are — it sits beside the clock rather than among the key hints
+/// because it is a fact about the screen, not something to press.
+pub fn render_status(
+    frame: &mut Frame,
+    area: Rect,
+    clock: &str,
+    feed: &str,
+    hints: &[(&str, &str)],
+) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let bar = Style::default().bg(STATUS_BG);
     let dim = bar.fg(color_from_name("gray"));
-    let mut spans = vec![Span::styled(format!(" {clock}  │"), bar)];
+    let mut spans = vec![
+        Span::styled(format!(" {clock}  │"), bar),
+        Span::styled(format!(" {feed} "), dim),
+        Span::styled("│", bar),
+    ];
     for (key, label) in hints {
         spans.push(Span::styled(format!("  {key}"), dim));
         spans.push(Span::styled(format!(" {label}"), bar));

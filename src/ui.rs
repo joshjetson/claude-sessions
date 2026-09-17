@@ -15,7 +15,8 @@
 //! - [`keys`] — pure routing; blocking work leaves as a [`state::Action`].
 //! - [`dialogs`] — the four primitives plus the sessions-view dialogs.
 //! - [`feed`], [`feed_remote`] — where sessions come from: this machine, or a
-//!   daemon over SSE.
+//!   daemon over SSE; [`transport`] — which of the two is live, whether it is
+//!   delivering, and the swap when it is not.
 //! - [`board`] — the Odoo task board: rows, detail, the launch flow.
 //! - [`deploy`] — the Deploy tab: live MR badges, merging, the deploy runner.
 //! - [`actions`], [`run`] — the worker thread and the event loop.
@@ -35,6 +36,7 @@ pub mod spans;
 pub mod state;
 pub mod syntax;
 pub mod theme;
+pub mod transport;
 pub mod tree;
 
 pub use run::run_dashboard;
