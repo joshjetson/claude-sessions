@@ -126,15 +126,17 @@ cargo install claude-sessions
 claude-sessions
 ```
 
-> Native Windows support arrives in v1.1 (dashboard, transcripts, daemon, board; live
-> process discovery and terminal control follow in later releases). Running Claude Code
+> Native Windows support is new in v1.1: the dashboard, daemon, task board, deploy
+> list, journal, and pipelines all work; the live sessions list and terminal control
+> follow in coming releases. Running Claude Code
 > inside **WSL**? Use the macOS/Linux steps inside WSL — that gets the full feature set
 > today.
 
 ### After installing
 
 The **Sessions** tab needs zero configuration — run `claude-sessions` and your sessions
-appear. For the Odoo board, GitLab, and Optics, copy
+appear (macOS, Linux, and WSL; on native Windows the live sessions list arrives in a
+coming release). For the Odoo board, GitLab, and Optics, copy
 [`config.example.json`](config.example.json) to `~/.claude-sessions.json` and fill in
 only the blocks you want — every key is optional and every block is independent.
 
