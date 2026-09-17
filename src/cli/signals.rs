@@ -59,6 +59,7 @@ mod platform {
 
     static CAUGHT: AtomicBool = AtomicBool::new(false);
 
+    #[link(name = "kernel32")]
     extern "system" {
         fn SetConsoleCtrlHandler(
             handler: Option<unsafe extern "system" fn(u32) -> i32>,

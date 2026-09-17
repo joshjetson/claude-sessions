@@ -1,11 +1,13 @@
 //! The one test in this crate that spawns a deploy.
 
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use serde_json::json;
 
 use crate::daemon::tests::{engine_with, Setup};
 use crate::term::SpawnPolicy;
+#[cfg(unix)]
 use crate::types::DeployRunStatus;
 
 // --- the one test that runs a real process ------------------------------------

@@ -11,6 +11,10 @@ env:
 jobs:
   check:
     strategy:
+      # Every platform reports, rather than the first failure cancelling the
+      # rest: a Windows-only break is invisible if a macOS lint cancels the job
+      # that would have found it.
+      fail-fast: false
       # Windows is experimental: it compiles and its test suite runs, with the
       # Unix-only pieces (live process discovery, the terminal drivers) gated
       # off rather than silently broken. See the Windows section of the README.

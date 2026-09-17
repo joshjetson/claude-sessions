@@ -103,7 +103,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn unix_is_fully_supported() {
-        assert!(LIVE_DISCOVERY && TERMINAL_CONTROL && PROCESS_SIGNALS && LOGIN_SHELL);
+        const { assert!(LIVE_DISCOVERY && TERMINAL_CONTROL && PROCESS_SIGNALS && LOGIN_SHELL) };
         assert_eq!(discovery_notice(), None);
         assert_eq!(terminal_notice(), None);
         assert!(NO_TERMINAL_HINT.contains("tmux"));
@@ -112,7 +112,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_degrades_and_says_so() {
-        assert!(!LIVE_DISCOVERY && !TERMINAL_CONTROL && !PROCESS_SIGNALS && !LOGIN_SHELL);
+        const { assert!(!LIVE_DISCOVERY && !TERMINAL_CONTROL && !PROCESS_SIGNALS && !LOGIN_SHELL) };
         assert!(discovery_notice().unwrap().contains("native Windows"));
         assert!(terminal_notice().unwrap().contains("WSL"));
     }
