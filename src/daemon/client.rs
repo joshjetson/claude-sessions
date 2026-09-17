@@ -9,21 +9,22 @@
 
 use std::io::{BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::paths::Paths;
 use crate::types::NotificationStatus;
 
 use super::protocol::{read_body, read_head};
 use super::{BoardFilter, PendingRequest, RefreshRequest, Snapshot};
 
+mod discovery;
 mod sse;
 
+pub use discovery::{ensure_daemon, probe, spawn_daemon, DaemonTarget, Health};
 pub use sse::{subscribe, SseEvent, SseMessage, SseParser, Subscription};
+#[cfg(test)]
+pub(crate) use sse::{subscribe_with, HANDSHAKE_TIMEOUT, READ_TIMEOUT};
 
 /// How long a health probe waits. Short: the answer decides whether the
 /// dashboard starts remote or embedded, and a hung probe is a hung startup.
@@ -37,25 +38,14 @@ const BACKOFF_MIN: Duration = Duration::from_millis(250);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 /// Autostart: how long to wait for a freshly spawned daemon, and how often to
 /// ask whether it is up yet.
-const AUTOSTART_DEADLINE: Duration = Duration::from_secs(5);
-const AUTOSTART_POLL: Duration = Duration::from_millis(150);
-const AUTOSTART_PROBE: Duration = Duration::from_millis(400);
+pub(super) const AUTOSTART_DEADLINE: Duration = Duration::from_secs(5);
+pub(super) const AUTOSTART_POLL: Duration = Duration::from_millis(150);
+pub(super) const AUTOSTART_PROBE: Duration = Duration::from_millis(400);
 /// Largest response body accepted from the daemon.
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
 fn loopback(port: u16) -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], port))
-}
-
-/// What `/health` answers.
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct Health {
-    pub ok: bool,
-    pub daemon: bool,
-    pub pid: u32,
-    pub uptime: f64,
-    pub clients: usize,
 }
 
 /// A parsed HTTP response. `raw` is kept alongside `body` so a caller (and a
@@ -125,81 +115,6 @@ pub fn request(
         body: serde_json::from_str(&raw).unwrap_or(Value::Null),
         raw,
     })
-}
-
-/// Is a daemon answering on this port? Its `/health` payload, or `None`.
-pub fn probe(port: u16, timeout: Duration) -> Option<Health> {
-    let response = request(port, "GET", "/health", None, timeout)?;
-    let health: Health = serde_json::from_value(response.body).ok()?;
-    health.ok.then_some(health)
-}
-
-/// A daemon to talk to.
-#[derive(Debug, Clone)]
-pub struct DaemonTarget {
-    pub port: u16,
-    pub health: Health,
-    /// True when this call is what started it.
-    pub spawned: bool,
-}
-
-/// Get a daemon: the one already running, or a freshly started one when
-/// autostart is enabled. `None` means the dashboard should run embedded.
-pub fn ensure_daemon(paths: &Paths, port: u16, autostart: bool) -> Option<DaemonTarget> {
-    if let Some(health) = probe(port, PROBE_TIMEOUT) {
-        return Some(DaemonTarget {
-            port,
-            health,
-            spawned: false,
-        });
-    }
-    if !autostart {
-        return None;
-    }
-    spawn_daemon(paths, port).map(|health| DaemonTarget {
-        port,
-        health,
-        spawned: true,
-    })
-}
-
-/// Start `claude-sessions daemon` detached and wait for it to answer.
-///
-/// Detached is the whole point: the daemon owns the board polling and the
-/// deploys, so it has to outlive the dashboard that started it — including a
-/// Ctrl-C in the shell the dashboard was launched from, which is why it gets
-/// its own process group.
-pub fn spawn_daemon(paths: &Paths, port: u16) -> Option<Health> {
-    let exe = std::env::current_exe().ok()?;
-    let mut command = std::process::Command::new(exe);
-    command
-        .arg("daemon")
-        .arg("--port")
-        .arg(port.to_string())
-        .stdin(std::process::Stdio::null());
-    // A daemon that dies on startup must not be invisible.
-    let _ = std::fs::create_dir_all(&paths.runtime_dir);
-    if let Ok(log) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.runtime_dir.join("daemon.log"))
-    {
-        if let Ok(errors) = log.try_clone() {
-            command.stdout(log).stderr(errors);
-        }
-    }
-    #[cfg(unix)]
-    std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    command.spawn().ok()?;
-
-    let deadline = Instant::now() + AUTOSTART_DEADLINE;
-    while Instant::now() < deadline {
-        if let Some(health) = probe(port, AUTOSTART_PROBE) {
-            return Some(health);
-        }
-        thread::sleep(AUTOSTART_POLL);
-    }
-    None
 }
 
 // --- actions ----------------------------------------------------------------

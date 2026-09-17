@@ -182,6 +182,18 @@ pub struct AppState {
     /// Transient message shown in the right-hand pane, cleared on the next
     /// selection or view change.
     pub flash: Option<String>,
+    /// Which transport the sessions on screen came from and how long ago it
+    /// last said anything, drawn on the status bar.
+    pub feed: crate::ui::transport::FeedStatus,
+    /// Why the feed is the one it is, when that needs saying — a daemon that
+    /// could not be started, or one that connected and then delivered
+    /// nothing. Kept rather than flashed so it is still there under an empty
+    /// list minutes later, which is when somebody finally looks.
+    pub feed_notice: Option<String>,
+    /// Set when Claude Code has never written a transcript where this build
+    /// looks for them, which is the other way the sessions pane is empty for a
+    /// reason nobody can see.
+    pub transcripts_notice: Option<String>,
     pub usage: Option<UsageReadout>,
     /// Short `HEAD`s per QA worktree, shared with the action worker. Read here
     /// while labelling the QA menu row; filled only by the worker, so no
@@ -221,6 +233,9 @@ impl AppState {
             deploy: DeploySlice::default(),
             dialog: None,
             flash: None,
+            feed: crate::ui::transport::FeedStatus::default(),
+            feed_notice: None,
+            transcripts_notice: None,
             usage: None,
             qa_heads: std::sync::Arc::new(crate::qaden::HeadCache::new()),
             stats: Stats::default(),
@@ -247,6 +262,14 @@ impl AppState {
     pub fn flash(&mut self, message: impl Into<String>) {
         self.flash = Some(message.into());
         self.dirty = true;
+    }
+
+    /// Something about the feed itself worth saying: shown at once in the
+    /// detail pane, and kept under the sessions list for as long as it holds.
+    pub fn note_feed(&mut self, notice: impl Into<String>) {
+        let notice = notice.into();
+        self.feed_notice = Some(notice.clone());
+        self.flash(notice);
     }
 
     pub fn selection_for(&mut self, view: View) -> &mut Selection {

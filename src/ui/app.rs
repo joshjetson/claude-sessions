@@ -90,15 +90,21 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
         // process table says so here — where somebody is already looking for
         // the sessions that are not appearing.
         let mut lines = placeholder_lines(&["No active sessions found."]);
-        if let Some(notice) = crate::platform::discovery_notice() {
+        let width = area.width.saturating_sub(2).max(1) as usize;
+        // Everything that can explain the emptiness, in the one place somebody
+        // is already looking for the sessions that are not appearing: the
+        // platform's own limits, then the feed's, then the transcript store's.
+        for notice in crate::platform::discovery_notice()
+            .map(str::to_string)
+            .into_iter()
+            .chain(state.feed_notice.clone())
+            .chain(state.transcripts_notice.clone())
+        {
             lines.push(Line::raw(""));
             lines.extend(
-                wrap_line(
-                    &placeholder_lines(&[notice])[0],
-                    area.width.saturating_sub(2).max(1) as usize,
-                )
-                .into_iter()
-                .map(Line::from),
+                wrap_line(&placeholder_lines(&[&notice])[0], width)
+                    .into_iter()
+                    .map(Line::from),
             );
         }
         render_list(
@@ -269,7 +275,8 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
 fn draw_status(frame: &mut Frame, state: &AppState, area: Rect) {
     let clock = Local::now().format("%I:%M:%S %p").to_string();
-    render_status(frame, area, &clock, &status_hints(state));
+    let feed = state.feed.label(std::time::Instant::now());
+    render_status(frame, area, &clock, &feed, &status_hints(state));
 }
 
 /// The contextual key hints. Each view advertises only what it can actually do

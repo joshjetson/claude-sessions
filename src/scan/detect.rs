@@ -104,6 +104,51 @@ pub fn is_interactive_claude(comm: &str) -> bool {
     !has_helper_subcommand(comm)
 }
 
+/// Interpreters that run somebody else's program, so `ps -o comm` reports the
+/// interpreter and not the thing a person started.
+///
+/// This is the npm and bun install of Claude Code: the `claude` on `PATH` is a
+/// script with a `#!/usr/bin/env node` line, the kernel execs `node`, and every
+/// version of this tool that matched on `comm` alone saw `node` and reported no
+/// sessions on a machine that had several. `debian` spells it `nodejs`.
+const SCRIPT_RUNTIMES: [&str; 4] = ["node", "nodejs", "bun", "deno"];
+
+/// The last path segment of a `ps` command name, without a Windows extension.
+///
+/// `comm` is a bare name on Linux and the full executable path on macOS, so the
+/// comparison has to be on the file name either way.
+fn program_name(comm: &str) -> &str {
+    let name = comm.rsplit(['/', '\\']).next().unwrap_or(comm);
+    name.strip_suffix(".exe").unwrap_or(name)
+}
+
+/// Whether a `ps` command name is only a script runtime, and so says nothing
+/// about what the process actually is.
+pub fn is_script_runtime(comm: &str) -> bool {
+    let name = program_name(comm);
+    SCRIPT_RUNTIMES
+        .iter()
+        .any(|runtime| name.eq_ignore_ascii_case(runtime))
+}
+
+/// The same judgement as [`is_interactive_claude`], made from the full command
+/// line instead of the command name.
+///
+/// Used for — and only for — a process whose `comm` is a [script
+/// runtime](is_script_runtime). The rules are deliberately the identical ones:
+/// the deny-list applies to the argv string exactly as it applies to a command
+/// name, plus the flag spelling of the same helpers, which is invisible to
+/// `comm` and so has always been read from argv.
+///
+/// It is a deliberate improvement over the Node original, which had no answer
+/// for a script install at all. The looseness is the intended direction: a
+/// command line that merely mentions `claude` becoming a row somebody asks
+/// about is a better failure than a real session being invisible, which is the
+/// same trade the comm deny-list already makes.
+pub fn argv_is_interactive_claude(argv: &str) -> bool {
+    is_interactive_claude(argv) && !is_helper_flag(argv)
+}
+
 /// The directory name Claude Code gives a prewarmed worker: `cc-daemon-<n>`.
 const SCRATCH_DIR: &str = "cc-daemon-";
 

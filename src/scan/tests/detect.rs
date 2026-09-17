@@ -7,7 +7,8 @@
 //! like the tool spawning work by itself.
 
 use crate::scan::{
-    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+    argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
+    is_script_runtime, launch_task_id, session_id_flag,
 };
 
 #[test]
@@ -196,4 +197,84 @@ fn an_environment_value_is_never_read_as_a_command_line_flag() {
     assert_eq!(launch_task_id(&environ), None);
     // …and the value only reaches session_id_flag if somebody passes it there.
     assert_eq!(session_id_flag("claude"), None);
+}
+
+// --- script installs --------------------------------------------------------
+
+/// The npm and bun installs of Claude Code: `claude` on `PATH` is a script with
+/// a `#!/usr/bin/env node` line, so the kernel execs the runtime and `ps -o
+/// comm` reports it. Every release before this one matched on `comm` alone and
+/// therefore reported no sessions on such a machine.
+#[test]
+fn a_runtime_command_name_says_nothing_about_the_process() {
+    for comm in [
+        "node",
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/bun",
+        "deno",
+        // Debian's spelling, and Windows' file extension.
+        "nodejs",
+        "C:\\Program Files\\nodejs\\node.exe",
+    ] {
+        assert!(is_script_runtime(comm), "{comm} is a script runtime");
+        assert!(
+            !is_interactive_claude(comm),
+            "{comm} must not be a session on its name alone"
+        );
+    }
+}
+
+#[test]
+fn a_native_install_is_not_a_runtime_and_needs_no_command_line() {
+    for comm in ["claude", "/Users/k/.local/bin/claude"] {
+        assert!(!is_script_runtime(comm));
+        assert!(is_interactive_claude(comm));
+    }
+    // Something whose name merely starts the same way is not the runtime.
+    assert!(!is_script_runtime("nodemon"));
+    assert!(!is_script_runtime("/usr/bin/node-gyp"));
+}
+
+#[test]
+fn an_npm_installed_session_is_recognised_from_its_command_line() {
+    assert!(argv_is_interactive_claude(
+        "/Users/x/.nvm/versions/node/v22/bin/node /Users/x/.nvm/versions/node/v22/bin/claude"
+    ));
+    assert!(argv_is_interactive_claude(
+        "bun /Users/x/.bun/install/global/node_modules/@anthropic-ai/claude-code/cli.js"
+    ));
+}
+
+#[test]
+fn the_deny_list_fires_on_a_command_line_exactly_as_it_does_on_a_command_name() {
+    // Same helpers, same rules — a prewarmed worker started through node is
+    // still a prewarmed worker.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude bg-spare"
+    ));
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude mcp serve"
+    ));
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude daemon"
+    ));
+    // And the flag spelling, which `comm` can never show.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude --bg-pty-host"
+    ));
+    // This tool itself, launched however.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude-sessions"
+    ));
+}
+
+#[test]
+fn a_node_process_that_is_not_claude_is_never_a_session() {
+    for argv in [
+        "node /Users/x/dev/api/server.js",
+        "/usr/local/bin/node --watch build.mjs",
+        "bun run dev",
+    ] {
+        assert!(!argv_is_interactive_claude(argv), "{argv}");
+    }
 }

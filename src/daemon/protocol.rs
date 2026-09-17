@@ -23,6 +23,24 @@ use super::events::EngineEvent;
 /// sides of the wire import.
 pub use crate::config::DEFAULT_PORT;
 
+// --- who is on the port -----------------------------------------------------
+
+/// What this program calls itself in `/health`.
+///
+/// Two different programs have shipped under this name — the original Node
+/// tool and this one — and they bind the same port by default. With no marker
+/// each happily mirrors the other's daemon: the dashboard connects, subscribes,
+/// and receives a stream whose events it does not understand, so it shows an
+/// empty list forever with nothing wrong anywhere. Three developers lost days
+/// to exactly that. A daemon now says which program it is, and a dashboard
+/// that does not recognise the answer scans for itself and says why.
+pub const IMPLEMENTATION: &str = "claude-sessions-rs";
+
+/// This build's version, as `/health` reports it. Not used to accept or refuse
+/// a daemon — the implementation marker does that — but it is the first thing
+/// anybody needs when two versions are involved.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// `~/.claude-sessions/notify.json` — how `claude-sessions notify` and a
 /// starting dashboard find a running daemon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +83,78 @@ pub fn remove_daemon_info(paths: &Paths, pid: u32) -> bool {
         Some(info) if info.pid == pid => fs::remove_file(&paths.port_file).is_ok(),
         _ => false,
     }
+}
+
+// --- the daemon's own output ------------------------------------------------
+
+/// Where a daemon started by the dashboard sends its stdout and stderr.
+///
+/// The one place a detached daemon can say anything: it has no terminal, and
+/// its refusals ("port already in use", a panic on startup) are exactly the
+/// sentences somebody staring at an empty dashboard needs. Named here rather
+/// than at the two places that open it, so they cannot drift apart.
+pub fn daemon_log_path(paths: &Paths) -> std::path::PathBuf {
+    paths.runtime_dir.join("daemon.log")
+}
+
+/// How much of the end of the log is ever read. A daemon appends for weeks;
+/// nothing older than the last few lines is worth a syscall.
+const LOG_TAIL_BYTES: u64 = 8 * 1024;
+
+/// The last `lines` non-empty lines of the daemon log, oldest first.
+pub fn daemon_log_tail(paths: &Paths, lines: usize) -> Vec<String> {
+    let path = daemon_log_path(paths);
+    let Ok(mut file) = fs::File::open(&path) else {
+        return Vec::new();
+    };
+    let size = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    let from = size.saturating_sub(LOG_TAIL_BYTES);
+    if io::Seek::seek(&mut file, io::SeekFrom::Start(from)).is_err() {
+        return Vec::new();
+    }
+    let mut raw = Vec::new();
+    if io::Read::read_to_end(&mut file, &mut raw).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let mut tail: Vec<&str> = text.lines().collect();
+    // The first line of a seeked read is half a line.
+    if from > 0 && !tail.is_empty() {
+        tail.remove(0);
+    }
+    tail.into_iter()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(lines)
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
+}
+
+/// Words that mark a log line as the reason something did not work.
+const FAILURE_WORDS: [&str; 7] = [
+    "error",
+    "panic",
+    "refus",
+    "already in use",
+    "could not",
+    "cannot",
+    "failed",
+];
+
+/// The most recent line of the daemon log that reads like a failure.
+///
+/// Deliberately a keyword sweep rather than a log format: the daemon's output
+/// is whatever it printed plus whatever the runtime printed for it, and a
+/// panic message obeys nobody's schema.
+pub fn daemon_log_last_error(paths: &Paths) -> Option<String> {
+    daemon_log_tail(paths, 40).into_iter().rev().find(|line| {
+        let lower = line.to_ascii_lowercase();
+        FAILURE_WORDS.iter().any(|word| lower.contains(word))
+    })
 }
 
 /// Which port to talk to.

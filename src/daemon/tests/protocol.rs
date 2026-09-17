@@ -178,3 +178,57 @@ fn percent_escapes_survive_a_project_name() {
     assert_eq!(percent_decode("100%"), "100%");
     assert_eq!(percent_decode("%zz"), "%zz");
 }
+
+// --- what the daemon printed on its way down ---------------------------------
+
+/// A detached daemon has no terminal. This file is the only place it can say
+/// why it refused to start, and until now nothing read it back — so an
+/// autostart that failed looked exactly like a machine with no sessions.
+#[test]
+fn the_last_failure_in_the_daemon_log_is_what_gets_read_back() {
+    use crate::daemon::protocol::{daemon_log_last_error, daemon_log_path, daemon_log_tail};
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+    fs::create_dir_all(&paths.runtime_dir).unwrap();
+    fs::write(
+        daemon_log_path(&paths),
+        "claude-sessions daemon listening on 127.0.0.1:8787 (pid 1)\n\
+         shutting down\n\
+         claude-sessions daemon: port 8787 is already in use — another dashboard has it.\n\
+         \n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        daemon_log_last_error(&paths).as_deref(),
+        Some("claude-sessions daemon: port 8787 is already in use — another dashboard has it.")
+    );
+    // The tail is oldest-first and skips the blank line at the end.
+    let tail = daemon_log_tail(&paths, 2);
+    assert_eq!(tail.len(), 2);
+    assert_eq!(tail[0], "shutting down");
+    assert!(tail[1].contains("already in use"));
+}
+
+#[test]
+fn a_log_with_nothing_wrong_in_it_reports_no_error_rather_than_its_last_line() {
+    use crate::daemon::protocol::{daemon_log_last_error, daemon_log_path, daemon_log_tail};
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+    fs::create_dir_all(&paths.runtime_dir).unwrap();
+
+    // No file at all is not an error either — a daemon that has never been
+    // autostarted has never written one.
+    assert_eq!(daemon_log_last_error(&paths), None);
+    assert!(daemon_log_tail(&paths, 3).is_empty());
+
+    fs::write(
+        daemon_log_path(&paths),
+        "claude-sessions daemon listening on 127.0.0.1:8787 (pid 1)\n",
+    )
+    .unwrap();
+    assert_eq!(daemon_log_last_error(&paths), None);
+    assert_eq!(daemon_log_tail(&paths, 3).len(), 1);
+}

@@ -25,6 +25,11 @@ pub struct PathEnv {
     pub db: Option<PathBuf>,
     /// `CLAUDE_PROJECTS_DIR` — relocates Claude Code's transcript store.
     pub projects_dir: Option<PathBuf>,
+    /// `CLAUDE_CONFIG_DIR` — Claude Code's own variable for relocating the
+    /// whole of `~/.claude`. Someone who exports it has their transcripts
+    /// under it, and a dashboard that kept reading `~/.claude/projects` would
+    /// find an empty directory and report no sessions.
+    pub config_dir: Option<PathBuf>,
     /// `QA_SCREENSHOT_ROOT` — the QAden plugin's own override, read here so the
     /// run-state reader and QAden itself agree on where a task's QA directory
     /// is.
@@ -37,6 +42,7 @@ impl PathEnv {
             sessions_home: env_path("CLAUDE_SESSIONS_HOME"),
             db: env_path("CLAUDE_SESSIONS_DB"),
             projects_dir: env_path("CLAUDE_PROJECTS_DIR"),
+            config_dir: env_path("CLAUDE_CONFIG_DIR"),
             qa_root: env_path("QA_SCREENSHOT_ROOT"),
         }
     }
@@ -73,7 +79,7 @@ pub struct Paths {
     /// `notify.json` — how the helper CLIs find the daemon's port.
     pub port_file: PathBuf,
     pub db_path: PathBuf,
-    /// `~/.claude`.
+    /// `~/.claude`, or wherever `CLAUDE_CONFIG_DIR` puts it.
     pub claude_dir: PathBuf,
     /// Claude Code's transcript store, `~/.claude/projects` by default.
     pub projects_dir: PathBuf,
@@ -105,7 +111,13 @@ impl Paths {
             .sessions_home
             .clone()
             .unwrap_or_else(|| default_runtime.clone());
-        let claude_dir = home.join(".claude");
+        // Claude Code's own override wins over the default location, and
+        // `CLAUDE_PROJECTS_DIR` still wins over both — it names one directory
+        // where this names the whole tree.
+        let claude_dir = env
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| home.join(".claude"));
         Paths {
             tasks_dir: runtime_dir.join("tasks"),
             logs_dir: runtime_dir.join("logs"),
@@ -154,6 +166,7 @@ impl Paths {
                 sessions_home: Some(root.join("runtime")),
                 db: None,
                 projects_dir: Some(root.join("projects")),
+                config_dir: None,
                 qa_root: Some(root.join("qaden")),
             },
         );
@@ -307,6 +320,7 @@ mod tests {
             sessions_home: home.map(PathBuf::from),
             db: db.map(PathBuf::from),
             projects_dir: projects.map(PathBuf::from),
+            config_dir: None,
             qa_root: None,
         }
     }
@@ -442,6 +456,37 @@ mod tests {
             p.task_summary_file(4033),
             Path::new("/home/dev/.claude-sessions/summaries/task-4033-summary.md")
         );
+    }
+
+    #[test]
+    fn claude_code_s_own_config_dir_variable_moves_the_whole_claude_tree() {
+        // Claude Code documents CLAUDE_CONFIG_DIR as the way to relocate
+        // `~/.claude`; a machine that exports it keeps its transcripts there,
+        // and a dashboard reading the default path reports no sessions while
+        // sessions are running.
+        let moved = Paths::resolve(
+            Path::new("/home/dev"),
+            &PathEnv {
+                config_dir: Some(PathBuf::from("/opt/claude-home")),
+                ..PathEnv::default()
+            },
+        );
+        assert_eq!(moved.claude_dir, Path::new("/opt/claude-home"));
+        assert_eq!(moved.projects_dir, Path::new("/opt/claude-home/projects"));
+        assert_eq!(moved.todos_dir, Path::new("/opt/claude-home/todos"));
+
+        // The narrower variable still wins: it names one directory where
+        // CLAUDE_CONFIG_DIR names the tree it usually sits in.
+        let both = Paths::resolve(
+            Path::new("/home/dev"),
+            &PathEnv {
+                config_dir: Some(PathBuf::from("/opt/claude-home")),
+                projects_dir: Some(PathBuf::from("/srv/transcripts")),
+                ..PathEnv::default()
+            },
+        );
+        assert_eq!(both.projects_dir, Path::new("/srv/transcripts"));
+        assert_eq!(both.todos_dir, Path::new("/opt/claude-home/todos"));
     }
 
     #[test]
