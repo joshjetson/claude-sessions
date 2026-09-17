@@ -27,6 +27,7 @@ mod linking;
 mod markers;
 mod protocol;
 mod refresh;
+mod remote;
 mod routes;
 mod server;
 mod watchers;

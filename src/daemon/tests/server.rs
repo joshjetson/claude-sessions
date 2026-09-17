@@ -50,6 +50,15 @@ impl Served {
 }
 
 pub(crate) fn served() -> Served {
+    served_with(None, None)
+}
+
+/// The same, with the outside world wired in — a daemon that can fetch a board
+/// and a deploy list when it is asked to.
+pub(crate) fn served_with(
+    board: Option<crate::daemon::BoardFetch>,
+    deploy: Option<crate::daemon::DeployFetch>,
+) -> Served {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::for_test(dir.path());
     fs::create_dir_all(&paths.runtime_dir).unwrap();
@@ -57,6 +66,8 @@ pub(crate) fn served() -> Served {
     let config = ConfigHandle::load_from(&paths.config_path, &paths.home, EnvOverrides::default());
     let engine = Arc::new(Engine::new(EngineOptions {
         spawn: SpawnPolicy::Refuse,
+        fetch_board: board,
+        fetch_deploy: deploy,
         ..EngineOptions::with_scanner(
             paths.clone(),
             config,

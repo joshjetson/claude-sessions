@@ -12,7 +12,9 @@
 //! reconnecting after the daemon restarted redraws from scratch with no special
 //! case above this module.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread;
 
 use crate::daemon::client::{self, DaemonClient, SseEvent, SseMessage, Subscription};
@@ -38,9 +40,10 @@ impl RemoteFeed {
         let (sender, events) = mpsc::channel();
         let reply = sender.clone();
         let stream_client = DaemonClient::new(port);
+        let kicks = Arc::new(Kicks::default());
         let subscription = client::subscribe(port, move |message| {
             if let SseMessage::Event(event) = message {
-                forward(stream_client, &sender, &event);
+                forward(stream_client, &kicks, &sender, &event);
             }
         });
         RemoteFeed {
@@ -81,10 +84,11 @@ impl RemoteFeed {
 }
 
 /// One SSE event as whatever the dashboard understands, or nothing.
-fn forward(client: DaemonClient, sender: &Sender<FeedEvent>, event: &SseEvent) {
+fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, event: &SseEvent) {
     match event.event.as_str() {
         "snapshot" => {
             if let Ok(snapshot) = serde_json::from_str::<Snapshot>(&event.data) {
+                kick(client, kicks, &snapshot);
                 let board = board_update(&snapshot);
                 if let Some(usage) = usage_event(snapshot.usage.clone()) {
                     let _ = sender.send(usage);
@@ -182,6 +186,59 @@ fn board_update(snapshot: &Snapshot) -> FeedEvent {
         // coverage alongside its board refresh.
         optics_tasks: std::collections::HashMap::new(),
     }))
+}
+
+/// What this dashboard has already asked its daemon for, once.
+#[derive(Debug, Default)]
+pub(crate) struct Kicks {
+    board: AtomicBool,
+    deploy: AtomicBool,
+}
+
+impl Kicks {
+    /// Which of the two this snapshot shows missing and nobody has asked for
+    /// yet. Claiming and reporting in one step is what keeps a reconnect from
+    /// asking again: the subscription retries on a backoff, and a nudge inside
+    /// that loop would turn a flapping daemon into a poll.
+    pub(crate) fn claim(&self, snapshot: &Snapshot) -> (bool, bool) {
+        let board = snapshot.board.is_none()
+            && snapshot.board_error.is_none()
+            // `loading` means a fetch is already in flight; that one announces
+            // itself when it settles.
+            && !snapshot.board_loading
+            && !self.board.swap(true, Ordering::SeqCst);
+        let deploy = snapshot.deploy.is_none()
+            && snapshot.deploy_error.is_none()
+            && !self.deploy.swap(true, Ordering::SeqCst);
+        (board, deploy)
+    }
+}
+
+/// Ask a daemon that has nothing to show for the thing it has not fetched yet.
+///
+/// A daemon warms its board without waiting for it — Node did the same, because
+/// `start` is what a client waits on and an Odoo round trip is seconds — so a
+/// dashboard that connects inside that window gets a snapshot with no board in
+/// it and, until now, nothing that would ever fill it but pressing `r`.
+///
+/// Unconditional: the daemon no-ops when it has no Odoo credentials, which is
+/// cheaper than asking it first.
+fn kick(client: DaemonClient, kicks: &Kicks, snapshot: &Snapshot) {
+    let (board, deploy) = kicks.claim(snapshot);
+    if !board && !deploy {
+        return;
+    }
+    // Off the reader thread: `/refresh` runs a scan before it answers, and the
+    // stream has to keep draining while it does.
+    let _ = thread::Builder::new()
+        .name("claude-sessions-kick".into())
+        .spawn(move || {
+            client.refresh(RefreshRequest {
+                board,
+                deploy,
+                ..RefreshRequest::default()
+            });
+        });
 }
 
 /// The daemon carries usage as opaque JSON so the wire never constrains what a
