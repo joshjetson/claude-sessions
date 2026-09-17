@@ -152,12 +152,7 @@ pub fn build_board_tree_with_runs<'a>(
     // collision the one-pass-per-task rule already refuses.
     let runs_by_stage: HashMap<(&str, &str), &QaRun> = runs
         .iter()
-        .map(|run| {
-            (
-                (run.project_name.as_str(), run.stage_name.as_str()),
-                run,
-            )
-        })
+        .map(|run| ((run.project_name.as_str(), run.stage_name.as_str()), run))
         .collect();
 
     for (name, project) in &board.projects {

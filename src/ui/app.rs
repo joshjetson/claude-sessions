@@ -350,7 +350,6 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
     hints
 }
 
-
 /// How many QA agents are waiting on a decision, across every run.
 ///
 /// Counted per frame, which it can afford to be: it reads one JSON file per

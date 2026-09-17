@@ -336,10 +336,10 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
             const INDENT: u16 = 8;
             const ID_COL: u16 = 8;
             let cell_col: u16 = if wide { 15 } else { 2 };
-            let name_width =
-                ctx.tree_cols
-                    .saturating_sub(INDENT + ID_COL + cell_col + 2)
-                    .max(16) as usize;
+            let name_width = ctx
+                .tree_cols
+                .saturating_sub(INDENT + ID_COL + cell_col + 2)
+                .max(16) as usize;
 
             let name = match task {
                 Some(task) => truncate(&task.name, name_width),
@@ -410,7 +410,6 @@ fn prefixed(text: impl Into<String>, role: Role) -> Row {
     row.plain(" ").styled(text, role);
     row.build()
 }
-
 
 /// Pad to a fixed column on the DISPLAY width, never the byte length: the
 /// glyphs in these rows are multi-byte, and counting bytes pushes every column

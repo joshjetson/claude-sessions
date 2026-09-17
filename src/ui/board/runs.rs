@@ -95,7 +95,13 @@ fn live_task_ids(state: &AppState, run: &QaRun) -> std::collections::HashSet<i64
 /// surfaced: a run that quietly starts nothing looks exactly like a run that is
 /// merely slow.
 fn fill_lanes(state: &mut AppState, run_id: &str) {
-    let Some(run) = state.board.runs.iter().find(|run| run.id == run_id).cloned() else {
+    let Some(run) = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .cloned()
+    else {
         return;
     };
     let live = live_task_ids(state, &run);
@@ -132,10 +138,7 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
         if let Some(task) = state.board.task(task_id).cloned() {
             crate::ui::board::start(
                 state,
-                crate::ui::board::StartRequest::new(
-                    &task,
-                    crate::ui::board::LaunchKind::Qa,
-                ),
+                crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::Qa),
             );
         }
     }
@@ -147,18 +150,33 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
 /// It watches. It does not spawn — admission lives outside any model — and in
 /// shadow mode it answers nothing.
 fn start_coordinator(state: &mut AppState, run_id: &str) {
-    let Some(run) = state.board.runs.iter().find(|run| run.id == run_id).cloned() else {
+    let Some(run) = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .cloned()
+    else {
         return;
     };
     // The coordinator belongs to the run, not to any one task, so it is
     // launched against the run's first task only to resolve the project folder.
-    let Some(task) = run.task_ids.first().and_then(|id| state.board.task(*id)).cloned() else {
-        state.flash("This run has no task the board still knows, so its folder cannot be resolved.".to_string());
+    let Some(task) = run
+        .task_ids
+        .first()
+        .and_then(|id| state.board.task(*id))
+        .cloned()
+    else {
+        state.flash(
+            "This run has no task the board still knows, so its folder cannot be resolved."
+                .to_string(),
+        );
         state.dirty = true;
         return;
     };
 
-    let mut request = crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::QaRun);
+    let mut request =
+        crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::QaRun);
     request.extras.insert(
         crate::pipeline::definitions::RUN_ID_VAR.to_string(),
         run.id.clone(),

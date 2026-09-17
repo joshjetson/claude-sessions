@@ -316,7 +316,10 @@ impl RunMenu {
                 },
                 RunAction::ToggleMode,
             ),
-            (format!("📊  Shadow agreement: {agreement}"), RunAction::Cancel),
+            (
+                format!("📊  Shadow agreement: {agreement}"),
+                RunAction::Cancel,
+            ),
             (
                 "✕  Stop watching this run (sessions keep running)".to_string(),
                 RunAction::StopWatching,

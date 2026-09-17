@@ -41,9 +41,9 @@ pub use launch::{
     all_discovered_dirs, gate_start, guess_dir_for_project, prompt_context, resolve_task_dir,
     working_stage_move, DirChoice, Gate, LaunchKind, RacingSession,
 };
+pub use runs::{jump_to_next_ask, run_command, watch_or_drop};
 pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate, DetailAnswers};
 pub use spec::{short, LaunchSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec};
-pub use runs::{jump_to_next_ask, run_command, watch_or_drop};
 pub use start::{start, task_url, StartRequest};
 pub use view::{label, snapshot, window, BoardRow, BoardSnapshot, BoardWindow};
 

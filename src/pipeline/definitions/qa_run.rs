@@ -109,14 +109,15 @@ fn context(vars: &PromptVars) -> String {
         .get(QA_ROOT_VAR)
         .map_or("the QA directory", String::as_str);
 
-    let extra = if vars.extra_context.trim().is_empty() {
-        String::new()
-    } else {
-        format!(
+    let extra =
+        if vars.extra_context.trim().is_empty() {
+            String::new()
+        } else {
+            format!(
             " IMPORTANT extra context from the user — honor this above generic assumptions: {}.",
             vars.extra_context.split_whitespace().collect::<Vec<_>>().join(" ")
         )
-    };
+        };
 
     format!(
         " You are coordinating QA run \"{}\", covering tasks: {ids}. \

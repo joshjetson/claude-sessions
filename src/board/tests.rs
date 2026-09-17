@@ -6,8 +6,8 @@
 //! and "what colour" are two different regressions.
 
 mod deploy;
-mod qarun;
 mod format;
+mod qarun;
 mod tree;
 
 use std::collections::BTreeMap;

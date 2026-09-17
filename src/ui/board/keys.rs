@@ -187,7 +187,9 @@ fn on_select(state: &mut AppState, snapshot: &BoardSnapshot) {
         }
         // A run row is a task row. Same menu, same keys — the run is a
         // grouping, not a different kind of thing.
-        BoardRow::QaRunTask { task: Some(task), .. } => {
+        BoardRow::QaRunTask {
+            task: Some(task), ..
+        } => {
             let menu = TaskMenu::build(task, state);
             let task_id = task.id;
             open(state, Dialog::TaskMenu(menu));
@@ -195,7 +197,11 @@ fn on_select(state: &mut AppState, snapshot: &BoardSnapshot) {
         }
         // The board no longer carries this task: it left the stage and the run
         // kept it. There is nothing to build a menu from.
-        BoardRow::QaRunTask { task: None, task_id, .. } => {
+        BoardRow::QaRunTask {
+            task: None,
+            task_id,
+            ..
+        } => {
             let task_id = *task_id;
             state.flash = Some(format!(
                 "Task {task_id} has left this stage — the run still covers it, but the board has no record to open."

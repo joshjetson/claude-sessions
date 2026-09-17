@@ -199,11 +199,17 @@ fn an_unknown_kind_reads_as_info() {
 }
 
 fn table_exists(db: &Db, name: &str) -> bool {
-    db.one("t", "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
-        rusqlite::params![name], |row| row.get::<_, String>(0))
-        .is_some()
+    db.one(
+        "t",
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
+        rusqlite::params![name],
+        |row| row.get::<_, String>(0),
+    )
+    .is_some()
 }
 
 fn notification_columns(db: &Db) -> Vec<String> {
-    db.rows("cols", "PRAGMA table_info(notifications)", [], |row| row.get::<_, String>(1))
+    db.rows("cols", "PRAGMA table_info(notifications)", [], |row| {
+        row.get::<_, String>(1)
+    })
 }

@@ -53,7 +53,9 @@ pub fn qa_answer_command(task_id: i64) -> String {
 /// `claude-sessions notify … --kind <kind>` — an escalation that says what it
 /// is, so a run can count what is blocked rather than what is merely loud.
 pub fn notify_kind_command(title: &str, message: &str, level: &str, kind: &str) -> String {
-    format!("{BIN} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}")
+    format!(
+        "{BIN} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}"
+    )
 }
 
 /// The merge request a conflict-resolution run is about.

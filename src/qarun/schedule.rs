@@ -41,7 +41,10 @@ impl Refusal {
             Refusal::AlreadyRunning(id) => format!("Task {id} already has a live session."),
             Refusal::AlreadySpawned(id) => format!("This run already started task {id}."),
             Refusal::AlreadyFinished(id, verdict) => {
-                format!("Task {id} already reached a verdict ({}).", verdict.as_str())
+                format!(
+                    "Task {id} already reached a verdict ({}).",
+                    verdict.as_str()
+                )
             }
             Refusal::LaneLimit { running, limit } => {
                 format!("{running} of {limit} lanes busy.")

@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime};
 
 use super::*;
 use crate::qaden::{QaRunState, QaVerdict};
-use crate::types::{Notification, NotificationKind, NotificationLevel, NotificationStatus, Session};
+use crate::types::{
+    Notification, NotificationKind, NotificationLevel, NotificationStatus, Session,
+};
 
 fn now() -> SystemTime {
     SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000)
@@ -443,7 +445,10 @@ fn the_header_carries_the_fixed_denominator() {
     };
     let wide = run_header_text(&run(vec![1, 2, 3]), &summary, true);
     assert!(wide.contains("QA RUN · Quality Assurance"), "{wide}");
-    assert!(wide.contains("3 tasks · 1 done · 1 testing · 1 queued"), "{wide}");
+    assert!(
+        wide.contains("3 tasks · 1 done · 1 testing · 1 queued"),
+        "{wide}"
+    );
 }
 
 #[test]

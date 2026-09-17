@@ -24,7 +24,14 @@ fn a_record_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = store(dir.path());
     let path = store
-        .record(RUN, 1, "which environment?", "the MR preview", Some("high"), at())
+        .record(
+            RUN,
+            1,
+            "which environment?",
+            "the MR preview",
+            Some("high"),
+            at(),
+        )
         .unwrap();
     assert!(path.exists());
 
@@ -63,7 +70,14 @@ fn an_empty_answer_is_refused_but_i_do_not_know_is_not() {
         Err(ShadowError::EmptyAnswer)
     );
     assert!(store
-        .record(RUN, 3, "q", "I do not know: the task does not say.", None, at())
+        .record(
+            RUN,
+            3,
+            "q",
+            "I do not know: the task does not say.",
+            None,
+            at()
+        )
         .is_ok());
 }
 

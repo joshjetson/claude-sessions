@@ -13,9 +13,7 @@ use crate::daemon::{BoardFilter, TaskLink, TaskLinkStatus};
 use crate::paths::Paths;
 use crate::qaden::qa_run_state;
 use crate::qarun::{QaRun, RunCtx, RunMode};
-use crate::types::{
-    Board, Notification, NotificationKind, NotificationStatus, Session, Task,
-};
+use crate::types::{Board, Notification, NotificationKind, NotificationStatus, Session, Task};
 
 /// One board fetch, however it was produced.
 ///
@@ -281,7 +279,6 @@ fn status_of(status: TaskLinkStatus) -> TaskSessionStatus {
         _ => TaskSessionStatus::Running,
     }
 }
-
 
 impl BoardSlice {
     /// The run covering a stage, if one is being watched.

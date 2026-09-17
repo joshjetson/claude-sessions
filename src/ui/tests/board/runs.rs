@@ -34,7 +34,10 @@ fn on_a_stage() -> (tempfile::TempDir, crate::ui::state::AppState) {
     // Open the project so the stage row exists, then land on it.
     let snapshot = board::snapshot(&state);
     if let BoardRow::Project { .. } = snapshot.row {
-        board::handle_board(&mut state, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        board::handle_board(
+            &mut state,
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+        );
         down(&mut state);
     }
     (dir, state)
@@ -43,7 +46,10 @@ fn on_a_stage() -> (tempfile::TempDir, crate::ui::state::AppState) {
 #[test]
 fn r_on_a_stage_starts_watching_it() {
     let (_dir, mut state) = on_a_stage();
-    assert!(matches!(board::snapshot(&state).row, BoardRow::Stage { .. }));
+    assert!(matches!(
+        board::snapshot(&state).row,
+        BoardRow::Stage { .. }
+    ));
 
     press(&mut state, 'R');
 
@@ -53,7 +59,10 @@ fn r_on_a_stage_starts_watching_it() {
     // Shadow is the default: it is the mode that cannot be wrong in a way a QA
     // pass would not notice.
     assert_eq!(run.mode, RunMode::Shadow);
-    assert!(state.flash.as_deref().is_some_and(|f| f.contains("3 tasks")));
+    assert!(state
+        .flash
+        .as_deref()
+        .is_some_and(|f| f.contains("3 tasks")));
 }
 
 #[test]
@@ -80,7 +89,10 @@ fn a_run_keeps_a_task_the_stage_has_lost() {
     assert_eq!(state.board.runs[0].task_ids.len(), 3);
 
     // The stage now holds one task; the run still covers all three.
-    with_tasks(&mut state, vec![task(6688, "Provider portal refund totals")]);
+    with_tasks(
+        &mut state,
+        vec![task(6688, "Provider portal refund totals")],
+    );
     state.board.watch_stage("Aurora", "Approved to Start");
     assert_eq!(
         state.board.runs[0].task_ids.len(),
@@ -177,7 +189,10 @@ fn enter_on_a_run_header_opens_the_run_menu() {
         .position(|key| key.starts_with("br:"))
         .expect("run header");
     state.board_sel.set(&snapshot.keys, header);
-    board::handle_board(&mut state, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    board::handle_board(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
 
     assert!(
         matches!(state.dialog, Some(crate::ui::dialogs::Dialog::RunMenu(_))),
@@ -237,7 +252,10 @@ fn the_board_is_unchanged_when_nothing_is_watched() {
     let (_dir, mut state) = on_a_stage();
     // Open the stage by hand: watching one opens it as a side effect, and this
     // test is about the board WITHOUT a run.
-    board::handle_board(&mut state, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+    board::handle_board(
+        &mut state,
+        KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+    );
 
     let snapshot = board::snapshot(&state);
     assert!(
@@ -246,7 +264,11 @@ fn the_board_is_unchanged_when_nothing_is_watched() {
         snapshot.keys
     );
     assert_eq!(
-        snapshot.keys.iter().filter(|k| k.starts_with("bt:")).count(),
+        snapshot
+            .keys
+            .iter()
+            .filter(|k| k.starts_with("bt:"))
+            .count(),
         3,
         "the ordinary task rows changed: {:?}",
         snapshot.keys

@@ -340,14 +340,23 @@ pub fn qa_cell_text(entry: &RunEntry<'_>, wide: bool) -> String {
     }
     let detail = match (entry.status, entry.run) {
         (QaStatus::Testing, Some(state)) if state.open_gaps + state.closed_gaps > 0 => {
-            format!(" {}/{}", state.closed_gaps, state.open_gaps + state.closed_gaps)
+            format!(
+                " {}/{}",
+                state.closed_gaps,
+                state.open_gaps + state.closed_gaps
+            )
         }
         // Which round an ask belongs to changes what the answer should be, so it
         // is worth the three characters once there has been more than one.
         (QaStatus::Asks, Some(state)) if state.round > 1 => format!(" r{}", state.round),
         _ => String::new(),
     };
-    format!("{} {}{}", entry.status.glyph(), entry.status.label(), detail)
+    format!(
+        "{} {}{}",
+        entry.status.glyph(),
+        entry.status.label(),
+        detail
+    )
 }
 
 /// The run header's counts. On a narrow pane only the two that change a

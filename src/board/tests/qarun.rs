@@ -244,10 +244,7 @@ fn nothing_overflows_at_any_pane_width() {
 
     for tree_cols in [133_u16, 120, 102, 90, 89, 76, 63, 56, 50] {
         for item in &items {
-            if !matches!(
-                item,
-                BoardItem::QaRun { .. } | BoardItem::QaRunTask { .. }
-            ) {
+            if !matches!(item, BoardItem::QaRun { .. } | BoardItem::QaRunTask { .. }) {
                 continue;
             }
             let row = text(&format_board_item(item, &ctx_at(tree_cols)));
@@ -271,7 +268,8 @@ fn a_very_long_name_is_truncated_rather_than_wrapped() {
         .iter()
         .find(|i| matches!(i, BoardItem::QaRunTask { .. }))
         .unwrap();
-    let width = unicode_width::UnicodeWidthStr::width(text(&format_board_item(row, &ctx_at(133))).as_str());
+    let width =
+        unicode_width::UnicodeWidthStr::width(text(&format_board_item(row, &ctx_at(133))).as_str());
     assert!(width <= 133);
 }
 

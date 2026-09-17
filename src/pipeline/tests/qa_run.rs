@@ -15,8 +15,7 @@ fn prompt(triage: bool) -> String {
         .insert(RUN_ID_VAR.to_string(), "Aurora::Quality Assurance".into());
     vars.extras
         .insert(TASK_IDS_VAR.to_string(), "6688, 6685, 6681".into());
-    vars.extras
-        .insert(QA_ROOT_VAR.to_string(), "/qa".into());
+    vars.extras.insert(QA_ROOT_VAR.to_string(), "/qa".into());
     vars.extras
         .insert(TRIAGE_VAR.to_string(), triage.to_string());
     resolve_pipeline("qa-run", None)
@@ -90,7 +89,10 @@ fn shadow_mode_records_and_answers_nothing() {
 #[test]
 fn triage_mode_answers_facts_and_escalates_judgment() {
     let prompt = prompt(true);
-    assert!(prompt.contains("qa-answer"), "triage cannot answer anything");
+    assert!(
+        prompt.contains("qa-answer"),
+        "triage cannot answer anything"
+    );
     assert!(prompt.contains("question of FACT"));
     assert!(prompt.contains("JUDGMENT CALL"));
     assert!(

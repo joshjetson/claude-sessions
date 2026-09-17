@@ -217,7 +217,11 @@ impl Alert {
 fn ask_span(asks: usize, on: bool) -> Span<'static> {
     let label = format!(
         " ⚠ {asks} {} you ",
-        if asks == 1 { "agent wants" } else { "agents want" }
+        if asks == 1 {
+            "agent wants"
+        } else {
+            "agents want"
+        }
     );
     let style = if on {
         Style::default()

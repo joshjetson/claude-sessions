@@ -34,7 +34,7 @@ mod task;
 pub use conflict::CONFLICT_PIPELINE;
 pub use pre_optics::PRE_OPTICS_PIPELINE;
 pub use qa::{QA_DRYRUN_PIPELINE, QA_PIPELINE};
-pub use qa_run::{QA_RUN_PIPELINE, QA_ROOT_VAR, RUN_ID_VAR, TASK_IDS_VAR, TRIAGE_VAR};
+pub use qa_run::{QA_ROOT_VAR, QA_RUN_PIPELINE, RUN_ID_VAR, TASK_IDS_VAR, TRIAGE_VAR};
 pub use revision::REVISION_PIPELINE;
 pub use task::TASK_PIPELINE;
 

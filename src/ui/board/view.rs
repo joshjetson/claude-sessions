@@ -10,9 +10,8 @@ use std::collections::VecDeque;
 use ratatui::text::Line;
 
 use crate::board::{
-    board_item_key, build_board_tree_with_runs, format_board_item, project_key,
-    stage_key, subtask_key,
-    BoardItem,
+    board_item_key, build_board_tree_with_runs, format_board_item, project_key, stage_key,
+    subtask_key, BoardItem,
 };
 use crate::qarun::{QaRun, RunCtx};
 use crate::types::{Notification, NotificationStatus, Task};
@@ -317,7 +316,6 @@ pub fn label(board: &BoardSlice) -> String {
         .unwrap_or_default();
     format!(" Tasks Board · {} · {count} ", board.filter.as_str())
 }
-
 
 /// The live session per task in any watched run.
 ///

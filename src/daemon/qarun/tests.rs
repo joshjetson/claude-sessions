@@ -57,8 +57,18 @@ fn the_newest_open_prompt_wins() {
     // An agent that asks twice without an answer is asking about the same
     // blockage, and the later phrasing is the one it is waiting on.
     let all = [
-        notif("a", "2026-09-17T10:00:00Z", NotificationKind::Question, NotificationStatus::Unread),
-        notif("b", "2026-09-17T11:00:00Z", NotificationKind::Question, NotificationStatus::Unread),
+        notif(
+            "a",
+            "2026-09-17T10:00:00Z",
+            NotificationKind::Question,
+            NotificationStatus::Unread,
+        ),
+        notif(
+            "b",
+            "2026-09-17T11:00:00Z",
+            NotificationKind::Question,
+            NotificationStatus::Unread,
+        ),
     ];
     assert_eq!(open_prompt(all.iter(), 6688).unwrap().id, "b");
 }
@@ -87,7 +97,12 @@ fn ordinary_progress_is_not_a_prompt() {
 
 #[test]
 fn an_answer_is_delivered_to_the_live_session() {
-    let all = vec![notif("a", "t", NotificationKind::Question, NotificationStatus::Unread)];
+    let all = vec![notif(
+        "a",
+        "t",
+        NotificationKind::Question,
+        NotificationStatus::Unread,
+    )];
     let live = session(Some("ttys004"));
     let sessions = vec![&live];
 
@@ -104,7 +119,12 @@ fn an_answer_is_delivered_to_the_live_session() {
 fn the_kind_comes_from_the_record_not_the_caller() {
     // The whole point. A coordinator cannot relabel a verdict as a question,
     // because it never supplies the label at all.
-    let all = vec![notif("v", "t", NotificationKind::Verdict, NotificationStatus::Unread)];
+    let all = vec![notif(
+        "v",
+        "t",
+        NotificationKind::Verdict,
+        NotificationStatus::Unread,
+    )];
     let live = session(Some("ttys004"));
     let sessions = vec![&live];
 
@@ -127,7 +147,12 @@ fn nothing_asked_means_nothing_to_answer() {
 
 #[test]
 fn an_empty_answer_is_refused_before_a_session_is_needed() {
-    let all = vec![notif("a", "t", NotificationKind::Question, NotificationStatus::Unread)];
+    let all = vec![notif(
+        "a",
+        "t",
+        NotificationKind::Question,
+        NotificationStatus::Unread,
+    )];
     assert_eq!(
         decide(&all, &[], 6688, "   "),
         AnswerDecision::Refused(AnswerRefusal::Empty)
@@ -136,7 +161,12 @@ fn an_empty_answer_is_refused_before_a_session_is_needed() {
 
 #[test]
 fn no_live_session_is_reported_as_such() {
-    let all = vec![notif("a", "t", NotificationKind::Question, NotificationStatus::Unread)];
+    let all = vec![notif(
+        "a",
+        "t",
+        NotificationKind::Question,
+        NotificationStatus::Unread,
+    )];
     assert_eq!(
         decide(&all, &[], 6688, "an answer"),
         AnswerDecision::Refused(AnswerRefusal::NoSession)
@@ -145,7 +175,12 @@ fn no_live_session_is_reported_as_such() {
 
 #[test]
 fn a_session_with_no_terminal_is_refused_rather_than_worked_around() {
-    let all = vec![notif("a", "t", NotificationKind::Question, NotificationStatus::Unread)];
+    let all = vec![notif(
+        "a",
+        "t",
+        NotificationKind::Question,
+        NotificationStatus::Unread,
+    )];
     let orphan = session(None);
     let sessions = vec![&orphan];
     assert_eq!(
@@ -159,8 +194,18 @@ fn every_open_question_for_the_task_is_resolved_not_just_the_newest() {
     // Answering clears the blockage. Leaving older ones open would keep the row
     // asking after the reviewer was no longer needed.
     let all = vec![
-        notif("a", "2026-09-17T10:00:00Z", NotificationKind::Question, NotificationStatus::Unread),
-        notif("b", "2026-09-17T11:00:00Z", NotificationKind::Question, NotificationStatus::Read),
+        notif(
+            "a",
+            "2026-09-17T10:00:00Z",
+            NotificationKind::Question,
+            NotificationStatus::Unread,
+        ),
+        notif(
+            "b",
+            "2026-09-17T11:00:00Z",
+            NotificationKind::Question,
+            NotificationStatus::Read,
+        ),
     ];
     let live = session(Some("ttys004"));
     let sessions = vec![&live];

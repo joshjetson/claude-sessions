@@ -224,16 +224,30 @@ pub(super) fn qa_answer(paths: &Paths, config: &ConfigHandle, args: QaAnswerArgs
             // of its own accord — the spawn policy gates that the same way it
             // gates every other child process in this crate.
             let session = SessionRef {
-                tty: response.body.pointer("/session/tty").and_then(Value::as_str).map(str::to_string),
-                session_id: response.body.pointer("/session/sessionId").and_then(Value::as_str).map(str::to_string),
-                cwd: response.body.pointer("/session/cwd").and_then(Value::as_str).map(str::to_string),
+                tty: response
+                    .body
+                    .pointer("/session/tty")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                session_id: response
+                    .body
+                    .pointer("/session/sessionId")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                cwd: response
+                    .body
+                    .pointer("/session/cwd")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             };
             let driver = crate::term::driver_or_null(config, SpawnPolicy::detect());
             let result = driver.send_text(&session, &args.answer);
             if !result.ok {
                 fail(format!(
                     "qa-answer: the daemon allowed it but the terminal refused — {}",
-                    result.error.unwrap_or_else(|| "no reason given".to_string())
+                    result
+                        .error
+                        .unwrap_or_else(|| "no reason given".to_string())
                 ));
             }
 
