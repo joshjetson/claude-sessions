@@ -43,6 +43,10 @@ pub enum LaunchKind {
     /// The developer-facing QA variant: reports in the terminal, writes no
     /// hand-back note.
     QaDry,
+    /// The coordinating session for a QA run. It watches several passes; it runs
+    /// none of them itself, and it spawns nothing — admission lives outside any
+    /// model.
+    QaRun,
     /// The other end of a task's life — a brief before anything is built.
     PreOptics,
     /// `C` — reopen the conversation and send NOTHING. Not a pipeline.
@@ -60,6 +64,7 @@ impl LaunchKind {
             LaunchKind::Revision { .. } => Some("revision"),
             LaunchKind::Qa => Some("qa"),
             LaunchKind::QaDry => Some("qa-dry"),
+            LaunchKind::QaRun => Some("qa-run"),
             LaunchKind::PreOptics => Some("pre-optics"),
             LaunchKind::Conflict { .. } => Some("conflict"),
             LaunchKind::Conversation { .. } => None,
@@ -80,7 +85,12 @@ impl LaunchKind {
             LaunchKind::Conflict { session_id } => format!("--resume {session_id} {SKIP}"),
             // See the note on the variant: QA answers prompts rather than
             // skipping them.
-            LaunchKind::Qa | LaunchKind::QaDry | LaunchKind::PreOptics => String::new(),
+            // See the note on the Qa variant: these answer prompts rather than
+            // skipping them. The coordinator holds no permission of its own —
+            // it never opens the application and never edits anything.
+            LaunchKind::Qa | LaunchKind::QaDry | LaunchKind::PreOptics | LaunchKind::QaRun => {
+                String::new()
+            }
         }
     }
 

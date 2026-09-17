@@ -61,6 +61,10 @@ pub struct BoardCtx<'a> {
     pub auto_dev: Option<AutoDevResolver>,
     /// Passed in rather than read here, so one render sees one instant.
     pub now: Option<DateTime<Local>>,
+    /// How wide the list pane is. A QA run's status column drops to its glyph
+    /// form below [`crate::qarun::QA_WIDE_MIN_COLS`]; every other row ignores
+    /// this. Zero means "unknown", which reads as narrow.
+    pub tree_cols: u16,
 }
 
 impl BoardCtx<'_> {
@@ -289,6 +293,70 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
             row.extend(deadline_row(task.deadline.as_deref(), ctx.now()));
         }
 
+        BoardItem::QaRun {
+            run,
+            summary,
+            expanded,
+        } => {
+            let wide = crate::qarun::is_wide(ctx.tree_cols);
+            row.plain("    ")
+                .styled(format!("{} ", arrow(*expanded)), Role::Accent);
+            let text = crate::qarun::run_header_text(run, summary, wide);
+            // The header flashes only while something waits on the reviewer,
+            // and stops the moment nothing does. A header that always blinks is
+            // a header nobody reads.
+            if summary.wants_attention() {
+                if ctx.blink_on {
+                    row.push(format!(" ⠿ {text} "), Style::new(Role::Warn).invert());
+                } else {
+                    row.push(format!("⠿ {text}"), Style::new(Role::Warn).bold());
+                }
+            } else if summary.finished() {
+                row.styled("✓ ", Role::Ok)
+                    .push(text, Style::new(Role::Plain).bold());
+            } else {
+                row.styled("⠿ ", Role::Accent)
+                    .push(text, Style::new(Role::Plain).bold());
+            }
+        }
+
+        BoardItem::QaRunTask { entry, task, .. } => {
+            let wide = crate::qarun::is_wide(ctx.tree_cols);
+
+            // Deliberately leaner than an ordinary task row, in two ways.
+            //
+            // No status marker: an ordinary row leads with ○ / ⟳ / ✓, which
+            // answers "is anything happening here". Inside a run the QA cell
+            // answers that better, and carrying both produced rows reading
+            // "○ … ✓ PASS" — two markers disagreeing about one task.
+            //
+            // No priority, story points, archive or auto-dev markers: those
+            // answer "should I pick this up", which the run answered by picking
+            // it up. What that buys is width, and the width goes to the name.
+            const INDENT: u16 = 8;
+            const ID_COL: u16 = 8;
+            let cell_col: u16 = if wide { 15 } else { 2 };
+            let name_width = ctx
+                .tree_cols
+                .saturating_sub(INDENT + ID_COL + cell_col + 2)
+                .max(16) as usize;
+
+            let name = match task {
+                Some(task) => truncate(&task.name, name_width),
+                // The task left the stage but the run still owns it.
+                None => format!("#{}", entry.task_id),
+            };
+            let id_text = format!("#{}", entry.task_id);
+
+            row.plain(" ".repeat(INDENT as usize))
+                .plain(pad(&name, name_width + 1))
+                .styled(id_text.clone(), Role::Id)
+                .plain(pad(&id_text, ID_COL as usize));
+
+            let cell = crate::qarun::qa_cell_text(entry, wide);
+            row.styled(cell, status_role(entry.status));
+        }
+
         BoardItem::Subtask { task, .. } => {
             let markers = task_markers(task, ctx);
             row.plain("         ")
@@ -341,4 +409,24 @@ fn prefixed(text: impl Into<String>, role: Role) -> Row {
     let mut row = RowBuilder::new();
     row.plain(" ").styled(text, role);
     row.build()
+}
+
+/// Pad to a fixed column on the DISPLAY width, never the byte length: the
+/// glyphs in these rows are multi-byte, and counting bytes pushes every column
+/// out by their length.
+fn pad(text: &str, width: usize) -> String {
+    let used = unicode_width::UnicodeWidthStr::width(text);
+    " ".repeat(width.saturating_sub(used).max(1))
+}
+
+/// The colour a run status reads in.
+fn status_role(status: crate::qarun::QaStatus) -> Role {
+    use crate::qarun::QaStatus;
+    match status {
+        QaStatus::Asks => Role::Warn,
+        QaStatus::Stalled | QaStatus::Revisions => Role::Danger,
+        QaStatus::Pass => Role::Ok,
+        QaStatus::Testing => Role::Accent,
+        QaStatus::Queued => Role::Dim,
+    }
 }

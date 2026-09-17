@@ -35,6 +35,7 @@ pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome
             }
             state.dialog = Some(dialog);
         }
+        DialogOutcome::Run(command) => crate::ui::board::run_command(state, *command),
         DialogOutcome::Start(request) => crate::ui::board::start(state, *request),
         DialogOutcome::PickDir(picked) => {
             // Remembered, so the next launch for this project needs no prompt.

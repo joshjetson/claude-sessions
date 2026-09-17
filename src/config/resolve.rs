@@ -174,6 +174,18 @@ impl ConfigHandle {
 
     /// Per-project merge-request target branch. `None` leaves the decision to
     /// the repository default.
+    /// How many QA sessions a run may have live at once, or `None` for no cap.
+    ///
+    /// A configured `0` reads as no cap too: the field exists to impose a limit,
+    /// so the absence of one and an explicit zero mean the same thing.
+    pub fn qa_lane_limit(&self) -> Option<usize> {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.lane_limit)
+            .filter(|limit| *limit > 0)
+    }
+
     pub fn target_branch(&self, project: &str) -> Option<&str> {
         lookup_ci(&self.config.target_branches, project).map(|(_, branch)| branch.as_str())
     }

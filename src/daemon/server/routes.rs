@@ -16,8 +16,8 @@ use crate::types::{NotificationKind, NotificationLevel, NotificationStatus};
 
 use crate::daemon::protocol;
 use crate::daemon::{
-    ActionResult, BlockedMarker, BoardFilter, DoneMarker, NewNotification, PendingRequest,
-    RefreshRequest, TaskLinkPatch, TaskLinkStatus,
+    ActionResult, AnswerOutcome, BlockedMarker, BoardFilter, DoneMarker, NewNotification,
+    PendingRequest, RefreshRequest, TaskLinkPatch, TaskLinkStatus,
 };
 
 use super::{Shared, SHUTDOWN_DELAY};
@@ -58,6 +58,32 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         ("POST", "/notify") => {
             let id = engine.push_notification(notification(&body())).id;
             (200, json!({ "ok": true, "id": id }))
+        }
+        // A coordinator answering one of the sessions in its run.
+        //
+        // The daemon decides and the CALLER delivers: nothing here drives a
+        // terminal. The kind is read from the recorded notification rather than
+        // taken from the request, so a coordinator cannot label a verdict a
+        // question and answer it.
+        ("POST", "/qa-run/answer") => {
+            let body = body();
+            let task_id = number(&body, "taskId").unwrap_or_default();
+            let answer = text(&body, "answer", "");
+            match engine.answer_decision(task_id, &answer) {
+                AnswerOutcome::Deliver { session, resolve } => (
+                    200,
+                    json!({
+                        "ok": true,
+                        "session": {
+                            "tty": session.tty,
+                            "sessionId": session.session_id,
+                            "cwd": session.cwd,
+                        },
+                        "resolve": resolve,
+                    }),
+                ),
+                AnswerOutcome::Refused(reason) => (400, json!({ "ok": false, "error": reason })),
+            }
         }
         ("POST", "/notifications/status") => {
             let body = body();

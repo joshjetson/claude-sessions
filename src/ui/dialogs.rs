@@ -40,7 +40,7 @@ use crate::config::ConfigHandle;
 use crate::ui::board::{SessionTarget, StartRequest};
 use crate::ui::state::{Action, Quit};
 
-pub use board::{ContextDialog, TaskAction, TaskMenu};
+pub use board::{ContextDialog, RunAction, RunCommand, RunMenu, TaskAction, TaskMenu};
 pub use deploy::{DeployAction, DeployMenu, DeployTaskAction, DeployTaskMenu};
 pub use deploy_config::{DeployConfig, DeployField};
 pub use deploy_confirm::{DeployConfirm, ResolveConflictConfirm};
@@ -115,6 +115,8 @@ pub enum DialogOutcome {
         action: Option<Action>,
         flash: Option<String>,
     },
+    /// Close and act on a QA run.
+    Run(Box<RunCommand>),
     /// Close and run the shared start flow, which owns the two guards, the
     /// folder resolution and the prompt assembly.
     Start(Box<StartRequest>),
@@ -168,6 +170,7 @@ pub enum Dialog {
     PurgeConfirm(PurgeConfirm),
     // --- board ---
     TaskMenu(TaskMenu),
+    RunMenu(RunMenu),
     Context(ContextDialog),
     BlockedBy(BlockedBy),
     AlreadyRunning(AlreadyRunning),
@@ -218,6 +221,7 @@ impl Dialog {
             Dialog::PurgeConfirm(dialog) => dialog.handle_key(key, ctx),
             Dialog::DaemonLogs(dialog) => dialog.handle_key(key, area, ctx),
             Dialog::TaskMenu(dialog) => dialog.handle_key(key, ctx),
+            Dialog::RunMenu(dialog) => dialog.handle_key(key, ctx),
             Dialog::Context(dialog) => dialog.handle_key(key, ctx),
             Dialog::BlockedBy(dialog) => dialog.handle_key(key, ctx),
             Dialog::AlreadyRunning(dialog) => dialog.handle_key(key, ctx),
@@ -272,6 +276,7 @@ impl Dialog {
             Dialog::PurgeConfirm(dialog) => dialog.render(frame, area),
             Dialog::DaemonLogs(dialog) => dialog.render(frame, area),
             Dialog::TaskMenu(dialog) => dialog.render(frame, area),
+            Dialog::RunMenu(dialog) => dialog.render(frame, area),
             Dialog::Context(dialog) => dialog.render(frame, area),
             Dialog::BlockedBy(dialog) => dialog.render(frame, area),
             Dialog::AlreadyRunning(dialog) => dialog.render(frame, area),
@@ -309,6 +314,7 @@ impl Dialog {
             Dialog::PurgeConfirm(_) => "purgeConfirm",
             Dialog::DaemonLogs(_) => "daemonLogs",
             Dialog::TaskMenu(_) => "taskMenu",
+            Dialog::RunMenu(_) => "runMenu",
             Dialog::Context(_) => "contextDialog",
             Dialog::BlockedBy(_) => "blockedBy",
             Dialog::AlreadyRunning(_) => "alreadyRunning",

@@ -51,8 +51,41 @@ pub struct QaRunState {
     pub stale: bool,
     pub open_gaps: usize,
     pub closed_gaps: usize,
+    /// What `matrix.py` recorded when the pass finished. Read, never inferred:
+    /// a verdict an agent typed into its transcript is a claim, and a verdict
+    /// matrix.py wrote is a record. `None` while a round is still open.
+    pub verdict: Option<QaVerdict>,
+    /// QAden's own phase marker, carried through for display.
+    pub phase: Option<String>,
+    /// Whether a hand-back note has been written for this round.
+    pub note_written: bool,
     pub dir: PathBuf,
     pub worktree: Option<PathBuf>,
+}
+
+/// The outcome matrix.py records. A closed set: anything else on disk reads as
+/// "no verdict yet", so a schema change cannot render as a row nobody planned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QaVerdict {
+    Pass,
+    Revisions,
+}
+
+impl QaVerdict {
+    fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "pass" => Some(QaVerdict::Pass),
+            "revisions" => Some(QaVerdict::Revisions),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            QaVerdict::Pass => "pass",
+            QaVerdict::Revisions => "revisions",
+        }
+    }
 }
 
 /// `run.json` as QAden's `matrix.py` shapes it. Every field is optional: a
@@ -62,6 +95,13 @@ pub struct QaRunState {
 struct RunFile {
     meta: RunMeta,
     cells: HashMap<String, Option<Cell>>,
+    /// A bare string on every run written so far. Typed as a free-form value so
+    /// an object here reads as "no verdict" rather than failing the whole
+    /// parse — the module's rule is that an unrecognised schema means no prior
+    /// run, never an error.
+    verdict: Option<serde_json::Value>,
+    phase: Option<String>,
+    note_written: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -126,9 +166,18 @@ pub fn qa_run_state(
     let worktree = run.meta.worktree.map(PathBuf::from);
     let current_head = worktree.as_deref().and_then(&head_of);
 
+    let verdict = run
+        .verdict
+        .as_ref()
+        .and_then(serde_json::Value::as_str)
+        .and_then(QaVerdict::from_label);
+
     QaRunState {
         exists: true,
         round: archived as u32 + 1,
+        verdict,
+        phase: run.phase,
+        note_written: run.note_written,
         // Only claim staleness when both commits are actually known. An absent
         // worktree means we cannot tell, and guessing "stale" would push the
         // reviewer toward archiving a round that may still be the current one.

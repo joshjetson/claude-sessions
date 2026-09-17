@@ -122,6 +122,20 @@ impl Selection {
         self.index = index;
     }
 
+    /// Put the cursor on a named row. Does nothing when the row is not on
+    /// screen — a cursor pointing at a row that is not there would resolve back
+    /// to a position, which is worse than not moving.
+    pub fn select_key(&mut self, keys: &[String], key: &str) -> bool {
+        match keys.iter().position(|candidate| candidate == key) {
+            Some(index) => {
+                self.key = Some(key.to_string());
+                self.index = index;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn move_by(&mut self, keys: &[String], delta: isize) {
         if keys.is_empty() {
             return;

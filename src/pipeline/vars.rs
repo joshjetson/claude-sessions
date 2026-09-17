@@ -30,6 +30,34 @@ pub fn notify_command(title: &str, message: &str) -> String {
     format!("{BIN} notify --title \"{title}\" --message \"{message}\"")
 }
 
+/// `claude-sessions qa-shadow …` — recording what a coordinator WOULD answer.
+///
+/// Called before the coordinator acts, never after. The store refuses to
+/// overwrite, and that refusal is what makes the record worth keeping.
+pub fn qa_shadow_command(run_id: &str, task_id: i64) -> String {
+    format!(
+        "{BIN} qa-shadow --run \"{run_id}\" --task {task_id} \
+         --question \"<their question>\" --would-answer \"<your answer>\" \
+         --confidence high|medium|low"
+    )
+}
+
+/// `claude-sessions qa-answer …` — delivering an answer to a QA session.
+///
+/// The daemon decides whether it may be delivered: a question may be answered,
+/// a verdict checkpoint never may be, whatever this command is told.
+pub fn qa_answer_command(task_id: i64) -> String {
+    format!("{BIN} qa-answer --task {task_id} --answer \"<your answer>\"")
+}
+
+/// `claude-sessions notify … --kind <kind>` — an escalation that says what it
+/// is, so a run can count what is blocked rather than what is merely loud.
+pub fn notify_kind_command(title: &str, message: &str, level: &str, kind: &str) -> String {
+    format!(
+        "{BIN} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}"
+    )
+}
+
 /// The merge request a conflict-resolution run is about.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MergeRequestVars {

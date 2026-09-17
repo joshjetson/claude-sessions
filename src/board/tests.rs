@@ -7,6 +7,7 @@
 
 mod deploy;
 mod format;
+mod qarun;
 mod tree;
 
 use std::collections::BTreeMap;

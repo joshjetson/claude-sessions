@@ -15,8 +15,8 @@ use crate::config::ConfigHandle;
 use crate::db::Db;
 use crate::paths::Paths;
 use crate::scan::{PlatformProcessSource, ProcessSource, Scanner};
-use crate::term::SpawnPolicy;
-use crate::types::{Board, DeployBoard, Task};
+use crate::term::{SessionRef, SpawnPolicy};
+use crate::types::{Board, DeployBoard, Notification, Session, Task};
 
 use super::backend::{NullBackend, TaskBackend};
 use super::caches::Caches;
@@ -215,6 +215,21 @@ pub struct EngineOptions<S: ProcessSource = PlatformProcessSource> {
     pub spawn: SpawnPolicy,
 }
 
+/// What the daemon answers a `qa-answer` request with.
+///
+/// It carries a session rather than delivering to it: the daemon drives no
+/// terminals in this port, so the caller performs the send and then asks the
+/// daemon to resolve the questions that answering cleared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerOutcome {
+    Deliver {
+        session: SessionRef,
+        /// The notification ids that answering clears.
+        resolve: Vec<String>,
+    },
+    Refused(String),
+}
+
 impl EngineOptions<PlatformProcessSource> {
     /// The daemon's own configuration: a real `ps`/`lsof` scanner.
     pub fn system(paths: Paths, config: ConfigHandle) -> Self {
@@ -285,6 +300,44 @@ impl<S: ProcessSource> Engine<S> {
     /// Everything a client that just connected needs to be current.
     pub fn snapshot(&self) -> Snapshot {
         Snapshot::of(&self.inner.state())
+    }
+
+    /// Decide whether a coordinator's answer may be delivered, and to which
+    /// session.
+    ///
+    ///
+    /// The daemon does not type into terminals — only the UI's action worker
+    /// drives one — so this returns the decision and the caller performs the
+    /// send. The kind is read from the recorded notification rather than taken
+    /// from the caller, which is what makes the verdict rule a rule rather than
+    /// a request.
+    pub fn answer_decision(&self, task_id: i64, answer: &str) -> AnswerOutcome {
+        let state = self.inner.state();
+        let notifications: Vec<Notification> = state.notifications.iter().cloned().collect();
+        let sessions: Vec<&Session> = state
+            .sessions
+            .iter()
+            .filter(|session| session.task_id == Some(task_id))
+            .collect();
+
+        // Newest first, so an answer reaches the session actually working the
+        // task rather than a stale one that outlived a restart.
+        let mut sessions = sessions;
+        sessions.sort_by_key(|session| std::cmp::Reverse(session.session_mtime));
+
+        match super::qarun::decide(&notifications, &sessions, task_id, answer) {
+            super::qarun::AnswerDecision::Deliver { session, resolve } => AnswerOutcome::Deliver {
+                session: SessionRef {
+                    tty: session.tty.clone(),
+                    session_id: Some(session.session_id.clone()),
+                    cwd: Some(session.cwd.clone()),
+                },
+                resolve,
+            },
+            super::qarun::AnswerDecision::Refused(refusal) => {
+                AnswerOutcome::Refused(refusal.detail())
+            }
+        }
     }
 
     /// A live feed of everything the engine announces. Dropping the receiver

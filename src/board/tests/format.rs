@@ -3,7 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::board::{format_board_item, AutoMarker, BoardCtx, BoardItem, Role, TaskSessionStatus};
-use crate::types::{Color, Notification, NotificationKind, NotificationLevel, NotificationStatus, Task};
+use crate::types::{
+    Color, Notification, NotificationKind, NotificationLevel, NotificationStatus, Task,
+};
 
 use super::{now, role_of, task, text};
 

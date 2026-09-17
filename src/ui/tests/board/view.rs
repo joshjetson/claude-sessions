@@ -452,7 +452,7 @@ fn only_the_visible_window_of_a_long_board_is_formatted() {
         "NoSuchProject-ForTests",
         "Approved to Start",
     ));
-    let view = board::window(&state, 0, 10);
+    let view = board::window(&state, 0, 10, 133);
     assert!(view.total > 400);
     assert_eq!(view.lines.len(), 10);
 }

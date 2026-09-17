@@ -31,6 +31,9 @@ pub struct StartRequest {
     /// A folder already chosen, skipping resolution — how the pickers hand
     /// their answer back.
     pub dir: Option<String>,
+    /// Extra prompt variables. Used by the QA-run coordinator, which is about a
+    /// run rather than about the one task whose folder it borrows.
+    pub extras: std::collections::BTreeMap<String, String>,
 }
 
 impl StartRequest {
@@ -41,6 +44,7 @@ impl StartRequest {
             extra_context: String::new(),
             force: false,
             dir: None,
+            extras: std::collections::BTreeMap::new(),
         }
     }
 

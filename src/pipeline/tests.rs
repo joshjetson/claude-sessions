@@ -9,6 +9,7 @@
 mod definitions;
 mod golden;
 mod overrides;
+mod qa_run;
 mod skills;
 mod stage_steps;
 mod template;

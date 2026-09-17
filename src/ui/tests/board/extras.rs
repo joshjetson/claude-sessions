@@ -118,7 +118,7 @@ fn a_task_row_carries_the_optics_badge_and_the_real_auto_dev_marker() {
         "Approved to Start",
     ));
 
-    let row = board::window(&state, 0, 20)
+    let row = board::window(&state, 0, 20, 133)
         .lines
         .iter()
         .map(|line| {
