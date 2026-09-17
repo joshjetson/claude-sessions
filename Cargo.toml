@@ -1,6 +1,6 @@
 [package]
 name = "claude-sessions"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 resolver = "3"
 rust-version = "1.85"
@@ -15,6 +15,12 @@ exclude = ["assets/", ".github/"]
 
 [dependencies]
 crossterm = "0.28"
+# ratatui pulls `instability ^0.3`; 0.3.11+ demand rustc 1.88, and `cargo
+# install` resolves dependencies without honoring MSRV-aware fallback — a
+# fresh install on our declared 1.85 toolchain picked 0.3.13 and refused to
+# build. Pinned exactly so the install promise cannot depend on resolver
+# behavior. Revisit when the MSRV floor moves.
+instability = "=0.3.10"
 ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
 anyhow = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }

@@ -29,9 +29,17 @@ jobs:
   # release of any dependency breaks us, this job goes red before a
   # teammate's install does.
   fresh-resolve:
+    strategy:
+      matrix:
+        # stable catches new-dep breakage; 1.85 is the declared MSRV — a fresh
+        # resolve must build on BOTH, because `cargo install` users resolve
+        # fresh on whatever toolchain they have.
+        toolchain: [stable, "1.85"]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
       - run: rm Cargo.lock
       - run: cargo build --all-targets
