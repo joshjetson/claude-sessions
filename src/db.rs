@@ -47,10 +47,19 @@ use rusqlite::{Connection, Params, Row};
 use crate::paths::Paths;
 
 /// Applied in order, once each; `PRAGMA user_version` records how far we got.
-/// Append new migrations — never edit an existing one, and never renumber: a
-/// database written by the Node app is already at version 2 and has to keep
-/// working, so 1 and 2 are its schema verbatim.
-const MIGRATIONS: [&str; 3] = [
+///
+/// **This list is shared with the Node app, which writes the same database
+/// file.** `PRAGMA user_version` is one integer for both, so a migration that
+/// exists here at index N and means something different there at index N is a
+/// silent corruption: whichever app opens the file first sets the version, and
+/// the other skips its own migration without running it and without erroring.
+/// The symptom is never a crash — it is an INSERT against a column that was
+/// never added, swallowed by a catch, and a feature that quietly does nothing.
+///
+/// So: append only, never renumber, and add the same SQL at the same index in
+/// the Node app's `src/db.ts`. Migrations 1 and 2 are the Node app's original
+/// schema verbatim, which is why a database it wrote is already at version 2.
+const MIGRATIONS: [&str; 4] = [
     // 1 — initial schema.
     "
     CREATE TABLE IF NOT EXISTS task_archive (
@@ -113,6 +122,18 @@ const MIGRATIONS: [&str; 3] = [
       updated_at   TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS task_session_file_idx ON task_session_index(session_file);
+    ",
+    // 4 — what a notification IS, not just how loud it is.
+    //
+    // `level` says how to announce something. It does not say whether the
+    // sender is blocked waiting for an answer, and a QA run has to know: an
+    // agent stopped at a question is the one thing costing the reviewer time,
+    // and a run cannot count those without a field that distinguishes them.
+    //
+    // Existing rows default to 'info', which is what they were.
+    "
+    ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT 'info';
+    CREATE INDEX IF NOT EXISTS notifications_kind_idx ON notifications(kind);
     ",
 ];
 

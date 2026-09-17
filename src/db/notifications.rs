@@ -9,7 +9,7 @@
 use rusqlite::{Connection, Row};
 
 use super::Db;
-use crate::types::{Notification, NotificationLevel, NotificationStatus};
+use crate::types::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
 use crate::util::iso_now;
 
 /// How many notifications the daemon restores into the feed on startup.
@@ -18,7 +18,7 @@ pub const RECENT_LIMIT: i64 = 200;
 pub const PRUNE_KEEP: i64 = 1000;
 
 const NOTIFICATION_COLUMNS: &str =
-    "id, ts, title, message, cwd, project, session_id, task_id, level, status";
+    "id, ts, title, message, cwd, project, session_id, task_id, level, status, kind";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Notification> {
     Ok(Notification {
@@ -33,6 +33,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Notification> {
         session_id: Some(row.get::<_, String>("session_id")?).filter(|s| !s.is_empty()),
         task_id: row.get("task_id")?,
         level: NotificationLevel::from_label(&row.get::<_, String>("level")?),
+        kind: NotificationKind::from_label(&row.get::<_, String>("kind")?),
         status: NotificationStatus::from_label(&row.get::<_, String>("status")?),
     })
 }
@@ -45,8 +46,8 @@ impl Db {
         self.exec("put_notification", |conn| {
             conn.prepare_cached(
                 "INSERT INTO notifications
-                   (id, ts, title, message, cwd, project, session_id, task_id, level, status)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                   (id, ts, title, message, cwd, project, session_id, task_id, level, status, kind)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET status = excluded.status",
             )?
             .execute((
@@ -60,6 +61,7 @@ impl Db {
                 n.task_id,
                 n.level.as_str(),
                 n.status.as_str(),
+                n.kind.as_str(),
             ))?;
             Ok(())
         });

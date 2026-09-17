@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::board::{format_board_item, AutoMarker, BoardCtx, BoardItem, Role, TaskSessionStatus};
-use crate::types::{Color, Notification, NotificationLevel, NotificationStatus, Task};
+use crate::types::{Color, Notification, NotificationKind, NotificationLevel, NotificationStatus, Task};
 
 use super::{now, role_of, task, text};
 
@@ -266,6 +266,7 @@ fn notification(status: NotificationStatus, level: NotificationLevel) -> Notific
         session_id: None,
         task_id: Some(5944),
         level,
+        kind: NotificationKind::Info,
         // Half a minute before the fixed `now`, whatever timezone the suite
         // runs in.
         ts: (now().with_timezone(&chrono::Utc) - chrono::Duration::seconds(30))

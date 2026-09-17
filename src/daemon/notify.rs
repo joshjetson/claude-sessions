@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 
 use crate::db::{PRUNE_KEEP, RECENT_LIMIT};
 use crate::scan::ProcessSource;
-use crate::types::{Notification, NotificationLevel, NotificationStatus};
+use crate::types::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
 use crate::util::{iso_now, project_name};
 
 use super::engine::EngineInner;
@@ -26,7 +26,14 @@ pub const NOTIFICATION_LIMIT: usize = 200;
 pub struct NewNotification {
     /// Prefix for the generated id, so the feed reads as what raised it
     /// (`await`, `stalled`, `assigned`, `done`, `blocked`, `notify`).
-    pub kind: &'static str,
+    ///
+    /// Named `source` rather than `kind` because [`NotificationKind`] now means
+    /// something else entirely — whether the sender is blocked waiting for a
+    /// reply. Two fields called `kind` in one struct, meaning an id prefix and
+    /// an answerability class, is a mistake waiting to be made at a call site.
+    pub source: &'static str,
+    /// What this is: progress, a question someone is blocked on, or a verdict.
+    pub kind: NotificationKind,
     pub title: String,
     pub message: String,
     pub cwd: String,
@@ -39,9 +46,10 @@ pub struct NewNotification {
 }
 
 impl NewNotification {
-    pub fn new(kind: &'static str, title: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(source: &'static str, title: impl Into<String>, message: impl Into<String>) -> Self {
         NewNotification {
-            kind,
+            source,
+            kind: NotificationKind::Info,
             title: title.into(),
             message: message.into(),
             cwd: String::new(),
@@ -88,7 +96,7 @@ impl<S: ProcessSource> EngineInner<S> {
             }
         });
         let notification = Notification {
-            id: self.notification_id(new.kind),
+            id: self.notification_id(new.source),
             title: new.title,
             message: new.message,
             cwd: new.cwd,
@@ -96,6 +104,7 @@ impl<S: ProcessSource> EngineInner<S> {
             session_id: new.session_id,
             task_id: new.task_id,
             level: new.level,
+            kind: new.kind,
             ts: iso_now(),
             status: NotificationStatus::Unread,
         };
@@ -113,9 +122,9 @@ impl<S: ProcessSource> EngineInner<S> {
     /// Ids are unique within a process even when two are raised in the same
     /// millisecond — Node used a bare `Date.now()` for the completion
     /// notification, which two tasks finishing together would collide on.
-    fn notification_id(&self, kind: &str) -> String {
+    fn notification_id(&self, source: &str) -> String {
         let seq = self.seq.fetch_add(1, Ordering::Relaxed);
-        format!("{kind}-{}-{seq}", chrono::Utc::now().timestamp_millis())
+        format!("{source}-{}-{seq}", chrono::Utc::now().timestamp_millis())
     }
 
     /// Change the status of notifications (read / resolved).

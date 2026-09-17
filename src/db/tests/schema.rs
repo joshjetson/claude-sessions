@@ -89,8 +89,25 @@ fn a_node_era_database_migrates_forward_in_place() {
     db.put_notification(&notification("n1", "2026-08-01T10:00:00.000Z", "from node"));
     // Rewind to where the Node app left off: the schema is identical for
     // migrations 1 and 2, so this is what an existing file looks like.
+    //
+    // Every later migration has to be undone here, not just the newest. An
+    // earlier version of this test dropped only migration 3's table and left
+    // migration 4's column in place, so reopening re-ran `ADD COLUMN kind`
+    // against a column that already existed and the whole open failed. The
+    // rewind has to be a real version 2 or it is testing a state that cannot
+    // occur.
     db.exec("t", |conn| {
-        conn.execute_batch("DROP TABLE task_session_index; PRAGMA user_version = 2")
+        conn.execute_batch(
+            // The index has to go before the column it indexes: SQLite refuses
+            // DROP COLUMN while an index references it, and Db::exec swallows
+            // the error — so a wrong order here leaves the file at version 4
+            // with migration 3's table already dropped, and the test fails
+            // somewhere else entirely.
+            "DROP INDEX IF EXISTS notifications_kind_idx;
+             ALTER TABLE notifications DROP COLUMN kind;
+             DROP TABLE task_session_index;
+             PRAGMA user_version = 2",
+        )
     });
     drop(db);
 
@@ -109,4 +126,84 @@ fn a_node_era_database_migrates_forward_in_place() {
         updated_at: "2026-08-02T10:00:00.000Z".to_string(),
     });
     assert!(migrated.task_session(6117).is_some());
+}
+
+/// The migration list is shared with the Node app, which writes the same
+/// database file. `PRAGMA user_version` is one integer for both, so a migration
+/// that exists here at index N and means something else there at index N is a
+/// silent corruption: whichever app opens the file first sets the version and
+/// the other skips its own without running it and without erroring.
+///
+/// These assertions exist so that renumbering fails here rather than in
+/// someone's notification feed six weeks later.
+#[test]
+fn the_shared_migration_sequence_is_pinned() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+    let db = Db::open(&paths);
+
+    assert_eq!(
+        db.schema_version(),
+        4,
+        "the schema version moved — is the Node app's src/db.ts at the same number?"
+    );
+
+    // 3 — this port's task/transcript index. The Node app carries the same SQL
+    // at the same index without using the table, purely to keep the sequences
+    // aligned.
+    assert!(
+        table_exists(&db, "task_session_index"),
+        "migration 3 is missing — the sequence has diverged from the Node app"
+    );
+
+    // 4 — the notification kind.
+    assert!(
+        notification_columns(&db).contains(&"kind".to_string()),
+        "migration 4 is missing — the sequence has diverged from the Node app"
+    );
+}
+
+/// The end-to-end shape of the failure the pinning guards: a missing column
+/// means the INSERT throws, `Db::exec` swallows it, and notifications stop
+/// persisting without a word anywhere.
+#[test]
+fn a_notification_round_trips_its_kind() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+    let db = Db::open(&paths);
+
+    let mut asking = notification("q1", "2026-09-17T12:00:00.000Z", "which environment?");
+    asking.kind = crate::types::NotificationKind::Question;
+    db.put_notification(&asking);
+
+    let stored = db.recent_notifications(10);
+    assert_eq!(stored.len(), 1, "the notification was not persisted at all");
+    assert_eq!(stored[0].kind, crate::types::NotificationKind::Question);
+}
+
+/// A row written before the column existed, and any sender that omits it, reads
+/// back as the kind those notifications always were.
+#[test]
+fn an_unknown_kind_reads_as_info() {
+    assert_eq!(
+        crate::types::NotificationKind::from_label("nonsense"),
+        crate::types::NotificationKind::Info
+    );
+    assert_eq!(
+        crate::types::NotificationKind::from_label(""),
+        crate::types::NotificationKind::Info
+    );
+    assert!(!crate::types::NotificationKind::Info.is_answerable());
+    assert!(!crate::types::NotificationKind::Verdict.is_answerable());
+    assert!(crate::types::NotificationKind::Question.is_answerable());
+}
+
+fn table_exists(db: &Db, name: &str) -> bool {
+    db.one("t", "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
+        rusqlite::params![name], |row| row.get::<_, String>(0))
+        .is_some()
+}
+
+fn notification_columns(db: &Db) -> Vec<String> {
+    db.rows("cols", "PRAGMA table_info(notifications)", [], |row| row.get::<_, String>(1))
 }

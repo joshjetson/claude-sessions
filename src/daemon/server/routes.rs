@@ -12,7 +12,7 @@ use std::thread;
 use serde_json::{json, Value};
 
 use crate::scan::ProcessSource;
-use crate::types::{NotificationLevel, NotificationStatus};
+use crate::types::{NotificationKind, NotificationLevel, NotificationStatus};
 
 use crate::daemon::protocol;
 use crate::daemon::{
@@ -192,7 +192,11 @@ fn deployed(result: ActionResult) -> (u16, Value) {
 /// shell command inside an agent's transcript and a 400 would be invisible.
 fn notification(body: &Value) -> NewNotification {
     NewNotification {
-        kind: "notify",
+        source: "notify",
+        // A closed set, resolved through from_label: an unrecognised value
+        // reads as Info rather than becoming a new kind. A typo in a --kind
+        // flag must not invent one, and must never mark something answerable.
+        kind: NotificationKind::from_label(&text(body, "kind", "info")),
         title: clamp(&text(body, "title", "Notification"), 200),
         message: clamp(&text(body, "message", ""), 4000),
         cwd: text(body, "cwd", ""),

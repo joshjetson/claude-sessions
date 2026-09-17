@@ -17,7 +17,7 @@ mod schema;
 
 use super::*;
 use crate::paths::Paths;
-use crate::types::{Notification, NotificationLevel, NotificationStatus};
+use crate::types::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
 use tempfile::TempDir;
 
 /// A database in a throwaway tree. The directory is dropped with it.
@@ -76,6 +76,7 @@ fn notification(id: &str, ts: &str, title: &str) -> Notification {
         session_id: None,
         task_id: None,
         level: NotificationLevel::Info,
+        kind: NotificationKind::Info,
         status: NotificationStatus::Unread,
     }
 }

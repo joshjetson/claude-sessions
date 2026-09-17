@@ -11,7 +11,8 @@ use crate::config::{ConfigHandle, EnvOverrides};
 use crate::daemon::{wire_session, NewNotification, NOTIFICATION_LIMIT};
 use crate::paths::Paths;
 use crate::types::{
-    CumulativeUsage, Notification, NotificationLevel, NotificationStatus, Prompt, Usage,
+    CumulativeUsage, Notification, NotificationKind, NotificationLevel, NotificationStatus, Prompt,
+    Usage,
 };
 
 fn heavy() -> Session {
@@ -212,6 +213,7 @@ fn the_feed_is_restored_newest_first_and_no_deeper_than_the_cap() {
             session_id: None,
             task_id: None,
             level: NotificationLevel::Info,
+            kind: NotificationKind::Info,
             // Distinct, ordered stamps: the store returns them by time.
             ts: format!("2026-09-16T10:{:02}:{:02}.000Z", n / 60, n % 60),
             status: NotificationStatus::Unread,
