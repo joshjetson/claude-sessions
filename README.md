@@ -193,7 +193,8 @@ with the tmux driver.
 - **Context meter** — per-session token usage and percentage of the context window
 - **Conversation pane** — the transcript as it streams, with syntax-highlighted code blocks
   and rendered tool calls; scroll it, filter it, search it, timestamp it
-- **Session control** — focus a session's terminal (`o`), start a new one in a folder (`n`),
+- **Session control** — focus a session's terminal (`o`), start a new one in a folder (`n` —
+  press `F` first to show the quiet folders in a group),
   kill one (`x`), or purge every session whose task is finished — tabs and all (`X`)
 - **Odoo task board** — projects, stages, tasks and subtasks with story points, deadlines,
   archived-transcript and recorded-coverage badges; start a task (`s`) and the dashboard
@@ -366,6 +367,7 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | Key | Default | What it does |
 |---|---|---|
 | `groups[]` | `[]` | `{name, path}` — folders the sessions tree groups by. `~` is expanded |
+| `sessions.showInactiveFolders` | `false` | Draw every folder in a group, including those with no live session. Off by default so a group of many checkouts does not bury the projects actually running. `F` toggles it and writes the choice back |
 | `defaultView` | `board` | `sessions` \| `board` \| `deploy` |
 | `odoo.url` / `.db` / `.user` / `.password` | — | Odoo JSON-RPC credentials. Without all four, the Board and Deploy tabs say so and everything else is unaffected |
 | `odooProjectDirs` | `{}` | Odoo project name → one local repo path or a list of them. Matched case-insensitively |
