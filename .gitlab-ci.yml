@@ -1,0 +1,75 @@
+# Team CI: gates every merge request, and mirrors main + tags to the public
+# GitHub repo only after the gates pass (which is why this is a CI job and not
+# built-in push mirroring - that would mirror red commits unconditionally).
+#
+# Required CI/CD variables (Settings > CI/CD > Variables, all protected):
+#   GITHUB_MIRROR_KEY  (type: File)  private half of the GitHub deploy key
+#   LEAK_TERMS         (type: Var)   extended-grep regex of terms that must
+#                                    never reach the public mirror; kept as a
+#                                    variable precisely so the list itself is
+#                                    not in this (mirrored) file.
+
+stages: [check, mirror]
+
+default:
+  image: rust:1
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+
+cache:
+  key:
+    files: [Cargo.lock]
+  paths: [.cargo/registry, target]
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
+check:
+  stage: check
+  script:
+    - rustup component add rustfmt clippy
+    - cargo fmt --all --check
+    - cargo clippy --all-targets -- -D warnings
+    - cargo test --lib
+
+hygiene:
+  stage: check
+  script:
+    # The public mirror must never receive the terms in LEAK_TERMS. Fail
+    # closed: an unset variable means this gate cannot do its job.
+    - test -n "$LEAK_TERMS" || { echo "LEAK_TERMS variable is not set - refusing to pass"; exit 1; }
+    - |
+      if grep -rniE "$LEAK_TERMS" --exclude-dir=.git --exclude-dir=target --exclude-dir=.cargo .; then
+        echo "found a term that must not reach the public mirror"; exit 1
+      fi
+    # Commit messages: no attribution or generator trailers, ever.
+    - |
+      RANGE="${CI_MERGE_REQUEST_DIFF_BASE_SHA:+$CI_MERGE_REQUEST_DIFF_BASE_SHA..HEAD}"
+      if git log ${RANGE:---max-count=1} --format='%H %B' | grep -inE 'co-authored-by|generated with|anthropic|🤖'; then
+        echo "commit message carries an attribution trailer - reword it"; exit 1
+      fi
+
+mirror:
+  stage: mirror
+  needs: [check, hygiene]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_COMMIT_TAG
+  script:
+    - test -f "$GITHUB_MIRROR_KEY" || { echo "GITHUB_MIRROR_KEY variable is not set"; exit 1; }
+    - chmod 600 "$GITHUB_MIRROR_KEY"
+    - mkdir -p ~/.ssh && ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+    - export GIT_SSH_COMMAND="ssh -i $GITHUB_MIRROR_KEY -o IdentitiesOnly=yes"
+    - git remote add github git@github.com:joshjetson/claude-sessions.git 2>/dev/null || true
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        git push github "refs/tags/$CI_COMMIT_TAG"
+      else
+        # Non-fast-forward means GitHub moved independently; surface it here
+        # rather than force-pushing over it - reconcile, never clobber.
+        git push github "HEAD:refs/heads/main"
+      fi
