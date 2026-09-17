@@ -10,10 +10,9 @@
 //! `firstTaskRefOf` and `archive.js` `firstTaskRef`, with different cache rules
 //! — so it lives here once, as transcript knowledge.
 
-use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use super::head::{read_head, HeadCache};
 
 /// How much of a transcript's head is searched. The spawn prompt is the first
 /// entry; 128 KiB covers it with room for a pasted context block in front.
@@ -44,51 +43,23 @@ pub fn task_ref_in(text: &str) -> Option<i64> {
 /// Unreadable files are `None`, never an error: a transcript that vanished
 /// mid-scan simply has no task.
 pub fn first_task_ref(path: &Path) -> Option<i64> {
-    let file = File::open(path).ok()?;
-    let mut head = Vec::new();
-    file.take(TASK_REF_HEAD_BYTES).read_to_end(&mut head).ok()?;
-    task_ref_in(&String::from_utf8_lossy(&head))
+    task_ref_in(&read_head(path, TASK_REF_HEAD_BYTES)?)
 }
 
-/// [`first_task_ref`] with the reads remembered.
-///
-/// **Hits are cached forever**: a transcript's opening prompt never changes, so
-/// one read per file per process life is enough. **Misses are not cached at
-/// all** — a session that has started but not yet flushed its first prompt has
-/// no reference on disk yet, and remembering that would make the file look
-/// task-less for as long as the daemon runs. Retrying a miss is the caller's
-/// business (the daemon spaces those out; see the 3s task-id retry in the
-/// engine's cadences).
-#[derive(Debug, Default)]
-pub struct TaskRefCache {
-    hits: HashMap<PathBuf, i64>,
-    reads: u64,
-}
+/// [`first_task_ref`] with the reads remembered. The hit-and-miss policy, the
+/// read counter and the pruning are [`HeadCache`]'s, and are what this type is
+/// for — a transcript's opening prompt never changes, so the daemon reads each
+/// file once per process life.
+pub type TaskRefCache = HeadCache<i64>;
 
 impl TaskRefCache {
     pub fn new() -> Self {
-        TaskRefCache::default()
+        HeadCache::of(TASK_REF_HEAD_BYTES, task_ref_in)
     }
+}
 
-    /// The task id for `path`, reading the file only on a miss.
-    pub fn get(&mut self, path: &Path) -> Option<i64> {
-        if let Some(id) = self.hits.get(path) {
-            return Some(*id);
-        }
-        self.reads += 1;
-        let id = first_task_ref(path)?;
-        self.hits.insert(path.to_path_buf(), id);
-        Some(id)
-    }
-
-    /// Files read from disk so far — the counter the O(1) claims are tested
-    /// against, and worth a diagnostics line if it ever climbs per tick.
-    pub fn reads(&self) -> u64 {
-        self.reads
-    }
-
-    /// Drop remembered hits for files that no longer exist.
-    pub fn prune(&mut self, exists: impl Fn(&Path) -> bool) {
-        self.hits.retain(|path, _| exists(path));
+impl Default for TaskRefCache {
+    fn default() -> Self {
+        TaskRefCache::new()
     }
 }
