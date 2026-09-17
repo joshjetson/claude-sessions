@@ -6,6 +6,7 @@
 use super::*;
 use chrono::TimeZone;
 
+mod dir;
 mod status;
 
 #[test]

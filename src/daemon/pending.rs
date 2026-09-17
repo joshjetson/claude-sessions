@@ -17,7 +17,7 @@ use std::time::SystemTime;
 use crate::db::TaskSession;
 use crate::scan::ProcessSource;
 use crate::types::Session;
-use crate::util::iso_now;
+use crate::util::{is_within_dir, iso_now, same_dir, trim_trailing_separators};
 
 use super::engine::EngineInner;
 use super::events::{wire_session, EngineEvent};
@@ -140,16 +140,13 @@ impl<S: ProcessSource> EngineInner<S> {
         sessions: &'a SessionIndex,
         taken: &HashMap<String, i64>,
     ) -> Option<&'a Session> {
-        let wanted = normalise_dir(&launch.cwd);
+        let wanted = trim_trailing_separators(&launch.cwd);
         if wanted.is_empty() {
             return None;
         }
         let fresh = |session: &Session| !launch.known_session_ids.contains(&session.session_id);
-        let here = |session: &Session| normalise_dir(&session.cwd) == wanted;
-        let under = |session: &Session| {
-            let cwd = normalise_dir(&session.cwd);
-            cwd == wanted || cwd.starts_with(&format!("{wanted}/"))
-        };
+        let here = |session: &Session| same_dir(&session.cwd, wanted);
+        let under = |session: &Session| is_within_dir(&session.cwd, wanted);
         let ok = |session: &&Session| self.claimable(session, launch, taken);
 
         sessions
@@ -206,11 +203,3 @@ impl<S: ProcessSource> EngineInner<S> {
     }
 }
 
-/// Trailing slashes off, nothing else.
-///
-/// Deliberately not `canonicalize`: these directories come from `lsof` and are
-/// already absolute, and resolving symlinks would touch the disk once per
-/// session per tick to answer a string comparison.
-fn normalise_dir(path: &str) -> String {
-    path.trim_end_matches('/').to_string()
-}

@@ -24,6 +24,7 @@ use crate::odoo::{Blocker, OdooProject, StageRecord, TaskDetail};
 use crate::term::{Exec, LaunchRequest, SpawnPolicy, TerminalDriver};
 use crate::ui::board::BoardUpdate;
 use crate::ui::state::Action;
+use crate::util::path_leaf;
 
 /// The 0/400/1000ms poll after a kill. SIGTERM is not instant — the process
 /// lingers in `ps` for a moment — so a single refresh would redraw the row it
@@ -200,7 +201,7 @@ fn run(
             }
         }
         Action::LaunchSession { cwd } => {
-            let title = cwd.rsplit('/').next().unwrap_or(&cwd).to_string();
+            let title = path_leaf(&cwd).to_string();
             let request = LaunchRequest::new(cwd.clone(), LAUNCH_COMMAND).title(title);
             let result = driver.launch(&request);
             if result.ok {

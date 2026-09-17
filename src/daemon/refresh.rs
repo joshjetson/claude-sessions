@@ -25,7 +25,7 @@ use std::time::SystemTime;
 use crate::scan::ProcessSource;
 use crate::transcript::TaskRefCache;
 use crate::types::{RawSession, Session, SessionStatus};
-use crate::util::{activity_label, detect_session_status, project_name};
+use crate::util::{activity_label, detect_session_status, project_name, trim_trailing_separators};
 
 use super::caches::Caches;
 use super::engine::{EngineInner, ScanState};
@@ -132,7 +132,7 @@ impl<S: ProcessSource> EngineInner<S> {
             .groups()
             .iter()
             .map(|group| {
-                let path = group.path.trim_end_matches('/').to_string();
+                let path = trim_trailing_separators(&group.path).to_string();
                 let dirs = caches.discover(std::path::Path::new(&path), force, now);
                 (path, dirs)
             })
