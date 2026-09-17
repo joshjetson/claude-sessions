@@ -275,3 +275,76 @@ fn the_board_is_unchanged_when_nothing_is_watched() {
     );
     let _ = BoardItem::Separator;
 }
+
+#[test]
+fn the_run_menu_offers_a_context_prompt() {
+    // The JS original lets you type something for the coordinator before it
+    // starts. This is that entry.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+
+    let snapshot = board::snapshot(&state);
+    let header = snapshot
+        .keys
+        .iter()
+        .position(|key| key.starts_with("br:"))
+        .expect("run header");
+    state.board_sel.set(&snapshot.keys, header);
+    board::handle_board(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+    );
+
+    let Some(crate::ui::dialogs::Dialog::RunMenu(menu)) = &state.dialog else {
+        panic!("the run menu did not open");
+    };
+    assert!(
+        menu.entries.iter().any(
+            |(_, action)| *action == crate::ui::dialogs::RunAction::StartCoordinatorWithContext
+        ),
+        "the run menu has no context entry: {:?}",
+        menu.entries
+            .iter()
+            .map(|(label, _)| label)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn typed_context_reaches_the_coordinator_launch() {
+    // The context prompt hands back a StartCoordinator carrying the text, so
+    // the launch path needs no second entry point.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let run_id = state.board.runs[0].id.clone();
+
+    let mut prompt = crate::ui::dialogs::RunContext::new(&run_id, "Approved to Start");
+    let mut config = state.config.clone();
+    let mut ctx = crate::ui::dialogs::DialogCtx {
+        config: &mut config,
+    };
+    for ch in "preview is down".chars() {
+        prompt.handle_key(
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+            &mut ctx,
+        );
+    }
+    // Multiline, so Enter is a newline and Ctrl-S submits — the same contract
+    // the task context dialog uses.
+    let outcome = prompt.handle_key(
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        &mut ctx,
+    );
+
+    match outcome {
+        crate::ui::dialogs::DialogOutcome::Run(command) => {
+            assert_eq!(command.run_id, run_id);
+            assert_eq!(
+                command.action,
+                crate::ui::dialogs::RunAction::StartCoordinator
+            );
+            assert_eq!(command.context, "preview is down");
+        }
+        other => panic!("expected a run command, got {other:?}"),
+    }
+}

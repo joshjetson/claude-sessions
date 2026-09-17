@@ -254,6 +254,8 @@ pub enum RunAction {
     FillLanes,
     /// Start the coordinating session.
     StartCoordinator,
+    /// Ask for extra context first, then start it.
+    StartCoordinatorWithContext,
     /// Flip between shadow and triage. Applies to the NEXT coordinator, not one
     /// already running: its rules are in a prompt that has already been sent.
     ToggleMode,
@@ -309,6 +311,10 @@ impl RunMenu {
                 RunAction::StartCoordinator,
             ),
             (
+                "✎  Start coordinator with context…".to_string(),
+                RunAction::StartCoordinatorWithContext,
+            ),
+            (
                 if triage {
                     "↔  Switch to shadow mode (applies to the next coordinator)".to_string()
                 } else {
@@ -354,6 +360,7 @@ impl RunMenu {
                 Some(action) => DialogOutcome::Run(Box::new(RunCommand {
                     run_id: self.run_id.clone(),
                     action,
+                    context: String::new(),
                 })),
             },
         }
@@ -373,4 +380,45 @@ impl RunMenu {
 pub struct RunCommand {
     pub run_id: String,
     pub action: RunAction,
+    /// Only ever set by [`RunContext`]. Empty for every other entry.
+    pub context: String,
+}
+
+/// Type something for the coordinator before it starts.
+///
+/// The run's equivalent of [`ContextDialog`]: whatever is typed is handed to the
+/// coordinator ahead of its generic instructions, which is how a reviewer says
+/// "this stage is all one feature" or "the preview is down, expect BLOCKED".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunContext {
+    pub run_id: String,
+    pub stage: String,
+    pub prompt: TextPrompt,
+}
+
+impl RunContext {
+    pub fn new(run_id: &str, stage: &str) -> Self {
+        RunContext {
+            run_id: run_id.to_string(),
+            stage: stage.to_string(),
+            prompt: TextPrompt::new("", true),
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent, _ctx: &mut DialogCtx<'_>) -> DialogOutcome {
+        match self.prompt.handle_key(key) {
+            PromptOutcome::Stay => DialogOutcome::Stay,
+            PromptOutcome::Cancel => DialogOutcome::Close,
+            PromptOutcome::Submit(text) => DialogOutcome::Run(Box::new(RunCommand {
+                run_id: self.run_id.clone(),
+                action: RunAction::StartCoordinator,
+                context: text.trim().to_string(),
+            })),
+        }
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let title = format!(" Context for the {} run ", truncate(&self.stage, 32));
+        self.prompt.render(frame, area, &title);
+    }
 }
