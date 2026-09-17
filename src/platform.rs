@@ -47,10 +47,10 @@ pub const PROCESS_SIGNALS: bool = cfg!(unix);
 pub const LOGIN_SHELL: bool = cfg!(unix);
 
 /// Shown where a list of live sessions would be, when discovery cannot see any
-/// processes at all. Deliberately says what still works: the transcripts are on
-/// disk and being appended to, and every view that reads them is unaffected.
-pub const DISCOVERY_NOTICE: &str = "Live session discovery is not yet supported on native \
-                                    Windows — transcripts still appear as they update.";
+/// processes at all. Deliberately says what still works, and promises nothing
+/// this build cannot do: the sessions list itself needs the discovery phase.
+pub const DISCOVERY_NOTICE: &str = "Live session discovery on native Windows arrives in a \
+                                    coming release — the Board and Deploy tabs work fully today.";
 
 /// What to tell someone who asked for a terminal and got no driver. On Unix
 /// that is a machine without tmux or iTerm2; on Windows it is the phase.
