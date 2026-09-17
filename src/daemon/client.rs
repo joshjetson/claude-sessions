@@ -87,8 +87,10 @@ impl Health {
             return format!("claude-sessions {version}");
         }
         match self.implementation.as_str() {
-            "" => "a daemon that does not say what it is — an older claude-sessions,                    or the Node tool of the same name"
-                .to_string(),
+            "" => {
+                "an unmarked daemon (an older claude-sessions, or the Node tool of the same name)"
+                    .to_string()
+            }
             other => format!("a different implementation ({other})"),
         }
     }
@@ -193,11 +195,7 @@ pub fn ensure_daemon(paths: &Paths, port: u16, autostart: bool) -> Result<Daemon
         // events this build cannot read is the failure that looks most like
         // success: connected, subscribed, and empty forever.
         if !health.is_this_implementation() {
-            return Err(format!(
-                "Port {port} is held by {} — its sessions cannot be read here. \
-                 Stop it, or give this one its own `daemon.port`.",
-                health.describe()
-            ));
+            return Err(foreign_daemon(port, &health));
         }
         return Ok(DaemonTarget {
             port,
@@ -215,6 +213,18 @@ pub fn ensure_daemon(paths: &Paths, port: u16, autostart: bool) -> Result<Daemon
         health,
         spawned: true,
     })
+}
+
+/// One sentence for a port held by something this build cannot talk to.
+///
+/// Written once because it is reached from both ends of the same question —
+/// before a spawn and after one — and the two must not drift.
+fn foreign_daemon(port: u16, health: &Health) -> String {
+    format!(
+        "Port {port} is held by {} — its sessions cannot be read here. \
+         Stop it, or give this one its own `daemon.port`.",
+        health.describe()
+    )
 }
 
 /// Start `claude-sessions daemon` detached and wait for it to answer.
@@ -254,6 +264,12 @@ pub fn spawn_daemon(paths: &Paths, port: u16) -> Result<Health, String> {
     let deadline = Instant::now() + AUTOSTART_DEADLINE;
     while Instant::now() < deadline {
         if let Some(health) = probe(port, AUTOSTART_PROBE) {
+            // Whatever answers is not necessarily what was just started: if
+            // something else already had the port, ours died on `bind` and
+            // this is the squatter waving back.
+            if !health.is_this_implementation() {
+                return Err(foreign_daemon(port, &health));
+            }
             return Ok(health);
         }
         thread::sleep(AUTOSTART_POLL);

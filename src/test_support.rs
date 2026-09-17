@@ -98,6 +98,11 @@ impl StubDaemon {
                         std::thread::sleep(Duration::from_millis(5));
                         continue;
                     };
+                    // macOS hands out accepted sockets with the listener's
+                    // non-blocking flag, so without this the read below
+                    // returns WouldBlock whenever the request has not landed
+                    // yet and the stub answers nothing at random.
+                    let _ = stream.set_nonblocking(false);
                     let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
                     let mut buffer = [0u8; 1024];
                     let read = stream.read(&mut buffer).unwrap_or(0);

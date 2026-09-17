@@ -20,6 +20,7 @@ use crate::daemon::{protocol, server, Engine, EngineOptions};
 use crate::paths::Paths;
 use crate::term::SpawnPolicy;
 
+mod doctor;
 mod hooks;
 mod journal;
 pub(crate) mod markers;
@@ -105,6 +106,8 @@ pub struct Cli {
 pub enum Command {
     /// Run the background daemon, or ask about one: `daemon status`, `daemon stop`
     Daemon(DaemonArgs),
+    /// Print a diagnosis of this machine's setup, for pasting into a bug report
+    Doctor,
     /// Report the calling session finished its work
     Done(DoneArgs),
     /// Fire a notification for the calling session
@@ -220,6 +223,7 @@ pub fn run() -> Result<()> {
     match cli.command {
         None => crate::ui::run_dashboard(paths, config, SpawnPolicy::detect()),
         Some(Command::Daemon(args)) => daemon(paths, config, args),
+        Some(Command::Doctor) => doctor::run(&paths, &config),
         Some(Command::Notify(args)) => markers::notify(&paths, &config, args),
         Some(Command::Done(args)) => markers::done(&paths, args),
         Some(Command::Blocked(args)) => markers::blocked(&paths, args),

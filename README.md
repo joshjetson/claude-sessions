@@ -140,7 +140,24 @@ coming release). For the Odoo board, GitLab, and Optics, copy
 [`config.example.json`](config.example.json) to `~/.claude-sessions.json` and fill in
 only the blocks you want — every key is optional and every block is independent.
 
-To upgrade later, run `cargo install claude-sessions` again.
+To upgrade later, run `cargo install claude-sessions` again — then run
+`claude-sessions daemon stop` once, so the new build's daemon replaces the old one on
+the port.
+
+### If the sessions list is empty
+
+Run `claude-sessions doctor`. It prints, in one screen, which program owns the daemon
+port, whether `claude` on your PATH is a native binary or a script, whether transcripts
+exist where this build looks for them, and how many processes survive each step of
+discovery. It contains no passwords, tokens or transcript text, so it can be pasted
+straight into an issue.
+
+The single most common cause is another program on the daemon port — a daemon from an
+older install, or the Node tool this one replaced, which uses the same name and the same
+default port. A dashboard will not mirror a daemon that does not identify itself as this
+build: it says so on the status bar, scans your machine itself, and keeps working.
+`claude-sessions daemon stop` clears the port, or give this build one of its own with
+`daemon.port` in `~/.claude-sessions.json`.
 
 ## Requirements
 
@@ -202,7 +219,8 @@ One binary, one install. The original shipped seven executables; they are now su
 | Command | What it does |
 |---|---|
 | `claude-sessions` | The dashboard |
-| `claude-sessions daemon [status\|stop] [--port <n>]` | Run the background watcher in the foreground, or ask about one. `status` prints pid, uptime and client count (exit 1 if none); `stop` asks it to shut down. `--port` overrides the configured port |
+| `claude-sessions daemon [status\|stop] [--port <n>]` | Run the background watcher in the foreground, or ask about one. `status` prints pid, uptime, client count and **which program owns the port** (exit 1 if none, with the last error from `daemon.log`); `stop` names what it is stopping first. `--port` overrides the configured port |
+| `claude-sessions doctor` | Print a diagnosis of this machine: which program owns the daemon port, whether `claude` is a native binary or a script, whether transcripts exist where this build looks, and how many processes survive each step of discovery. No secrets — paste it straight into a bug report |
 | `claude-sessions notify [TITLE...] [--title <t>] [--message\|--msg <m>] [--level <l>] [--session <id>]` | Raise a notification for the calling session. The first bare argument is the title and the rest become the message. Exit 1 if nothing is listening |
 | `claude-sessions done [TASK_ID] [--summary-file <path>] [--summary\|--summary-text <text>]` | Report the calling session's work finished. Falls back to `CLAUDE_SESSIONS_TASK_ID`. Writes a marker file — no network, so it works before the daemon is up. Summaries are capped at 8000 characters |
 | `claude-sessions blocked [TASK_ID] [--questions\|--q "a \| b"]` | Report the session blocked on input; questions are split on `\|` |

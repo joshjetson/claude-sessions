@@ -410,6 +410,7 @@ fn health_without_a_marker_describes_itself_as_the_older_tool() {
     assert!(legacy.ok);
     assert!(!legacy.is_this_implementation());
     assert!(legacy.describe().contains("older claude-sessions"));
+    assert!(legacy.describe().contains("Node tool"));
 
     // A third implementation names itself, and is still not this one.
     let other: client::Health =
