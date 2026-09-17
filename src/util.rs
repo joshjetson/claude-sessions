@@ -1,5 +1,8 @@
-//! The small pure helpers: transcript-directory encoding, display-width aware
-//! truncation, the formatting the panes render, and the session status machine.
+//! The small pure helpers: display-width aware truncation, the formatting the
+//! panes render, and the session status machine. The path ones — the
+//! transcript-directory encoding, the project label and every directory
+//! comparison — live in [`dir`] and are re-exported here, so a caller still
+//! reaches for one module.
 //!
 //! Ported from the Node app's `src/utils.ts`. Nothing here reads the clock — the
 //! caller passes `now` in — so the status machine and the "3m ago" strings are
@@ -11,6 +14,13 @@ use chrono::{DateTime, Local, NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
+
+mod dir;
+
+pub use dir::{
+    child_dir_of, cwd_to_project_dir, is_within_dir, join_dir, path_leaf, project_name, same_dir,
+    trim_trailing_separators, SEPARATORS,
+};
 
 /// Claude Code's default context window, for the "72K tokens (36%)" readout.
 pub const CONTEXT_WINDOW: u64 = 200_000;
@@ -26,77 +36,6 @@ const FRESH_WRITE: Duration = Duration::from_secs(10);
 const TOOL_CALL_GRACE: Duration = Duration::from_secs(30);
 /// How long a prose reply reads as "your turn" before the session goes idle.
 const REPLY_GRACE: Duration = Duration::from_secs(60);
-
-/// What separates one path segment from the next on this platform.
-///
-/// A backslash is a legal character in a Unix filename, so it is a separator
-/// only where it is actually one — splitting on it everywhere would rename
-/// somebody's directory out from under them. Named once because five things
-/// take a path apart: the transcript directory encoding, the project label, the
-/// tool-call renderer, the journal's tilde expansion and the editor's basename.
-pub const SEPARATORS: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
-
-/// The characters the transcript directory name encodes away. Windows adds the
-/// drive colon, which is illegal in a file name.
-const ENCODED: &[char] = if cfg!(windows) {
-    &['/', '\\', ':']
-} else {
-    &['/']
-};
-
-/// Claude Code stores a project's transcripts in a directory named after the
-/// cwd with every separator replaced by `-`. Everything that finds a transcript
-/// depends on reproducing that encoding exactly.
-///
-/// On Windows the separator is `\` and a path also carries a drive letter, so
-/// both are encoded: `C:\Users\dev\repo` becomes `C--Users-dev-repo`. That
-/// the result is RELATIVE matters as much as its spelling — `Path::join`
-/// discards the base when handed an absolute component, so a name that kept its
-/// drive would point [`crate::paths::Paths::project_transcripts`] at the
-/// repository itself instead of at a directory under `~/.claude/projects`, and
-/// every stray `.jsonl` in somebody's checkout would read as a session.
-///
-/// The Windows spelling still wants confirming against a real Claude Code
-/// install before the discovery phase relies on it; what is certain here is
-/// that it is relative and legal, which is what stops the wrong tree being
-/// read.
-pub fn cwd_to_project_dir(cwd: &str) -> String {
-    cwd.replace(ENCODED, "-")
-}
-
-/// A short name for a working directory: its last two meaningful segments, with
-/// the scaffolding ones dropped so `/Users/someone/dev/repo` reads `someone/repo`.
-pub fn project_name(cwd: &str) -> String {
-    if cwd.is_empty() {
-        return "unknown".to_string();
-    }
-    let parts: Vec<&str> = cwd.split(SEPARATORS).filter(|p| !p.is_empty()).collect();
-    let meaningful: Vec<&str> = parts
-        .iter()
-        .copied()
-        .filter(|p| *p != "Users" && *p != "dev" && !is_drive(p))
-        .collect();
-    if meaningful.len() >= 2 {
-        return meaningful[meaningful.len() - 2..].join("/");
-    }
-    match parts.last() {
-        Some(base) => base.to_string(),
-        None => cwd.to_string(),
-    }
-}
-
-/// `C:` and friends — the first segment of an absolute Windows path, and no
-/// more a name for a project than `Users` is. Only ever true on Windows, where
-/// a directory cannot be called `C:` in the first place.
-fn is_drive(part: &str) -> bool {
-    cfg!(windows) && {
-        let mut chars = part.chars();
-        matches!(
-            (chars.next(), chars.next(), chars.next()),
-            (Some(letter), Some(':'), None) if letter.is_ascii_alphabetic()
-        )
-    }
-}
 
 /// Reduce a human-written name to the part worth comparing: lowercase, letters
 /// and digits only.

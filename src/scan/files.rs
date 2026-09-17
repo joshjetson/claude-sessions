@@ -114,6 +114,19 @@ impl SessionFilesCache {
     }
 }
 
+/// The mtime and size a transcript has RIGHT NOW.
+///
+/// The listing cache above is rebuilt only when its directory changes, and
+/// appending to a transcript does not change that — so the `mtime` and `size`
+/// on a cached entry are a LOWER BOUND, fine for ordering and identity and
+/// useless for "is this session alive". Everything that turns a file into a
+/// session re-stats it through here first, because the status machine reads
+/// that mtime and a stale one freezes a working session at idle.
+pub fn current_stat(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 /// A transcript is compacted by a sidecar agent that writes
 /// `agent-acompact-*.jsonl` next to it, so a recent one means this session is
 /// busy summarising itself rather than idle.

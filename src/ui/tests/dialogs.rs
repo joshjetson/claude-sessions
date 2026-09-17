@@ -162,6 +162,32 @@ fn kill_with_nothing_to_kill_says_so_and_does_nothing() {
 }
 
 #[test]
+fn a_session_with_no_process_behind_it_has_nothing_to_kill() {
+    // What a transcript-only session is: a real row, a real transcript, and no
+    // pid. Every action that needs one has to refuse rather than signal
+    // something else — the row is built here the way the tree builds it.
+    let (_dir, mut config) = temp_config();
+    let mut listed = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    listed.pids.clear();
+    listed.tty = None;
+    listed.lstart = None;
+    let by_project = crate::ui::feed::group_sessions(vec![listed.clone()]);
+    let row = crate::ui::tree::TreeItem::Session {
+        project_name: "x/alpha",
+        session: &listed,
+    }
+    .to_selected();
+
+    let mut dialog = Dialog::Kill(KillConfirm::for_row(Some(&row), &by_project, &config));
+    let buffer = render_area(80, 20, |frame, area| dialog.render(frame, area, &config));
+    assert!(text(&buffer).contains("No running processes to kill"));
+    assert_eq!(
+        press(&mut dialog, KeyCode::Enter, &mut config),
+        DialogOutcome::Close
+    );
+}
+
+#[test]
 fn killing_a_project_row_gathers_every_pid_in_it() {
     let (_dir, config) = temp_config();
     let mut alpha = session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle);

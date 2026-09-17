@@ -1,0 +1,35 @@
+name: Release
+
+# Publishing is tag-driven: a vX.Y.Z tag (mirrored from the internal repo or
+# pushed directly) runs the full gates and then publishes to crates.io.
+# Requires the CARGO_REGISTRY_TOKEN repository secret.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --lib
+      - name: Tag must match the crate version
+        run: |
+          V=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+          test "v$V" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != crate version $V"; exit 1; }
+      - name: Publish if this version is new
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          V=$(cargo metadata --no-deps --format-version 1 | python3 -c "import json,sys; print(json.load(sys.stdin)['packages'][0]['version'])")
+          if curl -sf "https://crates.io/api/v1/crates/claude-sessions/$V" >/dev/null; then
+            echo "version $V already on crates.io - nothing to do"
+          else
+            cargo publish
+          fi
