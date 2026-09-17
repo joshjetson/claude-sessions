@@ -418,3 +418,17 @@ fn health_without_a_marker_describes_itself_as_the_older_tool() {
     assert!(!other.is_this_implementation());
     assert!(other.describe().contains("something-else"));
 }
+
+#[test]
+fn a_dead_port_with_autostart_off_explains_itself_rather_than_returning_nothing() {
+    // Bind and release, so the port is almost certainly free and unused.
+    let listener = crate::daemon::server::bind(0).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+
+    let refusal = client::ensure_daemon(&paths, port, false).expect_err("found a daemon");
+    assert!(refusal.contains(&format!(":{port}")), "{refusal}");
+    assert!(refusal.contains("autostart"), "{refusal}");
+}
