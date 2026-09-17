@@ -297,3 +297,106 @@ fn a_project_nobody_is_working_in_is_forgotten() {
     scanner.scan_sessions(SystemTime::now());
     assert_eq!(scanner.session_files().builds(), 2);
 }
+
+// --- script installs --------------------------------------------------------
+
+/// The `ps` command name of an npm-installed Claude Code: the kernel execs the
+/// interpreter named on the script's shebang line, so the row says `node`.
+const NODE: &str = "/Users/k/.nvm/versions/node/v22/bin/node";
+
+#[test]
+fn an_npm_installed_session_is_found_through_its_command_line() {
+    let env = Env::new();
+    let file = env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(501, NODE, Some(CWD), 0);
+    procs.with_argv(
+        501,
+        &format!("{NODE} /Users/k/.nvm/versions/node/v22/bin/claude --resume {UUID}"),
+    );
+
+    let sessions = env.scanner(procs).scan_sessions(SystemTime::now());
+    assert_eq!(ids(&sessions), vec![UUID]);
+    assert_eq!(sessions[0].pids, vec![501]);
+    assert_eq!(sessions[0].cwd, CWD);
+    assert_eq!(sessions[0].session_file.as_deref(), Some(file.as_path()));
+}
+
+#[test]
+fn a_bun_installed_session_is_found_the_same_way() {
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(77, "/opt/homebrew/bin/bun", Some(CWD), 0);
+    procs.with_argv(
+        77,
+        "bun /Users/k/.bun/install/global/node_modules/@anthropic-ai/claude-code/cli.js",
+    );
+
+    // Asserted at the discovery seam rather than after pairing: the regression
+    // is the process never being seen at all, and which transcript it ends up
+    // holding is the pairing rules' business.
+    let found = env.scanner(procs).processes();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].pid, 77);
+    assert_eq!(found[0].cwd, CWD);
+}
+
+#[test]
+fn a_node_process_that_is_not_claude_costs_nothing_beyond_its_command_line() {
+    // The ordering this pins is the whole reason the runtime check is cheap:
+    // ONE batched `ps -o command=` for the runtime pids, and `lsof` only for
+    // what survives it. Reading a working directory per `node` on the machine
+    // would put ~100ms per process into every tick.
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(900, NODE, Some("/Users/k/dev/api"), 0);
+    procs.with_argv(900, &format!("{NODE} /Users/k/dev/api/server.js"));
+    procs.add(901, "/opt/homebrew/bin/bun", Some("/Users/k/dev/web"), 0);
+    procs.with_argv(901, "bun run dev");
+    let mut scanner = env.scanner(procs.clone());
+
+    let sessions = scanner.scan_sessions(SystemTime::now());
+    assert!(sessions.is_empty(), "{sessions:?}");
+    assert_eq!(procs.calls().argv, 1, "one batch, not one call per pid");
+    assert_eq!(
+        procs.calls().cwd,
+        0,
+        "no lsof for a process that is not ours"
+    );
+    assert_eq!(procs.calls().environ, 0);
+
+    // …and it is not asked about again on the next tick either.
+    scanner.scan_sessions(SystemTime::now());
+    assert_eq!(procs.calls().argv, 1);
+    assert_eq!(procs.calls().cwd, 0);
+}
+
+#[test]
+fn a_helper_started_through_node_is_denied_on_its_command_line() {
+    let env = Env::new();
+    env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(11, NODE, Some(CWD), 0);
+    procs.with_argv(11, &format!("{NODE} /usr/local/bin/claude bg-pty-host"));
+    procs.add(12, NODE, Some(CWD), 5);
+    procs.with_argv(12, &format!("{NODE} /usr/local/bin/claude --bg-spare"));
+
+    let sessions = env.scanner(procs).scan_sessions(SystemTime::now());
+    assert!(sessions.is_empty(), "{sessions:?}");
+}
+
+#[test]
+fn a_launch_task_is_still_read_for_a_session_found_through_its_command_line() {
+    let env = Env::new();
+    env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(42, NODE, Some(CWD), 0);
+    procs.with_argv(42, &format!("{NODE} /usr/local/bin/claude"));
+    procs.with_environ(
+        42,
+        &format!("{NODE} /usr/local/bin/claude CLAUDE_SESSIONS_TASK_ID=6501"),
+    );
+
+    let mut scanner = env.scanner(procs);
+    assert_eq!(scanner.processes()[0].launch_task_id, Some(6501));
+}

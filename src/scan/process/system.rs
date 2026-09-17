@@ -11,8 +11,9 @@
 
 use std::collections::HashMap;
 use std::io::Read;
+use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -21,6 +22,49 @@ use super::{parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, ProcessRow, Pr
 /// How long any one of the four commands may take before its output is given
 /// up on. Node passed the same 5s to `execFile`.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Where macOS keeps the two commands discovery needs.
+///
+/// Resolved absolutely there because a daemon inherits the PATH of whatever
+/// started it, and a dashboard launched from a GUI terminal, a login item or a
+/// desktop launcher can be running with a PATH that has neither `/bin` nor
+/// `/usr/sbin` on it — at which point every `ps` returns nothing and the
+/// dashboard is empty with no error anywhere. Both paths are fixed on macOS.
+///
+/// Linux is left as bare names on purpose: distributions disagree about
+/// `/bin` versus `/usr/bin` for `ps`, and `lsof` is a package that may not be
+/// installed at all (which is why the `/proc` reader below exists), so PATH is
+/// the more reliable answer there.
+#[cfg(target_os = "macos")]
+const PS_PATH: &str = "/bin/ps";
+#[cfg(target_os = "macos")]
+const LSOF_PATH: &str = "/usr/sbin/lsof";
+#[cfg(not(target_os = "macos"))]
+const PS_PATH: &str = "ps";
+#[cfg(not(target_os = "macos"))]
+const LSOF_PATH: &str = "lsof";
+
+/// The absolute path if this machine has it, the bare name otherwise —
+/// resolved once, because an absolute path either exists for the life of the
+/// process or it never did, and a `stat` per call would be a syscall per
+/// process per scan.
+fn resolve(preferred: &'static str) -> &'static str {
+    let bare = preferred.rsplit('/').next().unwrap_or(preferred);
+    if preferred.starts_with('/') && !Path::new(preferred).exists() {
+        return bare;
+    }
+    preferred
+}
+
+fn ps_program() -> &'static str {
+    static PS: OnceLock<&'static str> = OnceLock::new();
+    PS.get_or_init(|| resolve(PS_PATH))
+}
+
+fn lsof_program() -> &'static str {
+    static LSOF: OnceLock<&'static str> = OnceLock::new();
+    LSOF.get_or_init(|| resolve(LSOF_PATH))
+}
 
 /// The real thing: `ps` and `lsof`.
 #[derive(Debug, Clone)]
@@ -44,11 +88,20 @@ impl SystemProcessSource {
 
 impl ProcessSource for SystemProcessSource {
     fn list(&self) -> Vec<ProcessRow> {
-        parse_ps_listing(&exec("ps", &["-eo", "pid,tty,lstart,comm"], self.timeout))
+        parse_ps_listing(&exec(
+            ps_program(),
+            &["-eo", "pid,tty,lstart,comm"],
+            self.timeout,
+        ))
     }
 
     fn cwds(&self, pids: &[u32]) -> HashMap<u32, String> {
         let mut out = HashMap::new();
+        // Where the kernel will simply tell us, ask it: a readlink is free
+        // next to ~100ms of `lsof`, and `lsof` is a package a machine may
+        // not have installed — without this, a Linux box without it shows an
+        // empty dashboard.
+        let pids = drain_from_proc(pids, &mut out, proc_cwd);
         for batch in pids.chunks(MAX_CONCURRENT_LSOF) {
             let answers: Vec<(u32, Option<String>)> = thread::scope(|scope| {
                 let handles: Vec<_> = batch
@@ -73,28 +126,79 @@ impl ProcessSource for SystemProcessSource {
     }
 
     fn argv(&self, pids: &[u32]) -> HashMap<u32, String> {
-        if pids.is_empty() {
-            return HashMap::new();
-        }
-        let csv = pid_csv(pids);
-        parse_pid_prefixed(&exec(
-            "ps",
-            &["-o", "pid=,command=", "-p", &csv],
-            self.timeout,
-        ))
+        self.read_or_ask(pids, "cmdline", &["-o", "pid=,command="])
     }
 
     fn environ(&self, pids: &[u32]) -> HashMap<u32, String> {
-        if pids.is_empty() {
-            return HashMap::new();
-        }
-        let csv = pid_csv(pids);
-        parse_pid_prefixed(&exec(
-            "ps",
-            &["-ww", "-o", "pid=,command=", "-E", "-p", &csv],
-            self.timeout,
-        ))
+        // `ps -E` is BSD-specific: Linux has no equivalent flag, so the
+        // fallback there produces nothing and `/proc/<pid>/environ` is the
+        // only answer. Deliberately a different call from `argv`, so that no
+        // environment value can be mistaken for a command-line flag.
+        self.read_or_ask(pids, "environ", &["-ww", "-o", "pid=,command=", "-E"])
     }
+}
+
+impl SystemProcessSource {
+    /// One `/proc` file per pid where the kernel exposes it, one batched `ps`
+    /// for whatever is left.
+    fn read_or_ask(&self, pids: &[u32], file: &str, args: &[&str]) -> HashMap<u32, String> {
+        let mut out = HashMap::new();
+        let pids = drain_from_proc(pids, &mut out, |pid| proc_nul_separated(pid, file));
+        if pids.is_empty() {
+            return out;
+        }
+        let csv = pid_csv(&pids);
+        let mut args = args.to_vec();
+        args.extend(["-p", &csv]);
+        out.extend(parse_pid_prefixed(&exec(ps_program(), &args, self.timeout)));
+        out
+    }
+}
+
+/// Answer what `/proc` can into `out`, and hand back the pids it could not.
+fn drain_from_proc(
+    pids: &[u32],
+    out: &mut HashMap<u32, String>,
+    read: impl Fn(u32) -> Option<String>,
+) -> Vec<u32> {
+    let mut remaining = Vec::new();
+    for pid in pids {
+        match read(*pid) {
+            Some(value) => {
+                out.insert(*pid, value);
+            }
+            None => remaining.push(*pid),
+        }
+    }
+    remaining
+}
+
+/// `/proc/<pid>/cwd`, where there is one. `None` on every platform without
+/// `/proc`, and for a process this user may not look at.
+fn proc_cwd(pid: u32) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let target = std::fs::read_link(format!("/proc/{pid}/cwd")).ok()?;
+    Some(target.to_string_lossy().into_owned())
+        .filter(|cwd| !cwd.is_empty() && !cwd.ends_with("(deleted)"))
+}
+
+/// `/proc/<pid>/cmdline` and `/proc/<pid>/environ`, which are NUL-separated
+/// lists — joined with spaces so they parse by the same rules as the `ps`
+/// output they stand in for.
+fn proc_nul_separated(pid: u32, file: &str) -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let raw = std::fs::read(format!("/proc/{pid}/{file}")).ok()?;
+    let joined = raw
+        .split(|byte| *byte == 0)
+        .map(String::from_utf8_lossy)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(joined).filter(|joined| !joined.is_empty())
 }
 
 /// How many `lsof` calls are in flight at once. Bounded rather than unbounded
@@ -105,7 +209,7 @@ const MAX_CONCURRENT_LSOF: usize = 16;
 fn lsof_cwd(pid: u32, timeout: Duration) -> Option<String> {
     let pid = pid.to_string();
     parse_lsof_cwd(&exec(
-        "lsof",
+        lsof_program(),
         &["-a", "-p", &pid, "-d", "cwd", "-Fn"],
         timeout,
     ))
@@ -130,6 +234,12 @@ fn pid_csv(pids: &[u32]) -> String {
 fn exec(program: &str, args: &[&str], timeout: Duration) -> String {
     let Ok(child) = Command::new(program)
         .args(args)
+        // `lstart` is read back by its month name and its four-digit year, so
+        // the one thing that must not vary between machines is the locale
+        // `ps` formats it in. Without this an exported LC_TIME can rewrite
+        // every row into a shape the parser drops — which is an empty
+        // dashboard, silently.
+        .env("LC_ALL", "C")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

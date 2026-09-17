@@ -17,7 +17,8 @@ use crate::types::{RawSession, SessionStatus};
 use crate::util::{cwd_to_project_dir, start_time_instant};
 
 use super::detect::{
-    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+    argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
+    is_script_runtime, launch_task_id, session_id_flag,
 };
 use super::files::SessionFilesCache;
 use super::pairing::pair_processes_to_sessions;
@@ -32,6 +33,23 @@ struct ArgvInfo {
     /// A helper in its flag spelling (`claude --bg-pty-host`), invisible to
     /// `ps -o comm`.
     helper: bool,
+    /// The command line says this is an interactive session. Only consulted
+    /// for a process whose `comm` is a [script
+    /// runtime](is_script_runtime) — an npm or bun install of Claude Code,
+    /// which `ps` reports as `node`.
+    claude: bool,
+}
+
+impl ArgvInfo {
+    /// Everything one command line is read for, in one place — the three
+    /// questions used to be asked at three different points in the tick.
+    fn read(argv: &str) -> Self {
+        ArgvInfo {
+            session_id: session_id_flag(argv),
+            helper: is_helper_flag(argv),
+            claude: argv_is_interactive_claude(argv),
+        }
+    }
 }
 
 /// The scan, with its caches.
@@ -87,26 +105,27 @@ impl<S: ProcessSource> Scanner<S> {
     /// task resolved. Helpers, scratch-directory workers and processes whose
     /// cwd could not be read are already gone.
     pub fn processes(&mut self) -> Vec<ClaudeProcess> {
-        let rows: Vec<_> = self
-            .source
-            .list()
-            .into_iter()
-            .filter(|row| is_interactive_claude(&row.comm))
-            .collect();
-
-        let alive: HashSet<u32> = rows.iter().map(|row| row.pid).collect();
+        let listing = self.source.list();
+        let alive: HashSet<u32> = listing.iter().map(|row| row.pid).collect();
         self.cwds.retain(|pid, _| alive.contains(pid));
         self.argv.retain(|pid, _| alive.contains(pid));
         self.launch_tasks.retain(|pid, _| alive.contains(pid));
 
-        let need_cwd = uncached(&rows, &self.cwds);
-        if !need_cwd.is_empty() {
-            // A cwd that could not be read is NOT remembered: that process is
-            // asked again next tick rather than being dropped for good.
-            self.cwds.extend(self.source.cwds(&need_cwd));
-        }
+        // Two ways a row can be a session. Its own name settles it — a native
+        // install, which is all the Node original ever handled — or its name is
+        // only the script runtime executing it, and then nothing but the
+        // command line can say. The second group is why a machine with Claude
+        // Code installed from npm showed an empty dashboard.
+        let considered: Vec<ProcessRow> = listing
+            .into_iter()
+            .filter(|row| is_interactive_claude(&row.comm) || is_script_runtime(&row.comm))
+            .collect();
 
-        let need_argv = uncached(&rows, &self.argv);
+        // ONE batched `ps -o command=` for both groups, and once per pid ever —
+        // a command line is fixed for a process's lifetime. Deliberately ahead
+        // of the cwd read below: `lsof` costs ~100ms a process and must never
+        // be paid for every `node` on the machine.
+        let need_argv = uncached(&considered, &self.argv);
         if !need_argv.is_empty() {
             let lines = self.source.argv(&need_argv);
             for pid in &need_argv {
@@ -114,14 +133,26 @@ impl<S: ProcessSource> Scanner<S> {
                 // A process that exited between the two calls gets a definite
                 // answer too, so it is not re-queried on every tick for as long
                 // as it stays in the listing.
-                self.argv.insert(
-                    *pid,
-                    ArgvInfo {
-                        session_id: session_id_flag(cmd),
-                        helper: is_helper_flag(cmd),
-                    },
-                );
+                self.argv.insert(*pid, ArgvInfo::read(cmd));
             }
+        }
+
+        // A runtime row has to be vouched for by its command line; a named row
+        // is already in, and its argv only adds the session id and the
+        // flag-spelled helper check further down.
+        let rows: Vec<ProcessRow> = considered
+            .into_iter()
+            .filter(|row| {
+                is_interactive_claude(&row.comm)
+                    || self.argv.get(&row.pid).is_some_and(|argv| argv.claude)
+            })
+            .collect();
+
+        let need_cwd = uncached(&rows, &self.cwds);
+        if !need_cwd.is_empty() {
+            // A cwd that could not be read is NOT remembered: that process is
+            // asked again next tick rather than being dropped for good.
+            self.cwds.extend(self.source.cwds(&need_cwd));
         }
 
         let need_env = uncached(&rows, &self.launch_tasks);

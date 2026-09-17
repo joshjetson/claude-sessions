@@ -14,7 +14,8 @@ mod projects;
 mod scanner;
 
 pub use detect::{
-    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+    argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
+    is_script_runtime, launch_task_id, session_id_flag,
 };
 pub use files::{is_compacting, session_files_in, SessionFilesCache};
 pub use pairing::{pair_processes_to_sessions, Pairing, BIRTH_SLACK_MS, BIRTH_WINDOW_MS};

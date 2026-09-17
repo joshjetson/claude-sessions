@@ -104,17 +104,89 @@ pub fn is_interactive_claude(comm: &str) -> bool {
     !has_helper_subcommand(comm)
 }
 
-/// Claude Code keeps its prewarmed workers under `/tmp/cc-daemon-<n>/`; nothing
-/// there is a session anybody started.
+/// Interpreters that run somebody else's program, so `ps -o comm` reports the
+/// interpreter and not the thing a person started.
 ///
+/// This is the npm and bun install of Claude Code: the `claude` on `PATH` is a
+/// script with a `#!/usr/bin/env node` line, the kernel execs `node`, and every
+/// version of this tool that matched on `comm` alone saw `node` and reported no
+/// sessions on a machine that had several. `debian` spells it `nodejs`.
+const SCRIPT_RUNTIMES: [&str; 4] = ["node", "nodejs", "bun", "deno"];
+
+/// The last path segment of a `ps` command name, without a Windows extension.
+///
+/// `comm` is a bare name on Linux and the full executable path on macOS, so the
+/// comparison has to be on the file name either way.
+fn program_name(comm: &str) -> &str {
+    let name = comm.rsplit(['/', '\\']).next().unwrap_or(comm);
+    name.strip_suffix(".exe").unwrap_or(name)
+}
+
+/// Whether a `ps` command name is only a script runtime, and so says nothing
+/// about what the process actually is.
+pub fn is_script_runtime(comm: &str) -> bool {
+    let name = program_name(comm);
+    SCRIPT_RUNTIMES
+        .iter()
+        .any(|runtime| name.eq_ignore_ascii_case(runtime))
+}
+
+/// The same judgement as [`is_interactive_claude`], made from the full command
+/// line instead of the command name.
+///
+/// Used for — and only for — a process whose `comm` is a [script
+/// runtime](is_script_runtime). The rules are deliberately the identical ones:
+/// the deny-list applies to the argv string exactly as it applies to a command
+/// name, plus the flag spelling of the same helpers, which is invisible to
+/// `comm` and so has always been read from argv.
+///
+/// It is a deliberate improvement over the Node original, which had no answer
+/// for a script install at all. The looseness is the intended direction: a
+/// command line that merely mentions `claude` becoming a row somebody asks
+/// about is a better failure than a real session being invisible, which is the
+/// same trade the comm deny-list already makes.
+pub fn argv_is_interactive_claude(argv: &str) -> bool {
+    is_interactive_claude(argv) && !is_helper_flag(argv)
+}
+
+/// The directory name Claude Code gives a prewarmed worker: `cc-daemon-<n>`.
+const SCRATCH_DIR: &str = "cc-daemon-";
+
+/// Where that directory lives, where the platform puts it somewhere fixed.
+///
+/// Unix: `/tmp`, which is the whole of Node's
 /// `/\/(private\/)?tmp\/cc-daemon-\d+\//` — on macOS `/private/tmp/…` contains
 /// `/tmp/…` as a substring, so one search answers both spellings.
+///
+/// Windows: nowhere fixed. The same directory is created under whatever `%TEMP%`
+/// points at (`C:\Users\dev\AppData\Local\Temp\cc-daemon-7\` by default), and
+/// `%TEMP%` is redirected per user, per session and by every CI runner, so
+/// anchoring to a spelling would let a worker through on the machines that moved
+/// it. The segment carries the evidence on its own: nothing a person checks out
+/// is called `cc-daemon-<digits>`.
+const SCRATCH_PARENT: Option<&str> = if cfg!(windows) { None } else { Some("/tmp") };
+
+/// Claude Code keeps its prewarmed workers under a `cc-daemon-<n>` scratch
+/// directory; nothing there is a session anybody started.
 pub fn is_daemon_scratch_cwd(cwd: &str) -> bool {
-    const MARKER: &str = "/tmp/cc-daemon-";
-    for (i, _) in cwd.match_indices(MARKER) {
-        let rest = &cwd[i + MARKER.len()..];
+    scratch_cwd(cwd, SCRATCH_PARENT, crate::util::SEPARATORS)
+}
+
+/// The rule itself, with the platform's two facts passed in — the Windows shape
+/// is then a test on every platform rather than only on the one that has it.
+pub(super) fn scratch_cwd(cwd: &str, parent: Option<&str>, separators: &[char]) -> bool {
+    for (i, _) in cwd.match_indices(SCRATCH_DIR) {
+        // A whole path segment, not a prefix of a directory somebody named.
+        let before = &cwd[..i];
+        if !before.ends_with(separators) {
+            continue;
+        }
+        if parent.is_some_and(|parent| !before.trim_end_matches(separators).ends_with(parent)) {
+            continue;
+        }
+        let rest = &cwd[i + SCRATCH_DIR.len()..];
         let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0 && rest[digits..].starts_with('/') {
+        if digits > 0 && rest[digits..].starts_with(separators) {
             return true;
         }
     }
