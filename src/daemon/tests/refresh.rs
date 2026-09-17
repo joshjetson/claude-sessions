@@ -173,8 +173,12 @@ fn concurrent_refreshes_collapse_into_one_trailing_run() {
 
     thread::scope(|scope| {
         scope.spawn(|| harness.engine.refresh(RefreshRequest::default()));
-        // Let the first tick take the gate, then pile on.
-        thread::sleep(Duration::from_millis(40));
+        // Wait until the first tick is provably inside the scan (the fake
+        // counts on entry, then sleeps its delay) — a fixed sleep here lost
+        // the race on slow CI runners and the pile-on ran uncollapsed.
+        while harness.procs.listed() == 0 {
+            thread::yield_now();
+        }
         for _ in 0..3 {
             harness.engine.refresh(RefreshRequest::default());
         }
