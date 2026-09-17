@@ -382,3 +382,64 @@ fn a_base_style_carries_through_the_highlighting() {
         .iter()
         .all(|s| s.style.bg == Some(Color::Rgb(1, 2, 3))));
 }
+
+#[test]
+fn a_session_that_arrived_over_the_wire_still_opens_its_transcript() {
+    // The conversation is never streamed: the daemon ships `sessionFile` and
+    // the dashboard reads the file itself, on the machine both are running on
+    // (Node's `index.js` watched it the same way). This drives the whole path —
+    // wire round trip, selection, cursor — because a stripped `sessionFile`
+    // would show as "No conversation data" with a session plainly selected.
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let transcript = crate::transcript::fixtures::transcripts()
+        .into_iter()
+        .next()
+        .expect("a fixture transcript");
+
+    let mut live = crate::ui::tests::session(
+        "abcd1234",
+        "/Users/x/dev/alpha",
+        crate::types::SessionStatus::Working,
+    );
+    live.session_file = Some(transcript.clone());
+    live.activity_detail = "reading".to_string();
+
+    // Server → JSON → client, exactly as `RemoteFeed` receives it.
+    let json = serde_json::to_string(&crate::daemon::wire_session(&live)).unwrap();
+    let received: crate::types::Session = serde_json::from_str(&json).unwrap();
+    assert_eq!(received.session_file.as_ref(), Some(&transcript));
+
+    let (_dir, mut state) = crate::ui::tests::sessions_state();
+    state.apply_sessions(crate::ui::feed::group_sessions(vec![received]));
+    let area = ratatui::layout::Rect::new(0, 0, 100, 30);
+    crate::ui::keys::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        area,
+    );
+    crate::ui::keys::handle_key(
+        &mut state,
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        area,
+    );
+
+    let file = match state.take_actions().into_iter().next() {
+        Some(crate::ui::state::Action::SelectSession { session_file, .. }) => session_file,
+        other => panic!("expected a select action, got {other:?}"),
+    };
+    assert_eq!(file.as_ref(), Some(&transcript), "the path did not survive");
+
+    let cursor = crate::ui::run::open_conversation(&mut state, file);
+    assert!(cursor.is_some(), "the cursor did not attach");
+    assert!(
+        !state.conv.messages.is_empty(),
+        "the pane would say 'No conversation data'"
+    );
+    let lines = build_conversation_lines(
+        &state.conv.messages,
+        state.conv.meta.as_ref(),
+        &ChatConfig::default(),
+    );
+    assert_ne!(flat(&lines), vec!["No conversation data"]);
+}
