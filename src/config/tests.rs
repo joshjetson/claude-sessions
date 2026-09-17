@@ -285,11 +285,18 @@ fn a_project_dir_reads_the_same_whether_it_is_a_string_or_a_list() {
 }
 
 #[test]
-fn a_hand_written_tilde_path_still_reads_back() {
-    // Groups are expanded on write, so a config edited by hand keeps its `~`
-    // until something rewrites it — and the deploy reader expands its own.
-    let (_dir, config) = handle(json!({ "groups": [{ "name": "Dev", "path": "~/dev" }] }));
-    assert_eq!(config.groups()[0].path, "~/dev");
+fn a_hand_written_tilde_path_is_expanded_for_every_reader() {
+    // The dialog expands on write, so a group added there is stored absolute.
+    // A hand-written one is not, and every consumer compares this path against
+    // an absolute working directory — so it is expanded on the way out, and the
+    // file keeps the spelling its owner typed.
+    let (dir, config) = handle(json!({ "groups": [{ "name": "Dev", "path": "~/dev" }] }));
+    assert_eq!(
+        config.groups()[0].path,
+        dir.path().join("dev").to_string_lossy()
+    );
+    config.save().unwrap();
+    assert_eq!(saved(&config)["groups"][0]["path"], json!("~/dev"));
 }
 
 // --- the rest of the accessors ----------------------------------------------

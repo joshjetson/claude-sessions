@@ -21,8 +21,29 @@ impl ConfigHandle {
         &self.config.chat
     }
 
-    pub fn groups(&self) -> &[Group] {
-        &self.config.groups
+    /// The configured groups, with a leading `~` expanded against the home
+    /// directory.
+    ///
+    /// Expansion happens HERE, once, rather than at each comparison, because
+    /// every consumer matches the path against an absolute working directory:
+    /// the sessions tree, the daemon's folder discovery, the local feed's, and
+    /// the journal's repo search. [`ConfigHandle::add_group`] expands on write,
+    /// so a group added through the dialog is already absolute — but a
+    /// hand-written `"groups": [{"path": "~/dev"}]` is not, and it matched
+    /// nothing at all: every session under it fell through to "Other sessions"
+    /// and the group rendered empty.
+    ///
+    /// The stored value is left alone, so the file keeps the spelling its owner
+    /// wrote.
+    pub fn groups(&self) -> Vec<Group> {
+        self.config
+            .groups
+            .iter()
+            .map(|group| Group {
+                path: expand_tilde(&group.path, &self.home),
+                ..group.clone()
+            })
+            .collect()
     }
 
     /// Which tab the dashboard opens on. Defaults to the board; an unrecognised
