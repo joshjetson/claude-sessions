@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::config::{ConfigHandle, Group};
 use crate::types::{Session, SessionStatus};
 use crate::ui::theme::{color_from_name, color_of};
-use crate::util::{truncate, CONTEXT_WINDOW};
+use crate::util::{context_percent, truncate};
 
 /// Sessions grouped by project name, which is the shape the tree is built from.
 pub type SessionsByProject = BTreeMap<String, Vec<Session>>;
@@ -75,12 +75,6 @@ impl TreeItem<'_> {
 /// when the *displayed* number moves.
 fn thousands(total: u64) -> u64 {
     (total as f64 / 1000.0).round() as u64
-}
-
-/// The percentage of the context window used, rounded as Node rounded it. Not
-/// clamped: a session over 100% is worth seeing, not worth hiding.
-fn context_pct(total: u64) -> i64 {
-    (total as f64 / CONTEXT_WINDOW as f64 * 100.0).round() as i64
 }
 
 fn total_tokens(sessions: &[Session]) -> u64 {
@@ -278,10 +272,12 @@ fn format_session_row(session: &Session, config: &ConfigHandle) -> Line<'static>
         _ => status.label().to_string(),
     };
 
+    // The LAST message's usage, exactly as Node's `treefmt.js` read it: what the
+    // session is holding now, not the sum of every turn it has ever run.
     let (tokens, context) = match session.last_usage.as_ref().map(|u| u.total_tokens()) {
         Some(total) if total > 0 => (
             format!("{}K", thousands(total)),
-            format!("({}%)", context_pct(total)),
+            format!("({}%)", context_percent(total)),
         ),
         _ => (String::new(), String::new()),
     };

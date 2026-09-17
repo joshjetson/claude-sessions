@@ -12,8 +12,11 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::types::{Color, EntryKind, LastEntry, SessionStatus, Usage};
 
-/// Claude Code's context window, for the "72K tokens (36%)" readout.
+/// Claude Code's default context window, for the "72K tokens (36%)" readout.
 pub const CONTEXT_WINDOW: u64 = 200_000;
+
+/// The long-context window the 1M-token models run with.
+pub const LARGE_CONTEXT_WINDOW: u64 = 1_000_000;
 
 /// A transcript younger than this is working, whatever its last entry says —
 /// the file is being appended to right now.
@@ -221,15 +224,40 @@ pub fn activity_color(then: DateTime<Utc>, now: DateTime<Utc>) -> Color {
     }
 }
 
-/// "72K tokens (36%)" for the session header. Cache reads and cache creations
-/// count toward the window just as much as fresh prompt tokens do.
+/// Which window an occupancy of `total` tokens is measured against.
+///
+/// Node had one constant and measured everything against it, so a session on a
+/// 1M-token model read `887K (444%)` — the token count was right, the
+/// denominator was not. A session cannot hold more context than it was given,
+/// so the smallest standard window that fits what the last message reported is
+/// the window it is running with. Sessions inside 200K are unaffected, which is
+/// every number the Node app ever printed correctly.
+pub fn context_window(total: u64) -> u64 {
+    if total > CONTEXT_WINDOW {
+        LARGE_CONTEXT_WINDOW
+    } else {
+        CONTEXT_WINDOW
+    }
+}
+
+/// How much of its context window a session is holding, rounded as Node
+/// rounded it. Written once: the tree row and the conversation header both
+/// print it, and they must never disagree.
+pub fn context_percent(total: u64) -> i64 {
+    (total as f64 / context_window(total) as f64 * 100.0).round() as i64
+}
+
+/// "72K tokens (36%)" for the session header, from the LAST message's usage —
+/// the session's current occupancy, not the running total of everything it has
+/// ever sent. Cache reads and cache creations count toward the window just as
+/// much as fresh prompt tokens do.
 pub fn format_context_usage(usage: Option<&Usage>) -> String {
     let Some(usage) = usage else {
         return String::new();
     };
-    let total = usage.total_tokens() as f64;
-    let thousands = (total / 1000.0).round() as u64;
-    let pct = (total / CONTEXT_WINDOW as f64 * 100.0).round() as i64;
+    let total = usage.total_tokens();
+    let thousands = (total as f64 / 1000.0).round() as u64;
+    let pct = context_percent(total);
     format!("{thousands}K tokens ({pct}%)")
 }
 
