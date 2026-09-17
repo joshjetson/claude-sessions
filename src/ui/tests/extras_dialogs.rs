@@ -38,7 +38,7 @@ fn log_paths() -> (tempfile::TempDir, Paths) {
 fn the_log_viewer_opens_on_the_newest_day_and_arrows_walk_back() {
     let (_dir, paths) = log_paths();
     let mut config = ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
-    let mut dialog = Dialog::LogViewer(LogViewer::open(&paths, None, "2026-09-16"));
+    let mut dialog = Dialog::LogViewer(Box::new(LogViewer::open(&paths, None, "2026-09-16")));
 
     let painted = text(&render_area(100, 30, |frame, area| {
         dialog.render(frame, area, &config)
@@ -84,7 +84,7 @@ fn the_log_viewer_reads_each_day_once_rather_than_per_keystroke() {
 fn the_log_viewer_creates_todays_file_so_o_has_something_to_open() {
     let (_dir, paths) = log_paths();
     let mut config = ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
-    let mut dialog = Dialog::LogViewer(LogViewer::open(&paths, None, "2026-09-17"));
+    let mut dialog = Dialog::LogViewer(Box::new(LogViewer::open(&paths, None, "2026-09-17")));
     assert!(paths.logs_dir.join("2026-09-17.md").exists());
     match press(&mut dialog, KeyCode::Char('o'), &mut config) {
         DialogOutcome::Act(Action::OpenPath(path)) => assert!(path.ends_with("2026-09-17.md")),
