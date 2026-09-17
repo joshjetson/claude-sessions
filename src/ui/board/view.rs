@@ -10,9 +10,11 @@ use std::collections::VecDeque;
 use ratatui::text::Line;
 
 use crate::board::{
-    board_item_key, build_board_tree, format_board_item, project_key, stage_key, subtask_key,
+    board_item_key, build_board_tree_with_runs, format_board_item, project_key,
+    stage_key, subtask_key,
     BoardItem,
 };
+use crate::qarun::{QaRun, RunCtx};
 use crate::types::{Notification, NotificationStatus, Task};
 use crate::ui::spans::row_line;
 use crate::ui::state::AppState;
@@ -61,6 +63,28 @@ pub fn build_items<'a>(
     board: &'a BoardSlice,
     notifications: &'a VecDeque<Notification>,
 ) -> Vec<BoardItem<'a>> {
+    build_items_with_runs(board, notifications, &[], None)
+}
+
+/// The rows, with whatever QA runs the board is watching folded in.
+///
+/// The context has to outlive the returned items, so the caller builds it and
+/// hands it down rather than this borrowing from a temporary.
+pub fn build_items_for<'a>(
+    board: &'a BoardSlice,
+    notifications: &'a VecDeque<Notification>,
+    run_ctx: &'a RunCtx<'a>,
+) -> Vec<BoardItem<'a>> {
+    build_items_with_runs(board, notifications, &board.runs, Some(run_ctx))
+}
+
+/// The same, with any QA runs folded into the stages they cover.
+pub fn build_items_with_runs<'a>(
+    board: &'a BoardSlice,
+    notifications: &'a VecDeque<Notification>,
+    runs: &'a [QaRun],
+    run_ctx: Option<&'a RunCtx<'a>>,
+) -> Vec<BoardItem<'a>> {
     let mut items = notification_items(notifications);
     match (&board.board, &board.error) {
         (_, Some(error)) => {
@@ -75,7 +99,12 @@ pub fn build_items<'a>(
             if board_data.projects.is_empty() {
                 items.push(BoardItem::Info { name: NOTHING });
             } else {
-                items.extend(build_board_tree(board_data, &board.expanded));
+                items.extend(build_board_tree_with_runs(
+                    board_data,
+                    &board.expanded,
+                    runs,
+                    run_ctx,
+                ));
             }
             if board_data.truncated {
                 items.push(BoardItem::Info { name: TRUNCATED });
@@ -105,6 +134,22 @@ pub enum BoardRow {
     },
     Notification {
         id: String,
+    },
+    /// A QA run's header.
+    QaRun {
+        run_id: String,
+        project: String,
+        stage: String,
+    },
+    /// A task inside a run. Still a task row: every key that works on
+    /// [`BoardRow::Task`] works here, which is most of the argument for putting
+    /// runs on the board rather than in a tab of their own. `task` is `None`
+    /// when the board no longer carries it — it failed QA and left the stage,
+    /// and the run still owns it.
+    QaRunTask {
+        run_id: String,
+        task_id: i64,
+        task: Option<Box<Task>>,
     },
     /// A header, separator or message — nothing to act on.
     Inert,
@@ -137,6 +182,16 @@ impl BoardRow {
             BoardItem::Notification { notif } => BoardRow::Notification {
                 id: notif.id.clone(),
             },
+            BoardItem::QaRun { run, .. } => BoardRow::QaRun {
+                run_id: run.id.clone(),
+                project: run.project_name.clone(),
+                stage: run.stage_name.clone(),
+            },
+            BoardItem::QaRunTask { run, entry, task } => BoardRow::QaRunTask {
+                run_id: run.id.clone(),
+                task_id: entry.task_id,
+                task: task.map(|task| Box::new(task.clone())),
+            },
             _ => BoardRow::Inert,
         }
     }
@@ -145,6 +200,12 @@ impl BoardRow {
     pub fn task(&self) -> Option<&Task> {
         match self {
             BoardRow::Task { task, .. } | BoardRow::Subtask { task, .. } => Some(task),
+            // A run row is still a task row, so every key that acts on a task —
+            // start, revise, move stage, open, go to session — works inside a
+            // run without a second implementation. It answers `None` only when
+            // the board has lost the task, which is the one case where there is
+            // genuinely nothing to act on.
+            BoardRow::QaRunTask { task, .. } => task.as_deref(),
             _ => None,
         }
     }
@@ -184,7 +245,14 @@ pub struct BoardSnapshot {
 }
 
 pub fn snapshot(state: &AppState) -> BoardSnapshot {
-    let items = build_items(&state.board, &state.notifications);
+    let sessions = run_sessions(state);
+    let run_ctx = state.board.run_ctx(
+        &state.paths,
+        &state.notifications,
+        &sessions,
+        std::time::SystemTime::now(),
+    );
+    let items = build_items_for(&state.board, &state.notifications, &run_ctx);
     let keys: Vec<String> = items.iter().map(board_item_key).collect();
     let selected = state.board_sel.resolve(&keys);
     let row = items
@@ -210,13 +278,22 @@ pub struct BoardWindow {
     pub lines: Vec<Line<'static>>,
 }
 
-pub fn window(state: &AppState, scroll_top: usize, height: usize) -> BoardWindow {
-    let items = build_items(&state.board, &state.notifications);
+pub fn window(state: &AppState, scroll_top: usize, height: usize, width: u16) -> BoardWindow {
+    let sessions = run_sessions(state);
+    let run_ctx = state.board.run_ctx(
+        &state.paths,
+        &state.notifications,
+        &sessions,
+        std::time::SystemTime::now(),
+    );
+    let items = build_items_for(&state.board, &state.notifications, &run_ctx);
     let keys: Vec<String> = items.iter().map(board_item_key).collect();
     let selected = state.board_sel.resolve(&keys);
     let top = crate::ui::components::keep_visible(selected, scroll_top, height, items.len());
     let live = live_task_ids(state.sessions());
-    let ctx = state.board.ctx(&live);
+    // Only a QA run's status column reads the width; every other row formats
+    // identically whatever the pane is.
+    let ctx = state.board.ctx_at_width(&live, width);
     BoardWindow {
         total: items.len(),
         selected,
@@ -239,4 +316,23 @@ pub fn label(board: &BoardSlice) -> String {
         .map(|b| b.task_count)
         .unwrap_or_default();
     format!(" Tasks Board · {} · {count} ", board.filter.as_str())
+}
+
+
+/// The live session per task in any watched run.
+///
+/// Newest first, so an answer or a status reaches the session actually working
+/// the task rather than a stale one that outlived a restart.
+fn run_sessions(state: &AppState) -> std::collections::HashMap<i64, &crate::types::Session> {
+    let mut out = std::collections::HashMap::new();
+    for run in &state.board.runs {
+        for &task_id in &run.task_ids {
+            if let Some(session) =
+                crate::ui::board::task_session(state.sessions(), task_id, state.board.link(task_id))
+            {
+                out.insert(task_id, session);
+            }
+        }
+    }
+    out
 }

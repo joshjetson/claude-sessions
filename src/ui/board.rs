@@ -25,6 +25,7 @@ pub mod controller;
 pub mod detail;
 pub mod keys;
 pub mod launch;
+pub mod runs;
 pub mod slice;
 pub mod spec;
 pub mod start;
@@ -42,6 +43,7 @@ pub use launch::{
 };
 pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate, DetailAnswers};
 pub use spec::{short, LaunchSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec};
+pub use runs::{jump_to_next_ask, run_command, watch_or_drop};
 pub use start::{start, task_url, StartRequest};
 pub use view::{label, snapshot, window, BoardRow, BoardSnapshot, BoardWindow};
 

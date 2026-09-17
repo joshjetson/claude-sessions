@@ -34,6 +34,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
         state.stats,
         state.usage.as_ref(),
         None,
+        pending_asks(state),
     );
     draw_list(frame, state, layout.list);
     draw_detail(frame, state, layout.detail);
@@ -151,7 +152,14 @@ fn draw_board(frame: &mut Frame, state: &mut AppState, area: Rect) {
 
     // One walk of the row list: the window places itself from the scroll
     // position it is handed, and only the visible rows are formatted.
-    let view = crate::ui::board::window(state, state.list_scroll, content_h);
+    // The pane's inner width, less its border. A QA run's status column drops
+    // to its glyph form on a narrow pane and nothing else reads it.
+    let view = crate::ui::board::window(
+        state,
+        state.list_scroll,
+        content_h,
+        area.width.saturating_sub(2),
+    );
     state.list_scroll = view.top;
     render_list(
         frame,
@@ -222,6 +230,7 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
                     "Select a task (→) to preview, Enter for its action menu.",
                     "",
                     "s start   v revise   C resume chat   P pipeline   m stage",
+                    "R watch a stage as a QA run   ] jump to the next agent waiting",
                     "g session   G terminal   o browser   S ssh",
                     "f mine/all   p projects   x dismiss a notification",
                 ]),
@@ -309,6 +318,8 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
             ("←→", "expand"),
             ("Enter", "menu"),
             ("s", "start"),
+            ("R", "QA run"),
+            ("]", "next ask"),
             ("v", "revise"),
             ("C", "chat"),
             ("P", "pipeline"),
@@ -337,4 +348,24 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
     }
     hints.extend([("q", "quit"), ("Q", "stop all")]);
     hints
+}
+
+
+/// How many QA agents are waiting on a decision, across every run.
+///
+/// Counted per frame, which it can afford to be: it reads one JSON file per
+/// task in a run and nothing else — no git, no Odoo. Zero when nothing is being
+/// watched, which is the common case and costs nothing at all.
+fn pending_asks(state: &AppState) -> usize {
+    if state.board.runs.is_empty() {
+        return 0;
+    }
+    let sessions = std::collections::HashMap::new();
+    let ctx = state.board.run_ctx(
+        &state.paths,
+        &state.notifications,
+        &sessions,
+        std::time::SystemTime::now(),
+    );
+    crate::qarun::pending_asks(&state.board.runs, &ctx).len()
 }

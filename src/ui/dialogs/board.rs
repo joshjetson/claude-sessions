@@ -240,3 +240,134 @@ impl ContextDialog {
         self.prompt.render(frame, area, &title);
     }
 }
+
+// --- QA runs ----------------------------------------------------------------
+
+/// What can be done with a QA run.
+///
+/// The labels say what each entry will NOT do as much as what it will. "Start
+/// coordinator" sounds like it will answer things, and in shadow mode it does
+/// not — so the label says so rather than leaving it to be discovered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunAction {
+    /// Start the QA sessions the run has lanes for.
+    FillLanes,
+    /// Start the coordinating session.
+    StartCoordinator,
+    /// Flip between shadow and triage. Applies to the NEXT coordinator, not one
+    /// already running: its rules are in a prompt that has already been sent.
+    ToggleMode,
+    /// Stop watching. The QA sessions themselves keep running.
+    StopWatching,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunMenu {
+    pub run_id: String,
+    pub title: String,
+    pub entries: Vec<(String, RunAction)>,
+    pub list: SelectList,
+}
+
+impl RunMenu {
+    pub fn build(run_id: &str, state: &AppState) -> Self {
+        let run = state.board.runs.iter().find(|run| run.id == run_id);
+        let (stage, covered, triage, lane_limit) = match run {
+            Some(run) => (
+                run.stage_name.clone(),
+                run.task_ids.len(),
+                run.mode == crate::qarun::RunMode::Triage,
+                run.lane_limit.or_else(|| state.config.qa_lane_limit()),
+            ),
+            None => (String::new(), 0, false, None),
+        };
+
+        let cap = match lane_limit {
+            Some(limit) => format!("up to {limit} at once"),
+            None => "no cap".to_string(),
+        };
+
+        let agreement = crate::qarun::ShadowStore::new(&state.paths.runtime_dir)
+            .agreement(run_id)
+            .summary();
+
+        let entries = vec![
+            (
+                format!(
+                    "▶  Start QA sessions ({covered} task{}, {cap})",
+                    if covered == 1 { "" } else { "s" }
+                ),
+                RunAction::FillLanes,
+            ),
+            (
+                if triage {
+                    "🧠  Start coordinator (triage — answers facts, escalates the rest)".to_string()
+                } else {
+                    "🧠  Start coordinator (shadow — records answers, gives none)".to_string()
+                },
+                RunAction::StartCoordinator,
+            ),
+            (
+                if triage {
+                    "↔  Switch to shadow mode (applies to the next coordinator)".to_string()
+                } else {
+                    "↔  Switch to triage mode (applies to the next coordinator)".to_string()
+                },
+                RunAction::ToggleMode,
+            ),
+            (format!("📊  Shadow agreement: {agreement}"), RunAction::Cancel),
+            (
+                "✕  Stop watching this run (sessions keep running)".to_string(),
+                RunAction::StopWatching,
+            ),
+            ("✕  Cancel".to_string(), RunAction::Cancel),
+        ];
+
+        let list = SelectList::new(
+            entries
+                .iter()
+                .map(|(label, _)| Line::raw(label.clone()))
+                .collect(),
+        );
+        RunMenu {
+            run_id: run_id.to_string(),
+            title: stage,
+            entries,
+            list,
+        }
+    }
+
+    fn action(&self, index: usize) -> Option<&RunAction> {
+        self.entries.get(index).map(|(_, action)| action)
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent, _ctx: &mut DialogCtx<'_>) -> DialogOutcome {
+        match self.list.handle_key(key) {
+            ListOutcome::Stay | ListOutcome::Unhandled(_) => DialogOutcome::Stay,
+            ListOutcome::Cancel => DialogOutcome::Close,
+            ListOutcome::Select(index) => match self.action(index).cloned() {
+                None | Some(RunAction::Cancel) => DialogOutcome::Close,
+                Some(action) => DialogOutcome::Run(Box::new(RunCommand {
+                    run_id: self.run_id.clone(),
+                    action,
+                })),
+            },
+        }
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let title = format!(" QA run · {} ", truncate(&self.title, 40));
+        let width = dialog_width(area, 72);
+        let mut lines = self.list.lines(area.height);
+        lines.push(hint("↑↓ move  ·  Enter select  ·  Esc cancel"));
+        render_modal(frame, area, &title, color_from_name("cyan"), lines, width);
+    }
+}
+
+/// A run action, addressed to the run it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCommand {
+    pub run_id: String,
+    pub action: RunAction,
+}

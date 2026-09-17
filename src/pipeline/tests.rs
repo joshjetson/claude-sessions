@@ -8,6 +8,7 @@
 
 mod definitions;
 mod golden;
+mod qa_run;
 mod overrides;
 mod skills;
 mod stage_steps;

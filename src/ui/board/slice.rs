@@ -5,11 +5,17 @@
 //! [`BoardUpdate`] from whichever feed is running (the daemon's `board` event,
 //! or the in-process fetch) and everything else is derived from it.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::time::SystemTime;
 
 use crate::board::{BoardCtx, TaskSessionStatus};
 use crate::daemon::{BoardFilter, TaskLink, TaskLinkStatus};
-use crate::types::{Board, Session, Task};
+use crate::paths::Paths;
+use crate::qaden::qa_run_state;
+use crate::qarun::{QaRun, RunCtx, RunMode};
+use crate::types::{
+    Board, Notification, NotificationKind, NotificationStatus, Session, Task,
+};
 
 /// One board fetch, however it was produced.
 ///
@@ -110,6 +116,12 @@ pub struct BoardSlice {
     pub detail_answers: DetailAnswers,
     /// The blink tick. Unread notifications flash on it.
     pub blink_on: bool,
+    /// QA runs being watched, one per stage at most.
+    ///
+    /// A run owns its task list from creation rather than tracking the stage:
+    /// a task that fails QA leaves the stage and stays in the run that found
+    /// the problem, and "2 done of 7" needs a denominator that does not move.
+    pub runs: Vec<QaRun>,
     /// Derived when an update lands, because the row formatter wants a plain
     /// status per task and a set of gated ids — rebuilding either per row would
     /// be a map copy per frame.
@@ -267,5 +279,123 @@ fn status_of(status: TaskLinkStatus) -> TaskSessionStatus {
     match status {
         TaskLinkStatus::Done => TaskSessionStatus::Done,
         _ => TaskSessionStatus::Running,
+    }
+}
+
+
+impl BoardSlice {
+    /// The run covering a stage, if one is being watched.
+    pub fn run_for(&self, project: &str, stage: &str) -> Option<&QaRun> {
+        self.runs
+            .iter()
+            .find(|run| run.project_name == project && run.stage_name == stage)
+    }
+
+    /// Start watching a stage as a run, or refresh the one already there.
+    ///
+    /// Idempotent per stage, and additive: a task that has left the stage since
+    /// the run started stays in the run. Two runs over the same tasks would
+    /// each claim the rows and the board would draw them twice.
+    ///
+    /// Returns the number of tasks the run now covers, or `None` when the stage
+    /// holds nothing to watch.
+    pub fn watch_stage(&mut self, project: &str, stage: &str) -> Option<usize> {
+        let task_ids: Vec<i64> = self
+            .board
+            .as_ref()?
+            .projects
+            .get(project)?
+            .stages
+            .get(stage)?
+            .tasks
+            .iter()
+            .map(|task| task.id)
+            .collect();
+        if task_ids.is_empty() {
+            return None;
+        }
+
+        if let Some(run) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.project_name == project && run.stage_name == stage)
+        {
+            for id in task_ids {
+                if !run.task_ids.contains(&id) {
+                    run.task_ids.push(id);
+                }
+            }
+            return Some(run.task_ids.len());
+        }
+
+        let covered = task_ids.len();
+        self.runs.push(QaRun {
+            id: QaRun::id_for(project, stage),
+            project_name: project.to_string(),
+            stage_name: stage.to_string(),
+            task_ids,
+            started_at: crate::util::iso_now(),
+            lane_limit: None,
+            spawned: Vec::new(),
+            mode: RunMode::Shadow,
+        });
+        Some(covered)
+    }
+
+    /// Stop watching. The QA sessions themselves are untouched — a run is a
+    /// view over work that is happening anyway.
+    pub fn stop_watching(&mut self, run_id: &str) -> bool {
+        let before = self.runs.len();
+        self.runs.retain(|run| run.id != run_id);
+        self.runs.len() != before
+    }
+
+    /// The context a run's rows are built from.
+    ///
+    /// `asks` is derived from the notification feed rather than kept as a
+    /// second copy: a question is open until it is resolved, and the feed
+    /// already records that. Newest wins per task — an agent that asks twice
+    /// without an answer is asking about the same blockage.
+    pub fn run_ctx<'a>(
+        &self,
+        paths: &Paths,
+        notifications: &'a VecDeque<Notification>,
+        sessions: &'a HashMap<i64, &'a Session>,
+        now: SystemTime,
+    ) -> RunCtx<'a> {
+        let mut run_states = HashMap::new();
+        for run in &self.runs {
+            for &task_id in &run.task_ids {
+                run_states
+                    .entry(task_id)
+                    .or_insert_with(|| qa_run_state(paths, task_id, |_| None));
+            }
+        }
+
+        let mut asks: HashMap<i64, &Notification> = HashMap::new();
+        for notification in notifications {
+            let (Some(task_id), NotificationKind::Question) =
+                (notification.task_id, notification.kind)
+            else {
+                continue;
+            };
+            if notification.status == NotificationStatus::Resolved {
+                continue;
+            }
+            asks.entry(task_id)
+                .and_modify(|held| {
+                    if notification.ts > held.ts {
+                        *held = notification;
+                    }
+                })
+                .or_insert(notification);
+        }
+
+        RunCtx {
+            run_states,
+            sessions: sessions.clone(),
+            asks,
+            now: Some(now),
+        }
     }
 }

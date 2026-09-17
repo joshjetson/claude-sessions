@@ -121,6 +121,7 @@ pub fn render_header(
     stats: Stats,
     usage: Option<&UsageReadout>,
     alert: Option<Alert>,
+    asks: usize,
 ) {
     if area.height == 0 || area.width == 0 {
         return;
@@ -141,6 +142,17 @@ pub fn render_header(
     if let Some(alert) = alert {
         title_spans.push(Span::styled("   ", band));
         title_spans.push(alert.span());
+    }
+    // How many QA agents are waiting on a decision, across every run.
+    //
+    // One number, in the one place always on screen. With seven passes in
+    // flight a per-row blink does not scale: blinking rows cannot be counted,
+    // and the ones below the fold do not blink at all. This says whether to
+    // look.
+    if asks > 0 {
+        let blink_on = alert.is_some_and(|alert| alert.on);
+        title_spans.push(Span::styled("   ", band));
+        title_spans.push(ask_span(asks, blink_on));
     }
 
     let title_width = spans_width(&title_spans);
@@ -198,6 +210,26 @@ impl Alert {
         };
         Span::styled(label, style)
     }
+}
+
+/// The "someone is waiting on you" badge, blinking on the same tick as the
+/// notification one so the header has a single rhythm rather than two.
+fn ask_span(asks: usize, on: bool) -> Span<'static> {
+    let label = format!(
+        " ⚠ {asks} {} you ",
+        if asks == 1 { "agent wants" } else { "agents want" }
+    );
+    let style = if on {
+        Style::default()
+            .bg(color_from_name("yellow"))
+            .fg(color_from_name("black"))
+    } else {
+        Style::default()
+            .fg(color_from_name("yellow"))
+            .bg(color_from_name("blue"))
+            .add_modifier(Modifier::BOLD)
+    };
+    Span::styled(label, style)
 }
 
 /// A bordered pane. `label` sits on the top border, `focused` colours it.

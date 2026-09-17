@@ -17,6 +17,7 @@ mod launch;
 mod linking;
 mod pickers;
 mod revision;
+mod runs;
 mod view;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

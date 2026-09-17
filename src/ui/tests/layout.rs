@@ -219,6 +219,7 @@ fn header_centres_the_title() {
             },
             None,
             None,
+            0,
         );
     });
     let rendered = text(&buffer);
@@ -232,7 +233,7 @@ fn header_centres_the_title() {
 #[test]
 fn header_usage_slot_is_empty_until_a_readout_exists() {
     let without = text(&render(60, 3, |frame| {
-        render_header(frame, frame.area(), "D", Stats::default(), None, None);
+        render_header(frame, frame.area(), "D", Stats::default(), None, None, 0);
     }));
     let readout = reading(Some(42.0), Some(7.0));
     let with = text(&render(60, 3, |frame| {
@@ -243,6 +244,7 @@ fn header_usage_slot_is_empty_until_a_readout_exists() {
             Stats::default(),
             Some(&readout),
             None,
+            0,
         );
     }));
     assert!(!without.contains("42%"));
@@ -263,6 +265,7 @@ fn header_usage_never_shifts_the_title() {
                 Stats::default(),
                 usage,
                 None,
+                0,
             );
         });
         // Columns, not bytes: the readout draws multi-byte block glyphs, so a

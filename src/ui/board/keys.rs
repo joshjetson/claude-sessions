@@ -9,7 +9,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::daemon::BoardFilter;
 use crate::types::{NotificationStatus, Task};
-use crate::ui::dialogs::{Dialog, NotifMenu, PipelineView, ProjectFilter, TaskMenu};
+use crate::ui::dialogs::{Dialog, NotifMenu, PipelineView, ProjectFilter, RunMenu, TaskMenu};
 use crate::ui::state::{Action, AppState};
 
 use super::start::{start, StartRequest};
@@ -73,6 +73,33 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
         'm' => with_task(state, task, move_stage),
         'g' => with_task(state, task, |state, task| go_to_session(state, task.id)),
         'G' => with_task(state, task, |state, task| focus_terminal(state, task.id)),
+        // R watches the selected stage as a QA run, or drops the run on a run
+        // row. Read-only either way: it groups rows and reports, and starts
+        // nothing.
+        'R' => {
+            let (project, stage, existing) = match &snapshot.row {
+                BoardRow::QaRun { run_id, .. } => {
+                    (String::new(), String::new(), Some(run_id.clone()))
+                }
+                BoardRow::Stage { project, stage } => (project.clone(), stage.clone(), None),
+                BoardRow::Task { task, .. } | BoardRow::Subtask { task, .. } => {
+                    (task.project_name.clone(), task.stage_name.clone(), None)
+                }
+                BoardRow::QaRunTask { run_id, .. } => {
+                    (String::new(), String::new(), Some(run_id.clone()))
+                }
+                _ => {
+                    state.flash(
+                        "Select a stage, or a task in one, to watch it as a QA run.".to_string(),
+                    );
+                    state.dirty = true;
+                    return;
+                }
+            };
+            crate::ui::board::watch_or_drop(state, &project, &stage, existing);
+        }
+        // ] walks to the next agent waiting on a decision, across every run.
+        ']' => crate::ui::board::jump_to_next_ask(state, &snapshot.keys),
         'P' => pipeline_view(state, snapshot),
         'S' => ssh(state, snapshot),
         'f' => {
@@ -158,6 +185,27 @@ fn on_select(state: &mut AppState, snapshot: &BoardSnapshot) {
             // swaps the label in when it lands (brief §10 mandate #9).
             state.enqueue(Action::RefreshQaState { task_id });
         }
+        // A run row is a task row. Same menu, same keys — the run is a
+        // grouping, not a different kind of thing.
+        BoardRow::QaRunTask { task: Some(task), .. } => {
+            let menu = TaskMenu::build(task, state);
+            let task_id = task.id;
+            open(state, Dialog::TaskMenu(menu));
+            state.enqueue(Action::RefreshQaState { task_id });
+        }
+        // The board no longer carries this task: it left the stage and the run
+        // kept it. There is nothing to build a menu from.
+        BoardRow::QaRunTask { task: None, task_id, .. } => {
+            let task_id = *task_id;
+            state.flash = Some(format!(
+                "Task {task_id} has left this stage — the run still covers it, but the board has no record to open."
+            ));
+            state.dirty = true;
+        }
+        BoardRow::QaRun { run_id, .. } => {
+            let run_id = run_id.clone();
+            open(state, Dialog::RunMenu(RunMenu::build(&run_id, state)));
+        }
         BoardRow::Inert => {}
     }
 }
@@ -169,6 +217,24 @@ fn on_expand(state: &mut AppState, snapshot: &BoardSnapshot, expand: bool) {
         BoardRow::Project { .. } | BoardRow::Stage { .. } => {
             if let Some(key) = snapshot.row.expand_key() {
                 state.board.set_expanded(&key, expand);
+                state.dirty = true;
+            }
+        }
+        // Stored inverted, so a brand-new run renders open: the point of
+        // creating one is to look at it.
+        BoardRow::QaRun { run_id, .. } => {
+            let key = crate::board::collapsed_key(run_id);
+            state.board.set_expanded(&key, !expand);
+            state.dirty = true;
+        }
+        BoardRow::QaRunTask { task, run_id, .. } => {
+            if expand {
+                if let Some(task) = task {
+                    show_task(state, task);
+                }
+            } else {
+                let key = crate::board::collapsed_key(run_id);
+                state.board.set_expanded(&key, true);
                 state.dirty = true;
             }
         }
