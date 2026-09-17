@@ -51,6 +51,7 @@
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Requirements](#requirements)
+- [Getting around](#getting-around)
 - [Features](#features)
 - [Subcommands](#subcommands)
 - [Shortcuts](#shortcuts)
@@ -132,6 +133,16 @@ claude-sessions
 > a session — follows in a coming release. Running Claude Code
 > inside **WSL**? Use the macOS/Linux steps inside WSL — that gets the full feature set
 > today.
+
+### Getting around
+
+The dashboard has three screens — **Sessions**, **Board**, and **Deploy** — and you
+move between them with **`Tab`** (`Shift-Tab` cycles the focused pane). If you have an
+Odoo board configured, `claude-sessions` opens on **Board**, so press `Tab` once to
+reach your live sessions. Sessions are grouped by their working directory, not by the
+terminal tab or tmux window they run in — so look for the folder you launched from, not
+the tab name. The bottom status bar always lists the keys for the screen you are on; the
+full set is under [Shortcuts](#shortcuts).
 
 ### After installing
 
