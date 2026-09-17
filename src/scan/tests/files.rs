@@ -74,15 +74,32 @@ fn a_new_transcript_invalidates_the_listing() {
     let mut cache = SessionFilesCache::new();
     assert_eq!(cache.list(dir.path()).len(), 1);
 
-    // Windows stamps file times from a clock that only ticks about every 15ms,
-    // so two writes inside one tick leave the directory's mtime untouched and
-    // the cache — correctly — reports it as unchanged. The property under test
-    // is that a CHANGED directory is re-read, so the change is made visible at
-    // the platform's own resolution first.
-    #[cfg(windows)]
-    std::thread::sleep(Duration::from_millis(32));
-
+    // Filesystems stamp the directory's mtime at their own resolution —
+    // ~15ms on NTFS, a full second on the overlayfs a CI runner gives a
+    // container — and a write inside one tick leaves the mtime untouched, so
+    // the cache correctly reports the directory unchanged. The property under
+    // test is that a CHANGED directory is re-read, so wait until the platform
+    // actually shows the change rather than assuming any particular tick.
+    let before = std::fs::metadata(dir.path())
+        .expect("dir meta")
+        .modified()
+        .ok();
     write_at(&dir, "b.jsonl", ago(1));
+    for _ in 0..300 {
+        let now = std::fs::metadata(dir.path())
+            .expect("dir meta")
+            .modified()
+            .ok();
+        if now != before {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        // Nudge the directory so a coarse clock has something new to stamp.
+        let poke = dir.path().join(".poke");
+        let _ = std::fs::write(&poke, b"x");
+        let _ = std::fs::remove_file(&poke);
+    }
+
     assert_eq!(cache.list(dir.path()).len(), 2);
     assert_eq!(cache.builds(), 2);
 }
