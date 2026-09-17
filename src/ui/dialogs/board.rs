@@ -34,11 +34,12 @@ pub enum TaskAction {
         revision: bool,
     },
     MoveStage,
+    /// The auto-dev daemon's run logs for this task — the same dialog `D`
+    /// opens.
+    DaemonLogs,
     OpenInBrowser,
     RepoFolders,
     TargetBranch,
-    /// Named but not yet built — says when it arrives rather than doing nothing.
-    Later(&'static str),
     Cancel,
 }
 
@@ -107,10 +108,15 @@ impl TaskMenu {
                 TaskAction::Context { revision: true },
             ));
         }
-        entries.push((
-            "🤖  Daemon run logs…".into(),
-            TaskAction::Later("Daemon run logs land with the extras phase."),
-        ));
+        // Only when there is something to read, or a daemon tag saying there
+        // will be — Node gated the row the same way (`dialogs.js:347`), and an
+        // always-present row that opens an empty list is a row that teaches you
+        // to skip it.
+        if crate::autodev::has_run_logs(&state.paths.auto_dev_runs_dir, task.id)
+            || crate::autodev::auto_dev_state(&task.tags).is_some()
+        {
+            entries.push(("🤖  Daemon run logs…".into(), TaskAction::DaemonLogs));
+        }
         entries.push(("↔  Move to stage…".into(), TaskAction::MoveStage));
         entries.push(("🌐  Open in browser".into(), TaskAction::OpenInBrowser));
         entries.push(("🗂  Repo folders…".into(), TaskAction::RepoFolders));
@@ -169,7 +175,6 @@ impl TaskMenu {
             ListOutcome::Cancel => DialogOutcome::Close,
             ListOutcome::Select(index) => match self.action(index).cloned() {
                 None | Some(TaskAction::Cancel) => DialogOutcome::Close,
-                Some(TaskAction::Later(message)) => DialogOutcome::Flash(message.to_string()),
                 Some(TaskAction::Start(kind)) => {
                     DialogOutcome::Start(Box::new(StartRequest::new(&self.task, kind)))
                 }

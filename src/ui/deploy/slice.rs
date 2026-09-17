@@ -94,7 +94,11 @@ impl DeploySlice {
         if let Some(run) = self.runs.get_mut(project) {
             run.lines.push(line);
             run.total_lines += 1;
-            while run.lines.len() > crate::daemon::WIRE_RUN_LINES {
+            // The engine's own ceiling, not the 200 it ships on attach: the
+            // snapshot seeds the tail and the stream appends, so the pane
+            // accumulates the same 2000 lines the daemon keeps. Capping at the
+            // attach size threw away everything a watched deploy had printed.
+            while run.lines.len() > crate::daemon::MAX_RUN_LINES {
                 run.lines.remove(0);
             }
         }

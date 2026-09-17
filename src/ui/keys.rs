@@ -86,6 +86,12 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
     if handle_global(state, key) {
         return;
     }
+    // The right-hand pane's keys, on EVERY view — Node routed them before the
+    // per-view map (`App.js:251-253`). Without this a task description or a
+    // deploy log longer than the pane could not be read past its first page.
+    if state.focus == Pane::Conversation && handle_conversation(state, key) {
+        return;
+    }
     match state.view {
         View::Sessions => handle_sessions(state, key),
         View::Board => handle_board(state, key),
@@ -224,13 +230,19 @@ fn set_view(state: &mut AppState, view: View) {
 }
 
 fn handle_sessions(state: &mut AppState, key: KeyEvent) {
-    if state.focus == Pane::Conversation && handle_conversation(state, key) {
+    let snapshot = tree_snapshot(state);
+    // `o` is the one key the conversation pane does not shadow: Node handled it
+    // view-wide, before the focus check, and fell back to the selected session
+    // when the cursor was not on a session row (`App.js:242-247`). Reaching the
+    // terminal is how a permission prompt gets answered, so it must work from
+    // wherever you noticed the prompt.
+    if key.code == KeyCode::Char('o') {
+        focus_selected_terminal(state, &snapshot);
         return;
     }
     if state.focus != Pane::Tree {
         return;
     }
-    let snapshot = tree_snapshot(state);
     match key.code {
         KeyCode::Up | KeyCode::Char('k') => state.tree_sel.move_by(&snapshot.keys, -1),
         KeyCode::Down | KeyCode::Char('j') => state.tree_sel.move_by(&snapshot.keys, 1),
@@ -241,18 +253,22 @@ fn handle_sessions(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+/// Raise the terminal of the session under the cursor, or — when the cursor is
+/// somewhere else — of the session the conversation pane is showing.
+fn focus_selected_terminal(state: &mut AppState, snapshot: &TreeSnapshot) {
+    let id = match &snapshot.row {
+        Some(SelectedRow::Session { session_id, .. }) => Some(session_id.clone()),
+        _ => state.selected_session_id.clone(),
+    };
+    let Some(session) = id.and_then(|id| state.find_session(&id)) else {
+        return;
+    };
+    let reference = SessionRef::from_session(session);
+    state.enqueue(Action::FocusTerminal(Box::new(reference)));
+}
+
 fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
     match key.code {
-        // Jump to the session's own terminal — the only place a permission
-        // prompt can actually be answered.
-        KeyCode::Char('o') => {
-            if let Some(SelectedRow::Session { session_id, .. }) = &snapshot.row {
-                if let Some(session) = state.find_session(session_id) {
-                    let reference = SessionRef::from_session(session);
-                    state.enqueue(Action::FocusTerminal(Box::new(reference)));
-                }
-            }
-        }
         KeyCode::Char('n') => {
             if let Some(dir) = snapshot.dir.clone() {
                 state.enqueue(Action::LaunchSession { cwd: dir });

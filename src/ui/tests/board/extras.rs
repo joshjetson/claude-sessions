@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::term::{SpawnPolicy, TerminalDriver};
 use crate::ui::actions::ActionResult;
 use crate::ui::board;
-use crate::ui::state::Action;
+use crate::ui::state::{Action, AppState};
 
 use super::fixtures::*;
 use super::launch::harness;
@@ -184,4 +184,234 @@ fn the_detail_pane_names_recorded_optics_coverage() {
         .map(|row| crate::board::plain_text(row))
         .collect();
     assert!(!text.contains("🔬"), "{text}");
+}
+
+/// Node's task pane listed the recorded workflows by name
+/// (`controller.js:91-96`); the port shipped only the count. The list is its
+/// own round trip, so the pane has to fold it in when it lands.
+#[test]
+fn the_recorded_processes_replace_the_count_when_the_lookup_lands() {
+    let (_dir, mut state) = board_state();
+    with_tasks(&mut state, vec![task(5944, "Recorded")]);
+    state.board.optics_tasks.insert(5944, 2);
+    // Open the pane the way `→` does.
+    open_task_pane(&mut state, 5944);
+    assert_eq!(state.board.detail_answers.task_id, Some(5944));
+
+    board::apply_result(
+        &mut state,
+        ActionResult::Data(Box::new(crate::ui::actions::BoardData::TaskOptics {
+            task_id: 5944,
+            optics: Some(optics_detail()),
+        })),
+    );
+    let text = pane_text(&state);
+    assert!(
+        text.contains("🔬 Optics: 2 recorded processes under Task-5944 [orbital]"),
+        "{text}"
+    );
+    assert!(text.contains("• Refund an order"), "{text}");
+    assert!(text.contains("• Close the month"), "{text}");
+    // The count line it replaces is gone, not repeated above it.
+    assert!(!text.contains("for this task"), "{text}");
+}
+
+/// The description and the process list are separate round trips. Whichever
+/// answers second must fold in beside the first rather than paint over it.
+#[test]
+fn a_description_and_the_process_list_survive_each_other_in_either_order() {
+    for optics_first in [true, false] {
+        let (_dir, mut state) = board_state();
+        with_tasks(&mut state, vec![task(5944, "Recorded")]);
+        open_task_pane(&mut state, 5944);
+
+        let description =
+            ActionResult::Data(Box::new(crate::ui::actions::BoardData::TaskDescription {
+                task_id: 5944,
+                detail: Some(crate::odoo::TaskDetail {
+                    id: 5944,
+                    description: "<p>Reconcile the ledger</p>".to_string(),
+                    ..Default::default()
+                }),
+            }));
+        let optics = ActionResult::Data(Box::new(crate::ui::actions::BoardData::TaskOptics {
+            task_id: 5944,
+            optics: Some(optics_detail()),
+        }));
+        let (first, second) = if optics_first {
+            (optics, description)
+        } else {
+            (description, optics)
+        };
+        board::apply_result(&mut state, first);
+        board::apply_result(&mut state, second);
+
+        let text = pane_text(&state);
+        assert!(
+            text.contains("Reconcile the ledger"),
+            "{optics_first}: {text}"
+        );
+        assert!(text.contains("• Refund an order"), "{optics_first}: {text}");
+        assert!(
+            !text.contains("loading description"),
+            "{optics_first}: {text}"
+        );
+    }
+}
+
+/// A lookup that comes back after the cursor moved on belongs to nobody.
+#[test]
+fn a_process_list_for_another_task_never_lands_in_the_open_pane() {
+    let (_dir, mut state) = board_state();
+    with_tasks(&mut state, vec![task(5944, "Recorded")]);
+    open_task_pane(&mut state, 5944);
+    board::apply_result(
+        &mut state,
+        ActionResult::Data(Box::new(crate::ui::actions::BoardData::TaskOptics {
+            task_id: 9999,
+            optics: Some(optics_detail()),
+        })),
+    );
+    assert!(!pane_text(&state).contains("Refund an order"));
+}
+
+/// An install with no Optics endpoint never asks: the answer is always
+/// "nothing recorded", and the lookup is a round trip.
+#[test]
+fn the_pane_only_asks_optics_when_the_install_has_optics() {
+    let (_dir, mut state) = board_state();
+    with_tasks(&mut state, vec![task(5944, "Recorded")]);
+    open_task_pane(&mut state, 5944);
+    assert!(
+        !state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, Action::FetchTaskOptics { .. })),
+        "asked Optics without an endpoint"
+    );
+}
+
+/// Node's task pane named the auto-dev daemon's state, its tag trail and its
+/// run-log count (`controller.js:64-71`). Without it the only sign the daemon
+/// has the task is a one-glyph badge on the row.
+#[test]
+fn the_detail_pane_reports_what_the_auto_dev_daemon_is_doing() {
+    let (dir, mut state) = board_state();
+    let mut tagged = task(6117, "Export the ledger");
+    tagged.tags = vec!["auto_implemented".into(), "auto_sized".into()];
+    with_tasks(&mut state, vec![tagged]);
+    let runs = dir.path().join("runs");
+    std::fs::create_dir_all(&runs).unwrap();
+    std::fs::write(runs.join("implement-6117-20260901.log"), "…").unwrap();
+    state.paths.auto_dev_runs_dir = runs;
+
+    open_task_pane(&mut state, 6117);
+    let text = pane_text(&state);
+    assert!(text.contains("🤖 Auto-dev-daemon:"), "{text}");
+    assert!(text.contains("tags: auto_implemented"), "{text}");
+    assert!(text.contains("auto_sized"), "{text}");
+    assert!(
+        text.contains("1 run log → press D for daemon logs"),
+        "{text}"
+    );
+
+    // And the menu row that opens them is there only because they exist.
+    let menu =
+        crate::ui::dialogs::TaskMenu::build(&state.board.task(6117).unwrap().clone(), &state);
+    assert!(menu
+        .entries
+        .iter()
+        .any(|(_, action)| *action == crate::ui::dialogs::TaskAction::DaemonLogs));
+}
+
+/// A task no daemon has touched says nothing about one, and offers no row for
+/// logs that do not exist.
+#[test]
+fn a_task_with_no_auto_dev_tags_says_nothing_about_the_daemon() {
+    let (_dir, mut state) = board_state();
+    with_tasks(&mut state, vec![task(6118, "Hand-worked")]);
+    open_task_pane(&mut state, 6118);
+    assert!(!pane_text(&state).contains("Auto-dev-daemon"));
+    let menu =
+        crate::ui::dialogs::TaskMenu::build(&state.board.task(6118).unwrap().clone(), &state);
+    assert!(!menu
+        .entries
+        .iter()
+        .any(|(_, action)| *action == crate::ui::dialogs::TaskAction::DaemonLogs));
+}
+
+/// Put the cursor on a task row and press `→` until the pane opens, which is
+/// the only way a task pane is ever opened.
+fn open_task_pane(state: &mut AppState, task_id: i64) {
+    state.board.expanded.insert(crate::board::stage_key(
+        "NoSuchProject-ForTests",
+        "Approved to Start",
+    ));
+    let snapshot = board::snapshot(state);
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|key| key == &format!("bt:{task_id}"))
+        .expect("the task row");
+    state.board_sel.set(&snapshot.keys, index);
+    super::press(state, crossterm::event::KeyCode::Right);
+    super::press(state, crossterm::event::KeyCode::Right);
+}
+
+/// And an install that has one asks every time the pane opens, the way Node
+/// did — the count on the board comes from a per-project query that may predate
+/// the recording someone made a minute ago.
+#[test]
+fn a_configured_install_asks_optics_for_every_task_pane() {
+    let (dir, mut state) = board_state();
+    std::fs::write(
+        dir.path().join(".claude-sessions.json"),
+        r#"{"optics":{"api":"https://optics.example.com","token":"t"}}"#,
+    )
+    .unwrap();
+    state.config = crate::config::ConfigHandle::load(
+        &state.paths.clone(),
+        crate::config::EnvOverrides::default(),
+    );
+    with_tasks(&mut state, vec![task(5944, "Recorded")]);
+    open_task_pane(&mut state, 5944);
+    assert!(
+        state.take_actions().iter().any(|action| matches!(
+            action,
+            Action::FetchTaskOptics { task_id: 5944, project } if project == "NoSuchProject-ForTests"
+        )),
+        "the pane never asked Optics"
+    );
+}
+
+fn optics_detail() -> crate::optics::TaskOptics {
+    crate::optics::TaskOptics {
+        project_sdk_key: "orbital".into(),
+        category: "Task-5944".into(),
+        category_id: 7,
+        processes: vec![
+            crate::optics::OpticsProcess {
+                id: 1,
+                name: "Refund an order".into(),
+                ..Default::default()
+            },
+            crate::optics::OpticsProcess {
+                id: 2,
+                name: "Close the month".into(),
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+fn pane_text(state: &AppState) -> String {
+    state
+        .board
+        .detail
+        .as_ref()
+        .expect("a pane to be open")
+        .rows
+        .iter()
+        .map(|row| format!("{}\n", crate::board::plain_text(row)))
+        .collect()
 }

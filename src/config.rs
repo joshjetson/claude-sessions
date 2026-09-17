@@ -77,6 +77,17 @@ impl ConfigHandle {
             .unwrap_or_default();
     }
 
+    /// A freshly read handle for the same file.
+    ///
+    /// For the long-lived closures the daemon is built from — the board and
+    /// deploy polls — which own a snapshot the user can edit out from under
+    /// them. They are built before the engine exists, so they cannot borrow its
+    /// handle, and a board filter or a deploy command edited in a dialog has to
+    /// change what the next poll asks for without a restart.
+    pub fn reloaded(&self) -> ConfigHandle {
+        ConfigHandle::load_from(&self.path, &self.home, self.env.clone())
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }

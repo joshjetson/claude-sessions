@@ -1,0 +1,109 @@
+{
+  "groups": [
+    { "name": "Dev", "path": "~/dev" }
+  ],
+
+  "defaultView": "board",
+
+  "odoo": {
+    "url": "https://odoo.example.com",
+    "db": "REPLACE_WITH_DB",
+    "user": "you@example.com",
+    "password": "REPLACE_ME"
+  },
+
+  "odooProjectDirs": {
+    "Your Odoo Project": ["~/dev/your-repo"]
+  },
+
+  "board": {
+    "include": ["Your Odoo Project"],
+    "ignore": ["Some Other Project"],
+    "hideStages": ["Deployed"],
+    "hideStates": ["1_done", "1_canceled"]
+  },
+
+  "doneStage": ["Quality Assurance", "QA"],
+  "inProgressStage": "In Progress",
+
+  "gitlabHost": "git.example.com",
+  "targetBranches": {
+    "Your Odoo Project": "main"
+  },
+
+  "deploy": {
+    "projects": {
+      "Your Odoo Project": {
+        "command": "./scripts/deploy-prod.sh",
+        "cwd": "~/dev/your-repo",
+        "targetBranch": "main"
+      }
+    }
+  },
+
+  "sshHosts": {
+    "Your Odoo Project": "your-ssh-host-alias"
+  },
+
+  "optics": {
+    "api": "https://optics.example.com",
+    "token": "REPLACE_ME",
+    "projects": {
+      "Your Odoo Project": "your-optics-sdk-key"
+    }
+  },
+
+  "chat": {
+    "theme": "default",
+    "userColor": "cyan",
+    "assistantColor": "green",
+    "toolColor": "yellow",
+    "codeColor": "magenta",
+    "userLabel": "You",
+    "assistantLabel": "Claude",
+    "showTimestamps": false,
+    "toolDisplay": "show",
+    "compactMode": false,
+    "maxLinesPerMessage": 0,
+    "messageFilter": "all",
+    "searchKeyword": "",
+    "conversationWidth": 35,
+    "swapPanels": false,
+    "showSessionHeader": true
+  },
+
+  "usage": {
+    "enabled": true,
+    "intervalMinutes": 0
+  },
+
+  "alerts": {
+    "enabled": true,
+    "newTaskStages": ["Approved to Start"],
+    "stuckAfterMinutes": 15,
+    "remindEveryMinutes": 30
+  },
+
+  "sounds": {
+    "enabled": true,
+    "success": "/System/Library/Sounds/Glass.aiff",
+    "warn": "/System/Library/Sounds/Sosumi.aiff",
+    "error": "/System/Library/Sounds/Basso.aiff",
+    "info": "/System/Library/Sounds/Tink.aiff"
+  },
+
+  "terminal": {
+    "driver": "auto",
+    "tmuxSession": "claude-sessions"
+  },
+
+  "daemon": {
+    "enabled": true,
+    "autostart": true,
+    "port": 8787
+  },
+
+  "notifyPort": 8787,
+
+  "diagnostics": false
+}

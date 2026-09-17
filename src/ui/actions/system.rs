@@ -46,7 +46,9 @@ pub(super) fn purge(
     let mut closed = 0usize;
     let mut failed = 0usize;
     for entry in entries {
-        if kill_pids(&entry.target.pids, policy).is_err() {
+        // An empty pid list is not a failure: the agent is already gone and the
+        // tab it left behind is exactly what a purge is for. Node closed it.
+        if !entry.target.pids.is_empty() && kill_pids(&entry.target.pids, policy).is_err() {
             failed += 1;
             continue;
         }

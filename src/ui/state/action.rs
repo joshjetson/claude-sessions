@@ -83,6 +83,14 @@ pub enum Action {
     FetchTaskDescription {
         task_id: i64,
     },
+    /// The recorded Optics processes for a task, for the detail pane. Its own
+    /// action rather than a [`crate::odoo::FetchBoardOptions`] lookup because
+    /// it asks a different service — Optics, not Odoo — and an install can have
+    /// one without the other.
+    FetchTaskOptics {
+        task_id: i64,
+        project: String,
+    },
     /// Stage names for the sessions a purge is about to judge.
     FetchTaskStages {
         task_ids: Vec<i64>,

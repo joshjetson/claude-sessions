@@ -155,7 +155,7 @@ impl Archive<'_> {
         task_id: i64,
         refs: &mut TaskRefCache,
     ) -> Option<TaskSessionFile> {
-        if let Some(indexed) = self.indexed_session(task_id) {
+        if let Some(indexed) = self.indexed_session(task_id, refs) {
             return Some(indexed);
         }
         let Ok(dirs) = fs::read_dir(&self.paths.projects_dir) else {
@@ -178,16 +178,27 @@ impl Archive<'_> {
         Some(found)
     }
 
-    /// The indexed answer, or `None` when there is no row or its file is gone.
-    fn indexed_session(&self, task_id: i64) -> Option<TaskSessionFile> {
+    /// The indexed answer, or `None` when there is no row, its file is gone, or
+    /// the transcript it names turns out to be another task's.
+    ///
+    /// That last check is the one Node made on every candidate
+    /// (`archive.js:139`) and the index would otherwise skip. A row is written
+    /// the moment a task is linked to a session, which can be before the
+    /// transcript's opening prompt has been flushed — so a row can end up
+    /// naming a file that later proves to belong to a sibling task worked in
+    /// the same folder. Trusting it would copy that transcript into this task's
+    /// archive directory. The head read is cached per file, so the fast path
+    /// stays one SELECT plus a cache hit.
+    fn indexed_session(&self, task_id: i64, refs: &mut TaskRefCache) -> Option<TaskSessionFile> {
         let row: TaskSession = self.db.task_session(task_id)?;
         if row.session_file.is_empty() {
             return None;
         }
-        Some(TaskSessionFile {
-            file: stat_session_file(Path::new(&row.session_file))?,
-            cwd: row.cwd,
-        })
+        let file = stat_session_file(Path::new(&row.session_file))?;
+        if self.belongs_to_other_task(&file.path, task_id, refs) {
+            return None;
+        }
+        Some(TaskSessionFile { file, cwd: row.cwd })
     }
 
     /// Points the index at a transcript. Called wherever a resolution is

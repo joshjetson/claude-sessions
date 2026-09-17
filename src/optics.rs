@@ -43,11 +43,8 @@ pub struct HttpGet {
 
 impl HttpGet {
     pub fn new(timeout: Duration) -> Self {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(timeout))
-            .build();
         HttpGet {
-            agent: config.into(),
+            agent: crate::http::agent(timeout, false),
         }
     }
 }

@@ -243,8 +243,16 @@ fn run_task_command(state: &mut AppState, command: TaskCommand) {
             )));
             state.dirty = true;
         }
+        TaskAction::DaemonLogs => {
+            state.dialog = Some(Dialog::DaemonLogs(crate::ui::dialogs::DaemonLogs::open(
+                &state.paths.auto_dev_runs_dir,
+                task.id,
+                &task.tags,
+            )));
+            state.dirty = true;
+        }
         // Handled inside the menu itself.
-        TaskAction::Start(_) | TaskAction::Later(_) | TaskAction::Cancel => {}
+        TaskAction::Start(_) | TaskAction::Cancel => {}
     }
 }
 

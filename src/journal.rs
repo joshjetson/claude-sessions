@@ -102,9 +102,20 @@ pub fn discover_repos(paths: &Paths, config: &ConfigHandle) -> Vec<PathBuf> {
 }
 
 fn expand(paths: &Paths, dir: &str) -> PathBuf {
-    match dir.strip_prefix('~') {
+    let expanded = match dir.strip_prefix('~') {
         Some(rest) => paths.home.join(rest.trim_start_matches('/')),
         None => PathBuf::from(dir),
+    };
+    // Absolutised the way Node's `resolve()` did: a relative `odooProjectDirs`
+    // entry otherwise reaches the page as a relative path, which neither
+    // deduplicates against its absolute spelling nor pastes into a shell that
+    // is somewhere else.
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(&expanded))
+            .unwrap_or(expanded)
     }
 }
 

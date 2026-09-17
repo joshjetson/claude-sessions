@@ -56,9 +56,18 @@ pub fn split(area: Rect, conversation_pct: u16, swap: bool) -> Layout {
     };
 
     let pct = conversation_pct.clamp(10, 80) as u32;
-    let mut detail_w = ((area.width as u32 * pct).div_ceil(100)) as u16;
-    let ceiling = area.width.saturating_sub(MIN_PANE_COLS);
-    detail_w = detail_w.clamp(MIN_PANE_COLS.min(area.width), ceiling.max(1));
+    // Rounded, not ceilinged: Node's `Math.round(cols * pct / 100)`
+    // (`App.js:166`), so the same percentage gives the same column on both.
+    let mut detail_w = ((area.width as u32 * pct + 50) / 100) as u16;
+    // Floor then ceiling, in that order and never as a `clamp` — below about 24
+    // columns the floor is above the ceiling, and `clamp` panics when it is.
+    // Node's paired `Math.max`/`Math.min` simply degraded, and a dashboard that
+    // panics because a window got dragged narrow is worse than a cramped one.
+    detail_w = detail_w
+        .max(MIN_PANE_COLS)
+        .min(area.width.saturating_sub(MIN_PANE_COLS))
+        .max(1)
+        .min(area.width);
     let list_w = area.width.saturating_sub(detail_w);
 
     let (list_x, detail_x) = if swap {

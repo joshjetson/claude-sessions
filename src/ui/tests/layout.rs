@@ -165,6 +165,35 @@ fn split_never_collapses_a_pane_on_a_narrow_terminal() {
     assert!(layout.list.width >= MIN_PANE_COLS);
 }
 
+/// Widths between about 2 and 23 put the minimum above the maximum. That used
+/// to reach `u16::clamp`, which panics when it does — so dragging a window
+/// narrow took the whole dashboard down.
+#[test]
+fn a_terminal_too_narrow_for_two_panes_degrades_instead_of_panicking() {
+    for width in 0..=40u16 {
+        let layout = split(Rect::new(0, 0, width, 20), 25, false);
+        assert_eq!(
+            layout.list.width + layout.detail.width,
+            width,
+            "the panes must tile the width exactly (width {width})"
+        );
+        if width >= 2 * MIN_PANE_COLS {
+            assert!(layout.detail.width >= MIN_PANE_COLS, "width {width}");
+            assert!(layout.list.width >= MIN_PANE_COLS, "width {width}");
+        }
+    }
+}
+
+/// Node rounded (`Math.round`); ceilinging gave a column more than the Node
+/// dashboard for the same percentage on most widths.
+#[test]
+fn the_split_rounds_the_percentage_the_way_the_original_did() {
+    for (width, pct, expected) in [(100u16, 25u16, 25u16), (101, 25, 25), (80, 35, 28)] {
+        let layout = split(Rect::new(0, 0, width, 20), pct, false);
+        assert_eq!(layout.detail.width, expected, "{width} cols at {pct}%");
+    }
+}
+
 #[test]
 fn keep_visible_scrolls_only_as_far_as_it_must() {
     assert_eq!(keep_visible(0, 5, 10, 40), 0, "selection above the window");

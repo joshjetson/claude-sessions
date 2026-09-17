@@ -17,6 +17,7 @@ pub mod db;
 pub mod deploy;
 pub mod diagnostics;
 pub mod gitlab;
+pub mod http;
 pub mod journal;
 pub mod journal_html;
 pub mod odoo;

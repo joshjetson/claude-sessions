@@ -40,7 +40,7 @@ pub use launch::{
     all_discovered_dirs, gate_start, guess_dir_for_project, prompt_context, resolve_task_dir,
     working_stage_move, DirChoice, Gate, LaunchKind, RacingSession,
 };
-pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate};
+pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate, DetailAnswers};
 pub use spec::{short, LaunchSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec};
 pub use start::{start, task_url, StartRequest};
 pub use view::{label, snapshot, window, BoardRow, BoardSnapshot, BoardWindow};
@@ -83,8 +83,14 @@ pub fn apply_result(state: &mut AppState, result: ActionResult) {
                     return;
                 }
             }
-            if let crate::ui::actions::BoardData::TaskDescription { task_id, detail } = *data {
-                detail::apply_description(state, task_id, detail.as_ref());
+            match *data {
+                crate::ui::actions::BoardData::TaskDescription { task_id, detail } => {
+                    detail::apply_description(state, task_id, detail.as_ref());
+                }
+                crate::ui::actions::BoardData::TaskOptics { task_id, optics } => {
+                    detail::apply_optics(state, task_id, optics);
+                }
+                _ => {}
             }
         }
         ActionResult::Deploy(update) => state.apply_deploy(*update),
@@ -98,16 +104,10 @@ pub fn apply_result(state: &mut AppState, result: ActionResult) {
 
 /// The board query for the current filter and config, built where both live.
 pub fn fetch_options(state: &AppState) -> FetchBoardOptions {
-    let projects = state.config.board_project_filter();
-    let hide = state.config.board_hide_filter();
-    FetchBoardOptions {
-        mine_only: state.board.filter == crate::daemon::BoardFilter::Mine,
-        include: projects.include,
-        ignore: projects.ignore,
-        hide_stages: hide.hide_stages,
-        hide_states: hide.hide_states,
-        ..FetchBoardOptions::default()
-    }
+    FetchBoardOptions::for_config(
+        &state.config,
+        state.board.filter == crate::daemon::BoardFilter::Mine,
+    )
 }
 
 /// Open a dialog, replacing whatever was there.

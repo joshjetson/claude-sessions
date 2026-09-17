@@ -119,7 +119,16 @@ pub fn build_board_tree<'a>(board: &'a Board, expanded: &HashSet<String>) -> Vec
 
         let mut stages: Vec<_> = project.stages.iter().collect();
         stages.sort_by(|(a_name, a), (b_name, b)| {
-            a.sequence.cmp(&b.sequence).then_with(|| a_name.cmp(b_name))
+            // Case-insensitive on the tie-break, because Node compared with
+            // `localeCompare` (`board.js:37`): byte order puts every
+            // capitalised stage ahead of every lowercase one, so two stages
+            // sharing a sequence came out in the opposite order.
+            a.sequence.cmp(&b.sequence).then_with(|| {
+                a_name
+                    .to_lowercase()
+                    .cmp(&b_name.to_lowercase())
+                    .then_with(|| a_name.cmp(b_name))
+            })
         });
 
         for (stage_name, stage) in stages {

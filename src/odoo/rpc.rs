@@ -90,14 +90,10 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new(timeout: Duration) -> Self {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(timeout))
-            // Odoo puts the useful error in the body of a non-2xx response, so
-            // the status must not short-circuit reading it.
-            .http_status_as_error(false)
-            .build();
         HttpTransport {
-            agent: config.into(),
+            // `false`: Odoo puts the useful error in the body of a non-2xx
+            // response, so the status must not short-circuit reading it.
+            agent: crate::http::agent(timeout, false),
         }
     }
 }

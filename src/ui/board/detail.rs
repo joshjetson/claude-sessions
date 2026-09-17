@@ -67,6 +67,36 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         ));
     }
 
+    // The auto-dev daemon's own state, when it is the one working this task:
+    // which stage of its pipeline the tags say it reached, every tag it has
+    // collected, and whether there are run logs to read. Ported from
+    // `controller.js:64-71`.
+    if let Some(auto) = crate::autodev::auto_dev_state(state.tags) {
+        rows.push(blank());
+        rows.push(line(
+            format!("🤖 Auto-dev-daemon: {}", auto.label),
+            Role::from_color(auto.color),
+        ));
+        let trail = crate::autodev::auto_dev_trail(state.tags)
+            .iter()
+            .map(|entry| entry.tag)
+            .collect::<Vec<_>>()
+            .join("  ·  ");
+        if !trail.is_empty() {
+            rows.push(line(format!("tags: {trail}"), Role::Dim));
+        }
+        if state.run_logs > 0 {
+            let plural = if state.run_logs == 1 { "" } else { "s" };
+            rows.push(line(
+                format!(
+                    "{} run log{plural} → press D for daemon logs",
+                    state.run_logs
+                ),
+                Role::Dim,
+            ));
+        }
+    }
+
     // The readiness gate stopped this task: show the questions it wants
     // answered, which is the whole point of the gate existing.
     if !state.questions.is_empty() {
@@ -84,15 +114,34 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         ));
     }
 
-    // Recorded UI coverage, from the map the board fetch already filled. The
-    // full process list is [`crate::optics::OpticsClient::task_optics`]; the
-    // pane shows the count, which is the part that changes a decision.
-    if let Some(count) = state.optics.filter(|count| *count > 0) {
-        let plural = if count == 1 { "" } else { "es" };
-        rows.push(line(
-            format!("🔬 {count} recorded Optics process{plural} for this task"),
-            Role::Info,
-        ));
+    // Recorded UI coverage. The count rides the board fetch and is there the
+    // instant the pane opens; the process list is its own lookup and replaces
+    // the count when it lands, because the names of the recorded workflows are
+    // what an agent about to start the task actually reads.
+    match state.optics_detail {
+        Some(optics) => {
+            let count = optics.count();
+            let plural = if count == 1 { "" } else { "es" };
+            rows.push(line(
+                format!(
+                    "🔬 Optics: {count} recorded process{plural} under {} [{}]",
+                    optics.category, optics.project_sdk_key
+                ),
+                Role::Info,
+            ));
+            for process in &optics.processes {
+                rows.push(line(format!("   • {}", process.name), Role::Info));
+            }
+        }
+        None => {
+            if let Some(count) = state.optics.filter(|count| *count > 0) {
+                let plural = if count == 1 { "" } else { "es" };
+                rows.push(line(
+                    format!("🔬 {count} recorded Optics process{plural} for this task"),
+                    Role::Info,
+                ));
+            }
+        }
     }
 
     if task.open_blocker_count > 0 {
@@ -116,8 +165,18 @@ pub struct TaskState<'a> {
     pub running: bool,
     pub archived: bool,
     pub questions: &'a [String],
-    /// Recorded Optics processes, when this install has Optics configured.
+    /// How many Optics processes are recorded, from the map the board fetch
+    /// already filled. Free, and enough for a badge.
     pub optics: Option<usize>,
+    /// The task's Odoo tags, which are where the auto-dev daemon writes its
+    /// progress.
+    pub tags: &'a [String],
+    /// How many run logs that daemon has left for this task.
+    pub run_logs: usize,
+    /// The recorded processes themselves, once their own lookup has landed.
+    /// Named individually, because "there are four recordings" and "here are
+    /// the four workflows someone recorded" are different answers.
+    pub optics_detail: Option<&'a crate::optics::TaskOptics>,
 }
 
 /// What the board knows about a task right now.
@@ -136,7 +195,25 @@ pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
             .get(&task_id)
             .map(Vec::as_slice)
             .unwrap_or_default(),
+        tags: state
+            .board
+            .task(task_id)
+            .map(|task| task.tags.as_slice())
+            .unwrap_or_default(),
+        run_logs: state
+            .board
+            .task(task_id)
+            .map(|task| {
+                crate::autodev::list_run_logs(&state.paths.auto_dev_runs_dir, task.id).len()
+            })
+            .unwrap_or_default(),
         optics: state.board.optics_tasks.get(&task_id).copied(),
+        optics_detail: state
+            .board
+            .detail_answers
+            .optics
+            .as_ref()
+            .filter(|_| state.board.detail_answers.task_id == Some(task_id)),
     }
 }
 
@@ -144,25 +221,74 @@ pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
 /// the task that asked for it. A stale answer is dropped rather than painted
 /// over another row's detail.
 pub fn apply_description(state: &mut AppState, task_id: i64, detail: Option<&TaskDetail>) {
-    if state.board.detail.as_ref().map(|pane| pane.task_id) != Some(Some(task_id)) {
+    if !is_open_on(state, task_id) {
         return;
     }
+    state.board.detail_answers.description = Some(detail.cloned());
+    recompose(state, task_id);
+}
+
+/// The same for the Optics process list, which is its own round trip and can
+/// land either side of the description.
+pub fn apply_optics(state: &mut AppState, task_id: i64, optics: Option<crate::optics::TaskOptics>) {
+    if !is_open_on(state, task_id) {
+        return;
+    }
+    state.board.detail_answers.optics = optics;
+    recompose(state, task_id);
+}
+
+fn is_open_on(state: &AppState, task_id: i64) -> bool {
+    state.board.detail.as_ref().map(|pane| pane.task_id) == Some(Some(task_id))
+        && state.board.detail_answers.task_id == Some(task_id)
+}
+
+/// Repaint the pane from everything that has arrived so far.
+fn recompose(state: &mut AppState, task_id: i64) {
     let Some(task) = state.board.task(task_id).cloned() else {
         return;
     };
-    state.board.detail = Some(with_description(&task, state_of(state, task_id), detail));
+    let pane = {
+        let description = state
+            .board
+            .detail_answers
+            .description
+            .as_ref()
+            .map(Option::as_ref);
+        render(&task, state_of(state, task_id), description)
+    };
+    state.board.detail = Some(pane);
     state.dirty = true;
 }
 
-/// The header plus a placeholder, shown the instant `→` is pressed.
-pub fn loading(task: &Task, state: TaskState<'_>) -> BoardDetail {
+/// The pane as it stands. `description` is `None` while the Odoo round trip is
+/// still out, `Some(None)` when it came back with nothing to show.
+pub fn render(
+    task: &Task,
+    state: TaskState<'_>,
+    description: Option<Option<&TaskDetail>>,
+) -> BoardDetail {
     let mut rows = task_header(task, state);
-    rows.push(line("loading description…", Role::Dim));
+    match description {
+        None => rows.push(line("loading description…", Role::Dim)),
+        Some(detail) => match detail.map(|d| html_to_text(&d.description)) {
+            Some(text) if !text.is_empty() => {
+                rows.extend(text.lines().map(|l| line(l.to_string(), Role::Plain)));
+            }
+            Some(_) => rows.push(line("(no description)", Role::Dim)),
+            None => rows.push(line("(description unavailable)", Role::Dim)),
+        },
+    }
     BoardDetail {
         label: TASK_LABEL.to_string(),
         rows,
         task_id: Some(task.id),
     }
+}
+
+/// The header plus a placeholder, shown the instant `→` is pressed.
+pub fn loading(task: &Task, state: TaskState<'_>) -> BoardDetail {
+    render(task, state, None)
 }
 
 /// The same header with the Odoo description folded in.
@@ -171,19 +297,7 @@ pub fn with_description(
     state: TaskState<'_>,
     detail: Option<&TaskDetail>,
 ) -> BoardDetail {
-    let mut rows = task_header(task, state);
-    match detail.map(|d| html_to_text(&d.description)) {
-        Some(text) if !text.is_empty() => {
-            rows.extend(text.lines().map(|l| line(l.to_string(), Role::Plain)));
-        }
-        Some(_) => rows.push(line("(no description)", Role::Dim)),
-        None => rows.push(line("(description unavailable)", Role::Dim)),
-    }
-    BoardDetail {
-        label: TASK_LABEL.to_string(),
-        rows,
-        task_id: Some(task.id),
-    }
+    render(task, state, Some(detail))
 }
 
 /// A notification, and what can be done about it.

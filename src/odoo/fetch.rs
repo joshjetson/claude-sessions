@@ -40,6 +40,27 @@ impl Default for FetchBoardOptions {
     }
 }
 
+impl FetchBoardOptions {
+    /// The query this install is configured for.
+    ///
+    /// Written once because two callers ask Odoo the same question: the
+    /// dashboard when it fetches the board itself, and the daemon's 45-second
+    /// poll. A board whose shape depended on which of them fetched it would be
+    /// a filter bug nobody could reproduce.
+    pub fn for_config(config: &crate::config::ConfigHandle, mine_only: bool) -> Self {
+        let projects = config.board_project_filter();
+        let hide = config.board_hide_filter();
+        FetchBoardOptions {
+            mine_only,
+            include: projects.include,
+            ignore: projects.ignore,
+            hide_stages: hide.hide_stages,
+            hide_states: hide.hide_states,
+            ..FetchBoardOptions::default()
+        }
+    }
+}
+
 impl OdooClient {
     // --- the board ----------------------------------------------------------
 

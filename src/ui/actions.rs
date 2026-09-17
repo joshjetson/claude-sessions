@@ -87,6 +87,13 @@ pub enum BoardData {
         task_id: i64,
         detail: Option<TaskDetail>,
     },
+    /// The recorded Optics processes for a task. `None` covers every reason
+    /// there is nothing to show — not configured, project not on Optics, no
+    /// recordings, the lookup failed — because the pane treats them alike.
+    TaskOptics {
+        task_id: i64,
+        optics: Option<crate::optics::TaskOptics>,
+    },
     /// Stage names for a set of tasks — what the purge dialog needs for the
     /// sessions the board's current filter does not cover.
     TaskStages(std::collections::BTreeMap<i64, String>),
@@ -280,6 +287,19 @@ fn run(
                 crate::usage::FETCH_TIMEOUT,
             );
             let _ = results.send(ActionResult::Usage(Box::new(snapshot)));
+        }
+        Action::FetchTaskOptics { task_id, project } => {
+            // Every failure resolves to "nothing recorded": coverage is an
+            // annotation, and a pane that refuses to paint because Optics is
+            // down would be worse than one that says nothing.
+            let optics = services
+                .optics
+                .as_ref()
+                .and_then(|client| client.task_optics(task_id, &project).ok().flatten());
+            let _ = results.send(ActionResult::Data(Box::new(BoardData::TaskOptics {
+                task_id,
+                optics,
+            })));
         }
         Action::RefreshQaState { task_id } => {
             services

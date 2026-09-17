@@ -14,7 +14,7 @@ use super::{state_label, DEPLOY_STAGE, FINISHED_STATES};
 
 /// What the deploy query asks for. The board's own `TASK_FIELDS` plus the state
 /// and GitLab columns — the Deploy tab is the only view that needs either.
-pub const DEPLOY_TASK_FIELDS: [&str; 11] = [
+pub const DEPLOY_TASK_FIELDS: [&str; 12] = [
     "id",
     "name",
     "state",
@@ -26,6 +26,9 @@ pub const DEPLOY_TASK_FIELDS: [&str; 11] = [
     "gitlab_merge_request_url",
     "gitlab_merge_request_state",
     "gitlab_merge_request_iid",
+    // Not rendered, but it is what the query orders by, and Odoo is happier
+    // returning a column it was asked to sort on. Node asked for it too.
+    "write_date",
 ];
 
 /// One configured project, as the tab needs it: the name to match in Odoo and

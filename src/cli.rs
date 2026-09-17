@@ -25,6 +25,8 @@ mod journal;
 pub(crate) mod markers;
 mod pipeline;
 mod signals;
+#[cfg(test)]
+mod tests;
 
 /// The daemon's engine, with the outside world wired in where it is
 /// configured.
@@ -46,11 +48,39 @@ fn daemon_options(paths: Paths, config: ConfigHandle) -> EngineOptions {
         gitlab.clone(),
         options.config.clone(),
     ));
+
+    // The board poll. Without this the Board tab of a dashboard talking to a
+    // daemon stays empty: the daemon owns the 45-second poll, the dashboard
+    // only renders what it is sent.
+    let board_config = options.config.clone();
+    let board_odoo = Arc::clone(&odoo);
+    options.fetch_board = Some(Box::new(move |filter| {
+        // Re-read rather than reuse the snapshot: the project filter and the
+        // hidden stages are edited in dialogs, and `r` has to change what the
+        // next poll asks for.
+        let options = crate::odoo::FetchBoardOptions::for_config(
+            &board_config.reloaded(),
+            filter == crate::daemon::BoardFilter::Mine,
+        );
+        board_odoo
+            .fetch_board(&options)
+            .map_err(|error| error.to_string())
+    }));
+
+    // New-assignment alerts. Same reason: the daemon is what is still running
+    // when a task lands in your queue and no dashboard is open.
+    let assigned_odoo = Arc::clone(&odoo);
+    options.fetch_assigned = Some(Box::new(move |stages| {
+        assigned_odoo
+            .fetch_assigned_in_stages(stages)
+            .map_err(|error| error.to_string())
+    }));
+
     // Cloned into the hook rather than borrowed: the engine outlives this
     // function, and a deploy fetch happens on a worker thread.
     let specs_config = options.config.clone();
     options.fetch_deploy = Some(Box::new(move || {
-        let specs = crate::deploy::deploy_specs(&specs_config);
+        let specs = crate::deploy::deploy_specs(&specs_config.reloaded());
         let mut board = crate::deploy::fetch_deploy_board(&odoo, &specs)?;
         crate::deploy::enrich_with_live_mrs(&gitlab, &mut board);
         Ok(board)

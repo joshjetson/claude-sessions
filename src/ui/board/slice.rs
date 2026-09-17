@@ -70,6 +70,22 @@ pub struct BoardDetail {
     pub task_id: Option<i64>,
 }
 
+/// The answers the open task pane is waiting on.
+///
+/// Both the Odoo description and the Optics process list are their own round
+/// trip and land in either order, so each is kept and the pane recomposed from
+/// whatever has arrived — otherwise whichever answered second would paint over
+/// the first.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DetailAnswers {
+    /// Which task these are about. An answer for anything else is stale.
+    pub task_id: Option<i64>,
+    /// `None` is "still out"; `Some(None)` is "Odoo answered, and there is no
+    /// description to show".
+    pub description: Option<Option<crate::odoo::TaskDetail>>,
+    pub optics: Option<crate::optics::TaskOptics>,
+}
+
 /// Everything the board tab draws from.
 #[derive(Debug, Default)]
 pub struct BoardSlice {
@@ -89,6 +105,9 @@ pub struct BoardSlice {
     /// Task id -> recorded Optics processes, behind the 🔬N badge.
     pub optics_tasks: HashMap<i64, usize>,
     pub detail: Option<BoardDetail>,
+    /// What the open task pane has been told so far. Reset when the pane opens
+    /// on another row.
+    pub detail_answers: DetailAnswers,
     /// The blink tick. Unread notifications flash on it.
     pub blink_on: bool,
     /// Derived when an update lands, because the row formatter wants a plain

@@ -212,9 +212,27 @@ fn on_expand(state: &mut AppState, snapshot: &BoardSnapshot, expand: bool) {
 }
 
 fn show_task(state: &mut AppState, task: &Task) {
+    // Whatever the last task's pane was told is not about this one.
+    state.board.detail_answers = crate::ui::board::DetailAnswers {
+        task_id: Some(task.id),
+        ..Default::default()
+    };
     state.board.detail = Some(detail::loading(task, detail::state_of(state, task.id)));
+    // A new pane starts at its top, unstuck — Node's `setDetail` did the same
+    // (`controller.js:24-25`), and the scroll offset is shared with whatever the
+    // pane showed before.
+    state.conv.scroll_top = 0;
+    state.conv.stick = false;
     state.flash = None;
     state.enqueue(Action::FetchTaskDescription { task_id: task.id });
+    // Only when this install has Optics at all: the lookup is a round trip, and
+    // the answer for an unconfigured install is always "nothing".
+    if state.config.optics_api().is_some() && state.config.optics_token().is_some() {
+        state.enqueue(Action::FetchTaskOptics {
+            task_id: task.id,
+            project: task.project_name.clone(),
+        });
+    }
     state.dirty = true;
 }
 
@@ -225,6 +243,8 @@ fn show_notification(state: &mut AppState, id: &str) {
     let link = notif.task_id.and_then(|task| state.board.link(task));
     let has_session = controller::resolve_notif_session(state.sessions(), &notif, link).is_some();
     state.board.detail = Some(detail::notification(&notif, has_session));
+    state.conv.scroll_top = 0;
+    state.conv.stick = false;
     state.flash = None;
     state.dirty = true;
 }

@@ -32,14 +32,18 @@ pub struct Config {
     /// that is what the Node app's loader guaranteed downstream.
     #[serde(deserialize_with = "lenient")]
     pub groups: Vec<Group>,
+    #[serde(deserialize_with = "lenient")]
     pub chat: ChatConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub odoo: Option<OdooBlock>,
     /// Odoo project name -> one or more local repo paths.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "lenient")]
     pub odoo_project_dirs: BTreeMap<String, OneOrMany>,
     /// Odoo project name -> the branch its merge requests target.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "lenient")]
     pub target_branches: BTreeMap<String, String>,
     /// Host `glab` talks to. No default: this is a public build, and the only
     /// correct value is the one the person using it configures.
@@ -48,8 +52,10 @@ pub struct Config {
     /// Odoo project name -> ssh alias, for projects whose name does not resemble
     /// their host.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "lenient")]
     pub ssh_hosts: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub usage: Option<UsageBlock>,
     /// Memory sampling into `runtime/memory.log`. Off unless asked for — it is
     /// a diagnostic, not a feature. See [`crate::diagnostics`].
@@ -73,20 +79,28 @@ pub struct Config {
     pub in_progress_stage: Option<OneOrMany>,
     /// Session id -> the name you gave that session.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "lenient")]
     pub nicknames: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub board: Option<BoardBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub sounds: Option<SoundsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub deploy: Option<DeployBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub optics: Option<OpticsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub alerts: Option<AlertsBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub terminal: Option<TerminalBlock>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
     pub daemon: Option<DaemonBlock>,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -188,6 +202,7 @@ pub struct UsageBlock {
     pub enabled: Option<bool>,
     /// 0 (the default) means "only when asked".
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "de_number")]
     pub interval_minutes: Option<serde_json::Number>,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -308,9 +323,11 @@ pub struct AlertsBlock {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub new_task_stages: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "de_number")]
     pub stuck_after_minutes: Option<serde_json::Number>,
     /// 0 means "flag it once and stop".
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "de_number")]
     pub remind_every_minutes: Option<serde_json::Number>,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -394,6 +411,18 @@ fn as_f64(value: &Value) -> Option<f64> {
         Value::String(s) => s.trim().parse::<f64>().ok(),
         _ => None,
     }
+}
+
+/// A minute count. `"30"` is a typo, not a reason to drop the block it is in —
+/// Node read every number through `Number(x)`, which took both spellings.
+fn de_number<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Number>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(match &value {
+        Value::Number(number) => Some(number.clone()),
+        _ => as_f64(&value).and_then(serde_json::Number::from_f64),
+    })
 }
 
 fn de_port<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Error> {

@@ -29,11 +29,47 @@ fn an_indexed_task_is_found_without_reading_a_single_transcript() {
     let found = t.find_anywhere(6688).expect("the indexed row was not used");
     assert_eq!(found.path(), indexed.path());
     assert_eq!(found.cwd, "/repo/portal");
+    // One head: the row's own file, checked before it is trusted. The decoys —
+    // which the scan would have had to read — are never opened.
     assert_eq!(
         t.refs.reads(),
-        before,
-        "the fast path read a transcript head, so it scanned"
+        before + 1,
+        "the fast path read more than the one head it verifies, so it scanned"
     );
+}
+
+/// A row can be written the moment a task is linked, which can be before the
+/// session it names has written its opening prompt. If that transcript turns
+/// out to be a sibling task's, the row is wrong — and trusting it would copy
+/// another task's conversation into this task's archive. Node re-read the head
+/// of every candidate (`archive.js:139`); the index has to do the same for the
+/// one candidate it returns.
+#[test]
+fn an_index_row_naming_another_tasks_transcript_is_refused() {
+    let mut t = open();
+    let wrong = t.transcript(Some(4033), "/repo/portal");
+    let right = t.transcript(Some(6688), "/repo/portal");
+    index_row(&t, 6688, wrong.path(), "/repo/portal");
+
+    let found = t.find_anywhere(6688).expect("the scan did not run");
+    assert_eq!(
+        found.path(),
+        right.path(),
+        "the fast path handed back another task's transcript"
+    );
+}
+
+/// A transcript with no task reference at all stays valid: sessions started by
+/// hand and merge-conflict sessions carry none, and the index is how they are
+/// found again.
+#[test]
+fn an_index_row_naming_an_unattributed_transcript_is_still_used() {
+    let mut t = open();
+    let plain = t.transcript(None, "/repo/portal");
+    index_row(&t, 6688, plain.path(), "/repo/portal");
+
+    let found = t.find_anywhere(6688).expect("the row was refused");
+    assert_eq!(found.path(), plain.path());
 }
 
 #[test]

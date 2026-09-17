@@ -29,6 +29,13 @@ pub struct MrRef {
 }
 
 /// Which merge requests the "my open MRs" listing asks for.
+///
+/// Only [`MrScope::CreatedByMe`] has a key behind it, deliberately: the Node
+/// dialog this ports (`src/gitlab.js:99`, `dialogs.js` openMRs) offered exactly
+/// one scope, and 1.0 is a parity release — inventing an "assigned to me" view
+/// the original never had would be new surface, not a port. The variant stays
+/// because `glab` takes the scope as a parameter and the listing query is
+/// written once; wiring a key to it is a post-1.0 decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MrScope {
     #[default]
@@ -45,8 +52,15 @@ impl MrScope {
     }
 }
 
-/// Merge flags. Both default to off, matching `glab`'s own defaults and the
-/// Node wrapper's.
+/// Merge flags.
+///
+/// Both default to off, matching `glab`'s own defaults and the Node wrapper's
+/// (`src/gitlab.js:90`). Node took the same two options and **every** call site
+/// passed neither (`deployactions.js:148,174`), so there was no config key and
+/// no keystroke behind them; the port matches that exactly rather than adding a
+/// surface the original never had. They stay plumbed because the argv builder
+/// is what is tested, and a squash-merge policy is a plausible post-1.0 config
+/// key that should not require re-threading the call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MergeOptions {
     pub squash: bool,
