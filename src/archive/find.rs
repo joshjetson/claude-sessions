@@ -7,12 +7,11 @@
 //! question of a transcript's head that the searches do, from the other end.
 
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::db::TaskSession;
 use crate::scan::session_files_in;
-use crate::transcript::TaskRefCache;
+use crate::transcript::{session_cwd, TaskRefCache};
 use crate::types::SessionFile;
 use crate::util::iso_now;
 
@@ -27,10 +26,6 @@ const ANCESTOR_DEPTH: usize = 4;
 /// How many transcripts the global search reads before it gives up. Newest
 /// first, so a session from the last few days is found long before this.
 pub const ANYWHERE_SCAN_LIMIT: usize = 400;
-
-/// Head bytes read when asking a transcript which directory it ran in. The
-/// first entry carries it; the rest of the file is irrelevant here.
-const CWD_HEAD_BYTES: u64 = 64 * 1024;
 
 /// A transcript found for a task, with the working directory it belongs to.
 ///
@@ -256,24 +251,4 @@ fn stat_session_file(path: &Path) -> Option<SessionFile> {
         size: meta.len(),
         birthtime: meta.created().ok(),
     })
-}
-
-/// The working directory a transcript reports, read from the first entry in its
-/// head that carries one. The project directory name is `/`-to-`-` encoded and
-/// cannot be decoded back into a path, so the file itself is the only source.
-fn session_cwd(path: &Path) -> Option<String> {
-    let file = fs::File::open(path).ok()?;
-    let mut head = Vec::new();
-    file.take(CWD_HEAD_BYTES).read_to_end(&mut head).ok()?;
-    // A head cut mid-line leaves one unparseable line at the end; every entry is
-    // its own JSON object, so skipping it costs nothing.
-    String::from_utf8_lossy(&head)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find_map(
-            |entry| match entry.get("cwd").and_then(|cwd| cwd.as_str()) {
-                Some(cwd) if !cwd.is_empty() => Some(cwd.to_string()),
-                _ => None,
-            },
-        )
 }

@@ -76,10 +76,11 @@ fn placeholder_lines(text: &[&str]) -> Vec<Line<'static>> {
 fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // The block's inner height is the content budget; borders are two rows.
     let content_h = area.height.saturating_sub(2) as usize;
+    let groups = state.config.groups();
     let items: Vec<TreeItem<'_>> = build_grouped_tree(
         &state.by_project,
         &state.expanded_projects,
-        state.config.groups(),
+        &groups,
         &state.discovered_dirs,
     );
 

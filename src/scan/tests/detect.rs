@@ -94,6 +94,54 @@ fn leaves_real_working_directories_alone() {
     assert!(!is_daemon_scratch_cwd(""));
 }
 
+/// The rule with its platform facts passed in, so the Windows shape is checked
+/// on every platform rather than only on the one that has it.
+mod scratch {
+    use crate::scan::detect::scratch_cwd;
+
+    const UNIX: (Option<&str>, &[char]) = (Some("/tmp"), &['/']);
+    const WINDOWS: (Option<&str>, &[char]) = (None, &['/', '\\']);
+
+    fn unix(cwd: &str) -> bool {
+        scratch_cwd(cwd, UNIX.0, UNIX.1)
+    }
+
+    fn windows(cwd: &str) -> bool {
+        scratch_cwd(cwd, WINDOWS.0, WINDOWS.1)
+    }
+
+    #[test]
+    fn the_unix_rule_is_the_one_node_shipped() {
+        // `/\/(private\/)?tmp\/cc-daemon-\d+\//`, unchanged.
+        assert!(unix("/private/tmp/cc-daemon-501/f733b519/spare"));
+        assert!(unix("/tmp/cc-daemon-501/abc/spare"));
+        assert!(!unix("/Users/k/dev/cc-daemon-notes"));
+        // Anywhere but the temp directory is somebody's checkout.
+        assert!(!unix("/Users/k/dev/cc-daemon-501/spare"));
+    }
+
+    #[test]
+    fn a_windows_worker_is_recognised_wherever_temp_points() {
+        // %TEMP% is redirected per user, per session and by every CI runner, so
+        // the segment carries the evidence rather than the path it sits under.
+        assert!(windows(
+            r"C:\Users\dev\AppData\Local\Temp\cc-daemon-7\f733b519\spare"
+        ));
+        assert!(windows(r"D:\scratch\cc-daemon-12\spare"));
+        assert!(windows("C:/Users/dev/AppData/Local/Temp/cc-daemon-7/spare"));
+    }
+
+    #[test]
+    fn a_windows_checkout_that_merely_reads_like_one_is_left_alone() {
+        assert!(!windows(r"C:\src\cc-daemon-notes\app"));
+        assert!(!windows(r"C:\src\cc-daemon-\spare"));
+        // The last segment of a path is a working directory, not a parent of
+        // one — Node required the trailing separator and so does this.
+        assert!(!windows(r"C:\Temp\cc-daemon-7"));
+        assert!(!windows(""));
+    }
+}
+
 const UUID: &str = "0198e4f0-1b3c-7a2d-9f4e-5c6b7a8d9e0f";
 
 #[test]

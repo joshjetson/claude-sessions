@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use tempfile::TempDir;
 
 use crate::paths::Paths;
-use crate::scan::Scanner;
+use crate::scan::{Discovery, Scanner};
 use crate::types::{RawSession, SessionStatus};
 
 use super::FakeProcesses;
@@ -38,7 +38,7 @@ impl Env {
     }
 
     fn scanner(&self, procs: FakeProcesses) -> Scanner<FakeProcesses> {
-        Scanner::new(procs, self.paths.clone())
+        Scanner::new(procs, self.paths.clone(), Discovery::Processes)
     }
 }
 

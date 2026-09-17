@@ -104,17 +104,44 @@ pub fn is_interactive_claude(comm: &str) -> bool {
     !has_helper_subcommand(comm)
 }
 
-/// Claude Code keeps its prewarmed workers under `/tmp/cc-daemon-<n>/`; nothing
-/// there is a session anybody started.
+/// The directory name Claude Code gives a prewarmed worker: `cc-daemon-<n>`.
+const SCRATCH_DIR: &str = "cc-daemon-";
+
+/// Where that directory lives, where the platform puts it somewhere fixed.
 ///
-/// `/\/(private\/)?tmp\/cc-daemon-\d+\//` — on macOS `/private/tmp/…` contains
-/// `/tmp/…` as a substring, so one search answers both spellings.
+/// Unix: `/tmp`, which is the whole of Node's
+/// `/\/(private\/)?tmp\/cc-daemon-\d+\//` — on macOS `/private/tmp/...` contains
+/// `/tmp/...` as a substring, so one search answers both spellings.
+///
+/// Windows: nowhere fixed. The same directory is created under whatever `%TEMP%`
+/// points at (`C:\Users\dev\AppData\Local\Temp\cc-daemon-7\` by default), and
+/// `%TEMP%` is redirected per user, per session and by every CI runner, so
+/// anchoring to a spelling would let a worker through on the machines that moved
+/// it. The segment carries the evidence on its own: nothing a person checks out
+/// is called `cc-daemon-<digits>`.
+const SCRATCH_PARENT: Option<&str> = if cfg!(windows) { None } else { Some("/tmp") };
+
+/// Claude Code keeps its prewarmed workers under a `cc-daemon-<n>` scratch
+/// directory; nothing there is a session anybody started.
 pub fn is_daemon_scratch_cwd(cwd: &str) -> bool {
-    const MARKER: &str = "/tmp/cc-daemon-";
-    for (i, _) in cwd.match_indices(MARKER) {
-        let rest = &cwd[i + MARKER.len()..];
+    scratch_cwd(cwd, SCRATCH_PARENT, crate::util::SEPARATORS)
+}
+
+/// The rule itself, with the platform's two facts passed in — the Windows shape
+/// is then a test on every platform rather than only on the one that has it.
+pub(super) fn scratch_cwd(cwd: &str, parent: Option<&str>, separators: &[char]) -> bool {
+    for (i, _) in cwd.match_indices(SCRATCH_DIR) {
+        // A whole path segment, not a prefix of a directory somebody named.
+        let before = &cwd[..i];
+        if !before.ends_with(separators) {
+            continue;
+        }
+        if parent.is_some_and(|parent| !before.trim_end_matches(separators).ends_with(parent)) {
+            continue;
+        }
+        let rest = &cwd[i + SCRATCH_DIR.len()..];
         let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-        if digits > 0 && rest[digits..].starts_with('/') {
+        if digits > 0 && rest[digits..].starts_with(separators) {
             return true;
         }
     }

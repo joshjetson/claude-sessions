@@ -1,6 +1,7 @@
 //! Grouping (`buildGroupedTree`) and row formatting (`treefmt.js`).
 
 use std::collections::{BTreeMap, HashSet};
+use std::path::PathBuf;
 
 use crate::config::Group;
 use crate::types::SessionStatus;
@@ -91,6 +92,66 @@ fn a_trailing_slash_on_a_group_path_still_matches() {
     let dirs = no_dirs();
     let items = build_grouped_tree(&sessions, &HashSet::new(), &groups, &dirs);
     assert_eq!(names(&items), vec!["sep:Work", "proj:work/alpha"]);
+}
+
+/// A config file written by hand, so the group path is read exactly as typed
+/// rather than through the dialog, which expands `~` on the way in.
+fn config_with_group(path: &str) -> (tempfile::TempDir, crate::config::ConfigHandle, PathBuf) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::Paths::for_test(dir.path());
+    let json = serde_json::json!({ "groups": [{ "name": "Dev", "path": path }] });
+    std::fs::write(&paths.config_path, json.to_string()).expect("write config");
+    let home = paths.home.clone();
+    let config = crate::config::ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
+    (dir, config, home)
+}
+
+#[test]
+fn a_hand_written_tilde_group_claims_the_sessions_under_it() {
+    // The live bug: `"groups": [{"path": "~/dev"}]` compared the literal `~/dev`
+    // against absolute working directories, matched nothing, and rendered an
+    // empty group with every session dumped into "Other sessions". Expansion
+    // belongs to the config accessor, so the tree sees an absolute path.
+    let (_dir, config, home) = config_with_group("~/dev");
+    let native = home.join("dev").join("repo").to_string_lossy().into_owned();
+    // The same directory spelled with the other separator, which is what a
+    // Windows machine writes into a transcript when the config says `~/dev`.
+    let slashed = format!("{}/dev/repo", home.display());
+
+    let dirs = no_dirs();
+    for cwd in [native, slashed] {
+        let sessions = by_project(vec![session("aaa", &cwd, SessionStatus::Idle)]);
+        let groups = config.groups();
+        let items = build_grouped_tree(&sessions, &HashSet::new(), &groups, &dirs);
+        assert_eq!(
+            names(&items).first().map(String::as_str),
+            Some("sep:Dev"),
+            "group did not claim {cwd}"
+        );
+        assert!(
+            !names(&items).iter().any(|row| row == "sep:Other sessions"),
+            "{cwd} fell through to the ungrouped list: {:?}",
+            names(&items)
+        );
+    }
+}
+
+#[test]
+fn a_group_is_matched_by_segment_not_by_prefix() {
+    // `/Users/x/work-notes` starts with `/Users/x/work`, and a plain
+    // `starts_with` claimed it for the group.
+    let sessions = by_project(vec![session(
+        "aaa",
+        "/Users/x/work-notes/alpha",
+        SessionStatus::Idle,
+    )]);
+    let groups = vec![Group::new("Work", "/Users/x/work")];
+    let dirs = no_dirs();
+    let items = build_grouped_tree(&sessions, &HashSet::new(), &groups, &dirs);
+    assert_eq!(
+        names(&items),
+        vec!["sep:Work", "sep:Other sessions", "proj:work-notes/alpha"]
+    );
 }
 
 #[test]
@@ -184,6 +245,27 @@ fn a_session_row_carries_its_status_dot_label_and_context_meter() {
     assert!(rendered.contains("idle"), "{rendered}");
     assert!(rendered.contains("72K"), "{rendered}");
     assert!(rendered.contains("(36%)"), "context meter: {rendered}");
+}
+
+#[test]
+fn a_session_with_no_process_still_renders_its_row() {
+    // The transcript-only case: everything the row shows comes from the
+    // transcript, and the columns a process would have fill are simply absent
+    // rather than blanking the line.
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.pids.clear();
+    s.tty = None;
+    s.lstart = None;
+    s.last_usage = Some(usage(72_000));
+    let item = TreeItem::Session {
+        project_name: "x/alpha",
+        session: &s,
+    };
+    let rendered = line_text(&item, &config);
+    assert!(rendered.contains("abcd"), "{rendered}");
+    assert!(rendered.contains("idle"), "{rendered}");
+    assert!(rendered.contains("72K"), "{rendered}");
 }
 
 #[test]
