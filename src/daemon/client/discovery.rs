@@ -119,8 +119,8 @@ pub fn ensure_daemon(paths: &Paths, port: u16, autostart: bool) -> Result<Daemon
 /// before a spawn and after one — and the two must not drift.
 fn foreign_daemon(port: u16, health: &Health) -> String {
     format!(
-        "Port {port} is held by {} — its sessions cannot be read here. \
-         Stop it, or give this one its own `daemon.port`.",
+        "Port {port} is held by {} — its sessions cannot be read here. Stop it with \
+         `claude-sessions daemon stop`, or give this one its own `daemon.port`.",
         health.describe()
     )
 }

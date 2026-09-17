@@ -274,7 +274,11 @@ fn daemon(out: &mut String, paths: &Paths, config: &ConfigHandle) {
             row(out, "…is", health.describe());
             if !health.is_this_implementation() {
                 row(out, "", "NOT this build — a dashboard will not mirror it");
-                row(out, "", "stop it, or give this build its own daemon.port");
+                row(
+                    out,
+                    "",
+                    "`claude-sessions daemon stop` clears the port, or set daemon.port",
+                );
             }
         }
         None => row(out, "/health", format!("no answer on :{port}")),
