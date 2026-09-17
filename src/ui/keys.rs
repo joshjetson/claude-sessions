@@ -150,11 +150,11 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
             // markdown files and the database, and the database knows about
             // days whose file was moved or deleted.
             let db = crate::db::Db::open(&state.paths);
-            state.dialog = Some(Dialog::LogViewer(LogViewer::open(
+            state.dialog = Some(Dialog::LogViewer(Box::new(LogViewer::open(
                 &state.paths,
                 Some(&db),
                 &crate::dailylog::ymd(chrono::Local::now()),
-            )));
+            ))));
             state.dirty = true;
             true
         }

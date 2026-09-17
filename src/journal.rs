@@ -103,7 +103,9 @@ pub fn discover_repos(paths: &Paths, config: &ConfigHandle) -> Vec<PathBuf> {
 
 fn expand(paths: &Paths, dir: &str) -> PathBuf {
     let expanded = match dir.strip_prefix('~') {
-        Some(rest) => paths.home.join(rest.trim_start_matches('/')),
+        Some(rest) => paths
+            .home
+            .join(rest.trim_start_matches(crate::util::SEPARATORS)),
         None => PathBuf::from(dir),
     };
     // Absolutised the way Node's `resolve()` did: a relative `odooProjectDirs`

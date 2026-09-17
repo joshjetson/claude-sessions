@@ -6,6 +6,8 @@
 
 use std::fs;
 
+use serde_json::json;
+
 use super::super::*;
 use super::{config_for, repo_with, COMPACT_FORM, FULL_FORM, RULES};
 
@@ -21,12 +23,12 @@ fn repos_are_discovered_from_config_and_widened_into_sibling_worktrees() {
     // A sibling with no docs/agent is not a journal repo.
     fs::create_dir_all(dev.join("unrelated")).unwrap();
 
+    // Built with `json!` rather than by hand: a real path can contain a
+    // backslash — every Windows one does — and pasting it into a JSON string
+    // literal writes an invalid escape, which the reader then skips in silence.
     let config = config_for(
         &paths,
-        &format!(
-            r#"{{"odooProjectDirs": {{"Aurora": "{}"}}}}"#,
-            main.display()
-        ),
+        &json!({ "odooProjectDirs": { "Aurora": main } }).to_string(),
     );
     let found = discover_repos(&paths, &config);
     assert!(found.contains(&main), "{found:?}");
@@ -45,10 +47,7 @@ fn a_group_directorys_children_are_candidates_too() {
     let repo = repo_with(&group, "novalink", Some(FULL_FORM), None);
     let config = config_for(
         &paths,
-        &format!(
-            r#"{{"groups": [{{"name": "Clients", "path": "{}"}}]}}"#,
-            group.display()
-        ),
+        &json!({ "groups": [{ "name": "Clients", "path": group }] }).to_string(),
     );
     assert_eq!(discover_repos(&paths, &config), vec![repo]);
 }
@@ -68,7 +67,7 @@ fn an_archived_tasks_cwd_seeds_discovery_even_without_config() {
     fs::create_dir_all(paths.task_dir(5699)).unwrap();
     fs::write(
         paths.task_dir(5699).join("meta.json"),
-        format!(r#"{{"taskId": 5699, "cwd": "{}"}}"#, repo.display()),
+        json!({ "taskId": 5699, "cwd": repo }).to_string(),
     )
     .unwrap();
 
@@ -88,11 +87,14 @@ fn collect_joins_entries_to_the_task_archive() {
     fs::create_dir_all(&task_dir).unwrap();
     fs::write(
         task_dir.join("meta.json"),
-        format!(
-            r#"{{"taskId": 5944, "cwd": "{}", "sessionId": "sess-1",
-                 "sessionFile": "/x/sess-1.jsonl", "archivedAt": "2026-07-24T10:00:00.000Z"}}"#,
-            repo.display()
-        ),
+        json!({
+            "taskId": 5944,
+            "cwd": repo,
+            "sessionId": "sess-1",
+            "sessionFile": "/x/sess-1.jsonl",
+            "archivedAt": "2026-07-24T10:00:00.000Z",
+        })
+        .to_string(),
     )
     .unwrap();
     fs::write(task_dir.join("sess-1.jsonl"), "{}\n").unwrap();
@@ -112,10 +114,7 @@ fn collect_joins_entries_to_the_task_archive() {
 
     let config = config_for(
         &paths,
-        &format!(
-            r#"{{"odooProjectDirs": {{"Aurora": "{}"}}}}"#,
-            repo.display()
-        ),
+        &json!({ "odooProjectDirs": { "Aurora": repo } }).to_string(),
     );
     let data = collect(&paths, &config, None);
 

@@ -14,7 +14,7 @@ use crate::archive::Archive;
 use crate::config::ConfigHandle;
 use crate::db::Db;
 use crate::paths::Paths;
-use crate::scan::{ProcessSource, Scanner, SystemProcessSource};
+use crate::scan::{PlatformProcessSource, ProcessSource, Scanner};
 use crate::term::SpawnPolicy;
 use crate::types::{Board, DeployBoard, Task};
 
@@ -194,7 +194,7 @@ impl<S: ProcessSource + Send + 'static> EngineInner<S> {
 /// ```ignore
 /// Engine::new(EngineOptions { backend, ..EngineOptions::system(paths, config) })
 /// ```
-pub struct EngineOptions<S: ProcessSource = SystemProcessSource> {
+pub struct EngineOptions<S: ProcessSource = PlatformProcessSource> {
     pub paths: Paths,
     pub config: ConfigHandle,
     pub scanner: Scanner<S>,
@@ -215,7 +215,7 @@ pub struct EngineOptions<S: ProcessSource = SystemProcessSource> {
     pub spawn: SpawnPolicy,
 }
 
-impl EngineOptions<SystemProcessSource> {
+impl EngineOptions<PlatformProcessSource> {
     /// The daemon's own configuration: a real `ps`/`lsof` scanner.
     pub fn system(paths: Paths, config: ConfigHandle) -> Self {
         let scanner = Scanner::system(paths.clone());
@@ -241,7 +241,7 @@ impl<S: ProcessSource> EngineOptions<S> {
 }
 
 /// The engine. Build one, [`start`](Engine::start) it, subscribe to its events.
-pub struct Engine<S: ProcessSource = SystemProcessSource> {
+pub struct Engine<S: ProcessSource = PlatformProcessSource> {
     // Visible to `lifecycle`, which owns starting and stopping.
     pub(super) inner: Arc<EngineInner<S>>,
     pub(super) loops: Mutex<Vec<JoinHandle<()>>>,

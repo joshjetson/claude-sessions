@@ -91,22 +91,54 @@ light up when you point the config at your Odoo instance and your GitLab host.
 
 ## Quick Start
 
+Never touched Rust? That's fine — you only need it to install, and it's two commands.
+**No flags needed**: not `--locked`, not anything. A bare install is CI-tested on every
+change so it always builds.
+
+### macOS / Linux
+
 ```bash
-# From crates.io — no --locked needed; a fresh dependency resolve
-# is CI-tested on every push so a bare install always builds
+# 1. Install Rust (skip if `cargo --version` already works)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# ...accept the defaults, then open a NEW terminal window
+
+# 2. Install the dashboard
 cargo install claude-sessions
 
-# The dashboard
+# 3. Run it
 claude-sessions
-
-# The background watcher (alerts when a session needs you).
-# The dashboard starts one for you unless you turn autostart off.
-claude-sessions daemon
 ```
 
-Nothing to configure for the Sessions tab. For the rest, copy
-[`config.example.json`](config.example.json) to `~/.claude-sessions.json` and fill in the
-blocks you want — every key is optional and every block is independent.
+On macOS, also install [iTerm2](https://iterm2.com) or [tmux](https://github.com/tmux/tmux)
+if you want the dashboard to launch and control terminals — monitoring works without them.
+
+### Windows (PowerShell or cmd)
+
+```powershell
+# 1. Install Rust: download and run rustup-init.exe from https://rustup.rs
+#    Accept the defaults (it installs the C++ build tools it needs),
+#    then open a NEW PowerShell window.
+
+# 2. Install the dashboard
+cargo install claude-sessions
+
+# 3. Run it
+claude-sessions
+```
+
+> Native Windows support arrives in v1.1 (dashboard, transcripts, daemon, board; live
+> process discovery and terminal control follow in later releases). Running Claude Code
+> inside **WSL**? Use the macOS/Linux steps inside WSL — that gets the full feature set
+> today.
+
+### After installing
+
+The **Sessions** tab needs zero configuration — run `claude-sessions` and your sessions
+appear. For the Odoo board, GitLab, and Optics, copy
+[`config.example.json`](config.example.json) to `~/.claude-sessions.json` and fill in
+only the blocks you want — every key is optional and every block is independent.
+
+To upgrade later, run `cargo install claude-sessions` again.
 
 ## Requirements
 

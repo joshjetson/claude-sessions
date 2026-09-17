@@ -31,15 +31,21 @@ fn the_folder_search_takes_the_newest_of_this_tasks_transcripts() {
 fn the_ancestor_search_finds_the_repo_from_a_subfolder() {
     // An agent that ran `cd` into a subfolder before finishing reports a cwd no
     // session directory matches — Claude keys them by exact path.
+    //
+    // Rooted for the platform: the search absolutises before it encodes.
+    let repo = rooted("/repo/portal");
     let mut t = open();
-    let own = t.transcript(Some(4033), "/repo/portal");
+    let own = t.transcript(Some(4033), &repo);
 
+    let subfolder = std::path::Path::new(&repo)
+        .join("grails-app")
+        .join("assets");
     let found = t
-        .find_near("/repo/portal/grails-app/assets", 4033)
+        .find_near(&subfolder.to_string_lossy(), 4033)
         .expect("nothing found");
     assert_eq!(found.path(), own.path());
     assert_eq!(
-        found.cwd, "/repo/portal",
+        found.cwd, repo,
         "reported the directory it was handed, not the one it found"
     );
 }

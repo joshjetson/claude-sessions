@@ -1,4 +1,5 @@
-//! SIGINT and SIGTERM, without a dependency.
+//! Being told to stop, without a dependency: SIGINT and SIGTERM on Unix, the
+//! console control events on Windows.
 //!
 //! `signal(2)` is two integers and a function pointer, and std already links
 //! libc everywhere this runs — declaring it here is cheaper than putting
@@ -41,7 +42,52 @@ mod platform {
     }
 }
 
-#[cfg(not(unix))]
+/// The same idea through the Windows console: one call, one flag.
+///
+/// `SetConsoleCtrlHandler` is the only way to be told about Ctrl-C, Ctrl-Break
+/// and the console closing, and the handler runs on a thread of the system's
+/// own — so, exactly as above, it does the one safe thing and sets a flag that
+/// the main loop notices within its poll interval. Returning TRUE says the
+/// event is handled, which is what stops the runtime terminating the process
+/// out from under a daemon that is mid-shutdown and leaving `notify.json`
+/// pointing at a pid that is gone.
+///
+/// `kernel32` is already on the link line via `std`, so this costs no
+/// dependency — the same trade as `signal(2)` above.
+#[cfg(windows)]
+mod platform {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static CAUGHT: AtomicBool = AtomicBool::new(false);
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetConsoleCtrlHandler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+
+    unsafe extern "system" fn catch(_ctrl_type: u32) -> i32 {
+        CAUGHT.store(true, Ordering::SeqCst);
+        1
+    }
+
+    pub(crate) fn install() {
+        // SAFETY: registering a handler whose whole body is one atomic store.
+        unsafe {
+            SetConsoleCtrlHandler(Some(catch), 1);
+        }
+    }
+
+    pub(crate) fn caught() -> bool {
+        CAUGHT.load(Ordering::SeqCst)
+    }
+}
+
+/// Anywhere else: the daemon is still stopped by `claude-sessions daemon stop`,
+/// which is an HTTP call and needs nothing from the platform.
+#[cfg(not(any(unix, windows)))]
 mod platform {
     pub(crate) fn install() {}
     pub(crate) fn caught() -> bool {

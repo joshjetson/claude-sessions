@@ -74,6 +74,14 @@ fn a_new_transcript_invalidates_the_listing() {
     let mut cache = SessionFilesCache::new();
     assert_eq!(cache.list(dir.path()).len(), 1);
 
+    // Windows stamps file times from a clock that only ticks about every 15ms,
+    // so two writes inside one tick leave the directory's mtime untouched and
+    // the cache — correctly — reports it as unchanged. The property under test
+    // is that a CHANGED directory is re-read, so the change is made visible at
+    // the platform's own resolution first.
+    #[cfg(windows)]
+    std::thread::sleep(Duration::from_millis(32));
+
     write_at(&dir, "b.jsonl", ago(1));
     assert_eq!(cache.list(dir.path()).len(), 2);
     assert_eq!(cache.builds(), 2);

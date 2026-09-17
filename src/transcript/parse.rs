@@ -274,6 +274,12 @@ pub(crate) fn file_id(meta: &Metadata) -> Option<u64> {
     Some(meta.ino())
 }
 
+/// Nowhere else has one that std will hand over. NTFS keeps a file index that
+/// is exactly this, but `MetadataExt::file_index` is still unstable
+/// (`windows_by_handle`, rust#63010) and it is not worth a dependency: a cursor
+/// without an identity still notices a file that shrank and a file that grew.
+/// What it cannot notice is one replaced by another of the very same length —
+/// an archived transcript restored over a live one.
 #[cfg(not(unix))]
 pub(crate) fn file_id(_meta: &Metadata) -> Option<u64> {
     None

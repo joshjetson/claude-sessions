@@ -24,6 +24,7 @@ pub mod odoo;
 pub mod optics;
 pub mod paths;
 pub mod pipeline;
+pub mod platform;
 pub mod purge;
 pub mod qaden;
 pub mod scan;

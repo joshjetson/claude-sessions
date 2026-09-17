@@ -26,6 +26,10 @@ use super::types::{NullDriver, TerminalDriver};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     MacOs,
+    /// Native Windows — neither driver can run here, and saying so is the
+    /// point of the variant. WSL is a Linux kernel and reports [`Self::Other`],
+    /// which is why tmux works there today.
+    Windows,
     Other,
 }
 
@@ -33,6 +37,8 @@ impl Platform {
     pub fn current() -> Self {
         if cfg!(target_os = "macos") {
             Platform::MacOs
+        } else if cfg!(windows) {
+            Platform::Windows
         } else {
             Platform::Other
         }
@@ -66,6 +72,14 @@ pub fn choose_driver(
     requested: TerminalDriverName,
     available: DriverAvailability,
 ) -> Option<DriverKind> {
+    // Neither driver has a native-Windows implementation: iTerm2 is a macOS
+    // application, and the tmux driver hands its commands to `/bin/sh -lc` and
+    // joins panes by a Unix tty. An explicit request is refused here for the
+    // same reason an unavailable one is below — answering with a driver that
+    // cannot work is worse than answering with nothing.
+    if available.platform == Platform::Windows {
+        return None;
+    }
     match requested {
         TerminalDriverName::Iterm2 => available.iterm.then_some(DriverKind::Iterm2),
         TerminalDriverName::Tmux => available.tmux.then_some(DriverKind::Tmux),
@@ -115,12 +129,18 @@ pub fn get_driver(config: &ConfigHandle, policy: SpawnPolicy) -> Option<Arc<dyn 
     let tmux_session = config.tmux_session();
 
     // Only probe what the request could possibly select — an explicit `tmux`
-    // must never wake iTerm2 up just to ask whether it is there.
+    // must never wake iTerm2 up just to ask whether it is there, and a platform
+    // whose answer is already "neither" is not asked at all.
+    let platform = Platform::current();
+    let probe = platform != Platform::Windows;
     let available = DriverAvailability {
-        iterm: requested != TerminalDriverName::Tmux && Iterm2Driver::new(policy).is_available(),
-        tmux: requested != TerminalDriverName::Iterm2
+        iterm: probe
+            && requested != TerminalDriverName::Tmux
+            && Iterm2Driver::new(policy).is_available(),
+        tmux: probe
+            && requested != TerminalDriverName::Iterm2
             && TmuxDriver::new(tmux_session, policy).is_available(),
-        platform: Platform::current(),
+        platform,
     };
 
     let chosen =

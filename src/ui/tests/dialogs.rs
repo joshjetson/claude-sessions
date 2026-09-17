@@ -53,7 +53,7 @@ fn every_dialog(config: &ConfigHandle, paths: &Paths) -> Vec<Dialog> {
         Dialog::Settings(SettingsDialog::default()),
         Dialog::Shutdown(ShutdownConfirm::default()),
         Dialog::FileViewer(FileViewer::open(" Log ", "/nonexistent/for/the/test.log")),
-        Dialog::LogViewer(LogViewer::open(paths, None, "2026-09-16")),
+        Dialog::LogViewer(Box::new(LogViewer::open(paths, None, "2026-09-16"))),
         Dialog::PurgeConfirm(PurgeConfirm::new(Vec::new(), Default::default())),
         Dialog::DaemonLogs(DaemonLogs::open(&paths.auto_dev_runs_dir, 5944, &[])),
     ]

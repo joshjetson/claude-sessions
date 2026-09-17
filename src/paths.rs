@@ -203,13 +203,39 @@ impl Paths {
     }
 }
 
-/// `$HOME`, falling back to the current directory.
+/// The variables that name the user's home directory, most authoritative first.
+///
+/// `$HOME` is what Node's `os.homedir()` consults first on Unix, and it is what
+/// a test harness sets. On Windows `%USERPROFILE%` is the one the system always
+/// sets and the one Claude Code itself writes `.claude` under, so it wins
+/// there — but `$HOME` is still consulted after it, because a Git-Bash or MSYS
+/// shell sets one and a person working in one expects it to mean something.
+const HOME_KEYS: &[&str] = if cfg!(windows) {
+    &["USERPROFILE", "HOME"]
+} else {
+    &["HOME"]
+};
+
+/// The user's home directory, falling back to the current directory.
 ///
 /// Deliberately not `std::env::home_dir` (deprecated on the 1.85 baseline) and
-/// deliberately not a crate: the tool is macOS/Linux only, and `$HOME` is what
-/// Node's `os.homedir()` consults first anyway.
+/// deliberately not a crate — a crate for two `getenv`s is a dependency in the
+/// install path for nothing.
 fn home_dir() -> PathBuf {
-    env_path("HOME").unwrap_or_else(|| PathBuf::from("."))
+    first_path(HOME_KEYS.iter().map(|key| env_path(key)))
+}
+
+/// The first variable that is set to something, or the current directory.
+///
+/// Split out so the precedence rule can be tested without exporting anything:
+/// there is no way to watch `%USERPROFILE%` lose to nothing on a machine that
+/// has it set.
+fn first_path(values: impl IntoIterator<Item = Option<PathBuf>>) -> PathBuf {
+    values
+        .into_iter()
+        .flatten()
+        .next()
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[cfg(test)]
@@ -376,5 +402,30 @@ mod tests {
             path_value(Some("/tmp/cs".into())),
             Some(PathBuf::from("/tmp/cs"))
         );
+    }
+
+    #[test]
+    fn home_takes_the_first_variable_that_is_set() {
+        let set = |value: &str| Some(PathBuf::from(value));
+        assert_eq!(first_path([None, set("/second")]), Path::new("/second"));
+        assert_eq!(
+            first_path([set("/first"), set("/second")]),
+            Path::new("/first")
+        );
+        // A machine with none of them set still resolves to somewhere, so that
+        // nothing downstream has to handle the absence of a home directory.
+        assert_eq!(first_path([None, None]), Path::new("."));
+    }
+
+    #[test]
+    fn windows_prefers_the_profile_directory_and_still_honours_home() {
+        // %USERPROFILE% is always set on Windows and is where Claude Code keeps
+        // `.claude`; $HOME is only set by a shell that emulates one.
+        let expected: &[&str] = if cfg!(windows) {
+            &["USERPROFILE", "HOME"]
+        } else {
+            &["HOME"]
+        };
+        assert_eq!(HOME_KEYS, expected);
     }
 }

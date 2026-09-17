@@ -18,9 +18,11 @@ pub use detect::{
 };
 pub use files::{is_compacting, session_files_in, SessionFilesCache};
 pub use pairing::{pair_processes_to_sessions, Pairing, BIRTH_SLACK_MS, BIRTH_WINDOW_MS};
+#[cfg(unix)]
+pub use process::SystemProcessSource;
 pub use process::{
-    parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row, ClaudeProcess, ProcessRow,
-    ProcessSource, SystemProcessSource,
+    parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row, ClaudeProcess,
+    PlatformProcessSource, ProcessRow, ProcessSource, UnsupportedProcessSource,
 };
 pub use projects::discover_projects;
 pub use scanner::Scanner;

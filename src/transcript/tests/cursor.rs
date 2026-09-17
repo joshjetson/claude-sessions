@@ -98,6 +98,11 @@ fn truncation_forces_a_fresh_read() {
     );
 }
 
+/// Unix only: it is the inode that gives this away, and nothing stable hands
+/// one over elsewhere — see `file_id` in the parser. A file that shrank or grew
+/// is still noticed on every platform, which the tests either side of this one
+/// cover.
+#[cfg(unix)]
 #[test]
 fn a_replaced_file_of_the_same_length_is_noticed() {
     // An archived transcript restored over a live one keeps the path and can

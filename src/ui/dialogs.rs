@@ -150,6 +150,11 @@ pub struct DialogCtx<'a> {
     pub config: &'a mut ConfigHandle,
 }
 
+/// One dialog at a time, taken out of the state and put back on every frame —
+/// so the enum's size is a per-frame move, and one variant being three times
+/// the rest is worth an indirection. [`LogViewer`] is that variant: it carries a
+/// whole [`Paths`](crate::paths::Paths), which is sixteen `PathBuf`s, and a
+/// `PathBuf` is a third larger on Windows than on Unix.
 #[derive(Debug, Clone)]
 pub enum Dialog {
     Kill(KillConfirm),
@@ -159,7 +164,7 @@ pub enum Dialog {
     Settings(SettingsDialog),
     Shutdown(ShutdownConfirm),
     FileViewer(FileViewer),
-    LogViewer(LogViewer),
+    LogViewer(Box<LogViewer>),
     PurgeConfirm(PurgeConfirm),
     // --- board ---
     TaskMenu(TaskMenu),

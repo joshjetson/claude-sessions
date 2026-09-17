@@ -35,16 +35,18 @@ fn round_two_replaces_round_one() {
     // archive is the conversation to resume, not a history — one task kept a
     // 167-line stub while its real QA session held 2963 lines.
     let mut t = open();
-    let round1 = t.aged(Some(970101), "/repo/atlas", HOUR);
-    let request = t.linked("/repo/atlas", round1.path());
+    // Rooted for the platform: the search absolutises before it encodes.
+    let repo = rooted("/repo/atlas");
+    let round1 = t.aged(Some(970101), &repo, HOUR);
+    let request = t.linked(&repo, round1.path());
     assert_eq!(
         t.archive_task(970101, &request).map(|m| m.session_id),
         Some(round1.session_id()),
         "round 1 was not archived"
     );
 
-    let round2 = t.transcript(Some(970101), "/repo/atlas");
-    let request = t.linked("/repo/atlas", round2.path());
+    let round2 = t.transcript(Some(970101), &repo);
+    let request = t.linked(&repo, round2.path());
     assert_eq!(
         t.archive_task(970101, &request).map(|m| m.session_id),
         Some(round2.session_id()),

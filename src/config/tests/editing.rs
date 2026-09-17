@@ -1,7 +1,10 @@
 //! The write half: every mutator updates the cache and the file together, and
 //! leaves everything it was not asked to change alone.
 
+use std::path::Path;
+
 use super::*;
+
 #[test]
 fn a_mutation_does_not_disturb_the_rest_of_the_file() {
     let (_dir, mut config) = handle(json!({
@@ -97,11 +100,16 @@ fn setting_a_target_branch_replaces_any_differently_cased_key() {
 fn a_group_path_is_expanded_when_it_is_written() {
     let (_dir, mut config) = handle(json!({}));
     config.add_group("Dev", "~/dev").unwrap();
+    // Compared as a path, not as a string: `~` expansion concatenates the way
+    // Node's did, so on a platform whose separator is not `/` the expansion is
+    // spelled with both. `Path` equality is component-wise, which is the
+    // question actually being asked — does it name the right directory.
     let expected = config.home.join("dev");
-    assert_eq!(config.groups()[0].path, expected.to_string_lossy());
+    let stored = config.groups()[0].path.clone();
+    assert_eq!(Path::new(&stored), expected);
     assert_eq!(
         saved(&config)["groups"][0],
-        json!({ "name": "Dev", "path": expected.to_string_lossy() })
+        json!({ "name": "Dev", "path": stored })
     );
 
     // An absolute path is stored as given.
