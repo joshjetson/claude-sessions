@@ -11,8 +11,8 @@
 //!
 //! What a transcript cannot answer is anything about a process: no pid, no tty,
 //! no start time, and so no killing, no focusing and no joining a terminal.
-//! Those degrade rather than lie; see the table in the Windows section of the
-//! README.
+//! Those degrade rather than lie, and [`crate::platform::DISCOVERY_NOTICE`] is
+//! where the person reading the list is told so.
 //!
 //! # Why a freshness window, and not "every transcript"
 //!
@@ -116,10 +116,12 @@ pub(super) fn transcript_sessions(
     cwds.prune(|path| seen_files.contains(path));
 
     sessions.sort_by_key(|session| Reverse(session.session_mtime));
-    // One session id is one row even in the impossible case of two directories
-    // holding the same file name; the newest write wins, as it does everywhere
-    // else a transcript is chosen.
-    sessions.dedup_by(|a, b| a.session_id == b.session_id);
+    // One session id is one row, even in the unlikely case of two project
+    // directories holding the same file name — a transcript restored into the
+    // wrong folder does that. The newest write wins, as it does everywhere else
+    // a transcript is chosen between.
+    let mut listed: HashSet<String> = HashSet::new();
+    sessions.retain(|session| listed.insert(session.session_id.clone()));
     sessions
 }
 
