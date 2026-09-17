@@ -291,9 +291,15 @@ fn a_hand_written_tilde_path_is_expanded_for_every_reader() {
     // an absolute working directory — so it is expanded on the way out, and the
     // file keeps the spelling its owner typed.
     let (dir, config) = handle(json!({ "groups": [{ "name": "Dev", "path": "~/dev" }] }));
-    assert_eq!(
-        config.groups()[0].path,
-        dir.path().join("dev").to_string_lossy()
+    let expanded = config.groups()[0].path.clone();
+    assert!(!expanded.starts_with('~'), "{expanded}");
+    // The rest of the string is kept exactly as written, which is what Node
+    // did — so on Windows the expansion reads `C:\Users\k/dev`, one directory
+    // spelled two ways. Compared as a directory rather than as bytes for that
+    // reason; the tree compares it the same way.
+    assert!(
+        crate::util::same_dir(&expanded, &dir.path().join("dev").to_string_lossy()),
+        "{expanded}"
     );
     config.save().unwrap();
     assert_eq!(saved(&config)["groups"][0]["path"], json!("~/dev"));

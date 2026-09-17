@@ -30,14 +30,16 @@ const ENCODED: &[char] = if cfg!(windows) {
     &['/']
 };
 
-/// Whether two path spellings that differ only in case name the same directory.
+/// Whether two path spellings that differ only in case, or only in which
+/// separator they use, name the same directory.
 ///
-/// They do on Windows, where the filesystem folds case, and they do not on
-/// Unix. It matters here because the two sides of a comparison come from
-/// different places — a group path a person typed into the config against a
-/// working directory Claude Code wrote into a transcript — and `C:\Src` against
-/// `c:\src` is a spelling difference on Windows, not a different folder.
-const FOLD_CASE: bool = cfg!(windows);
+/// They do on Windows and they do not on Unix. It matters here because the two
+/// sides of a comparison come from different places — a group path a person
+/// typed into the config against a working directory Claude Code wrote into a
+/// transcript — and on Windows `C:\Src` and `c:/src` are two spellings of one
+/// folder. The mixed case is not exotic: `~/dev` expands to `C:\Users\k/dev`,
+/// and the sessions under it report `C:\Users\k\dev\repo`.
+const FOLD_SPELLING: bool = cfg!(windows);
 
 /// Claude Code stores a project's transcripts in a directory named after the
 /// cwd with every separator replaced by `-`. Everything that finds a transcript
@@ -205,13 +207,23 @@ fn separator_in(path: &str) -> char {
         .unwrap_or(if cfg!(windows) { '\\' } else { '/' })
 }
 
-/// Segment-for-segment equality under this platform's case rules. Not a
-/// substitute for [`same_dir`]: it compares what it is handed, trailing
-/// separators included.
+/// Equality under this platform's spelling rules. Not a substitute for
+/// [`same_dir`]: it compares what it is handed, trailing separators included.
+///
+/// Byte-for-byte on Unix, where a path means exactly what it says. On Windows,
+/// ASCII case is folded and either separator matches either — which is safe
+/// byte-wise, since both separators and both cases of a letter are one ASCII
+/// byte and every byte of a multi-byte character is above them.
 fn path_eq(a: &str, b: &str) -> bool {
-    if FOLD_CASE {
-        a.eq_ignore_ascii_case(b)
-    } else {
-        a == b
+    if !FOLD_SPELLING {
+        return a == b;
     }
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .all(|(x, y)| x.eq_ignore_ascii_case(&y) || (is_separator(x) && is_separator(y)))
+}
+
+fn is_separator(byte: u8) -> bool {
+    SEPARATORS.contains(&(byte as char))
 }
