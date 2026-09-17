@@ -95,6 +95,25 @@ fn a_board_with_no_credentials_says_why_rather_than_looking_empty() {
 }
 
 #[test]
+fn a_board_still_being_fetched_says_so_rather_than_showing_an_empty_pane() {
+    // What a dashboard sees while a fresh daemon is warming its board: the
+    // snapshot carries `boardLoading` and no board, and the pane has to say
+    // which of the two empty states this is.
+    let (_dir, mut state) = board_state();
+    state.apply_board(BoardUpdate::loading(BoardFilter::Mine));
+    assert!(state.board.loading);
+    let items = board::view::build_items(&state.board, &state.notifications);
+    let text: String = items
+        .iter()
+        .map(|item| {
+            crate::board::plain_text(&crate::board::format_board_item(item, &Default::default()))
+        })
+        .collect();
+    assert!(text.contains("Loading tasks from Odoo"), "{text}");
+    assert!(!text.contains("No Odoo credentials"), "{text}");
+}
+
+#[test]
 fn a_failed_fetch_keeps_the_previous_board_and_says_what_went_wrong() {
     let (_dir, mut state) = board_state();
     with_tasks(&mut state, vec![task(5238, "Report templates")]);

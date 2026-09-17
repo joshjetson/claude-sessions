@@ -15,6 +15,7 @@ mod notify;
 mod session;
 mod transcript;
 mod ui;
+mod wire;
 
 pub use board::{Board, BoardProject, BoardStage, OdooCreds, Task};
 pub use deploy::{

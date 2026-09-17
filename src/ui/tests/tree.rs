@@ -382,3 +382,93 @@ fn sessions_inside_a_project_are_newest_first() {
         .collect();
     assert_eq!(ids, vec!["new", "old"]);
 }
+
+// --- the context meter (Node's `treefmt.js` lines 42-49) --------------------
+
+/// A session whose last message is far smaller than everything it has ever
+/// sent: the two numbers must never be confused for one another.
+fn long_running() -> crate::types::Session {
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.last_usage = Some(crate::types::Usage {
+        input_tokens: Some(2),
+        cache_creation_input_tokens: Some(3_000),
+        cache_read_input_tokens: Some(146_000),
+        output_tokens: Some(998),
+    });
+    s.cumulative_usage = Some(crate::types::CumulativeUsage {
+        input_tokens: 196,
+        cache_creation_input_tokens: 187_203,
+        cache_read_input_tokens: 87_450_669,
+        output_tokens: 123_415,
+    });
+    s
+}
+
+#[test]
+fn the_context_meter_reads_the_last_message_not_the_running_total() {
+    // GOLDEN, against `formatContextUsage` / `treefmt.js`: the row shows what
+    // the session is holding (input + both cache counters + output of the LAST
+    // assistant message), never the cumulative sum — 87M of lifetime cache
+    // reads is not 43,725% of a context window.
+    let (_dir, config) = temp_config();
+    let s = long_running();
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    assert!(rendered.contains("150K"), "last-message tokens: {rendered}");
+    assert!(
+        rendered.contains("(75%)"),
+        "last-message percent: {rendered}"
+    );
+}
+
+#[test]
+fn a_session_holding_more_than_200k_is_measured_against_the_million_window() {
+    // The `887K (444%)` row: the token count was right and the denominator was
+    // not. A session cannot hold more context than it was given.
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.last_usage = Some(crate::types::Usage {
+        input_tokens: Some(2),
+        cache_creation_input_tokens: Some(306),
+        cache_read_input_tokens: Some(885_713),
+        output_tokens: Some(1_013),
+    });
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    assert!(rendered.contains("887K"), "{rendered}");
+    assert!(rendered.contains("(89%)"), "{rendered}");
+    assert!(!rendered.contains("444%"), "{rendered}");
+}
+
+#[test]
+fn the_meter_is_the_same_number_over_the_wire_as_it_is_in_process() {
+    // Both transports, one answer: the embedded struct and the one that came
+    // back off the daemon's JSON must render the identical row. `wire_session`
+    // strips `cumulativeUsage`, so a client that measured the wrong field would
+    // read zero here and differ.
+    let (_dir, config) = temp_config();
+    let embedded = long_running();
+    let json = serde_json::to_string(&crate::daemon::wire_session(&embedded)).unwrap();
+    let wired: crate::types::Session = serde_json::from_str(&json).unwrap();
+    let row = |s: &crate::types::Session| {
+        line_text(
+            &TreeItem::Session {
+                project_name: "x/alpha",
+                session: s,
+            },
+            &config,
+        )
+    };
+    assert_eq!(row(&embedded), row(&wired));
+    assert!(row(&wired).contains("(75%)"), "{}", row(&wired));
+}

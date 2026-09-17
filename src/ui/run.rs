@@ -388,7 +388,10 @@ fn group_paths(state: &AppState) -> Vec<String> {
         .collect()
 }
 
-fn open_conversation(state: &mut AppState, file: Option<PathBuf>) -> Option<TranscriptCursor> {
+pub(crate) fn open_conversation(
+    state: &mut AppState,
+    file: Option<PathBuf>,
+) -> Option<TranscriptCursor> {
     let path = file?;
     let mut cursor = TranscriptCursor::open(&path, Collect::SessionAndConversation).ok()?;
     let _ = cursor.poll();
