@@ -43,8 +43,10 @@ pub use spawn::{SpawnPolicy, SpawnRefused, NO_SPAWN_ENV};
 pub use tmux::{
     build_attach_shell_command, build_kill_pane_args, build_new_session_args,
     build_new_window_args, build_send_enter_args, build_send_text_args,
-    build_send_text_args_chunked, build_viewer_session_name, list_panes_args, parse_pane_list,
-    Pane, TmuxDriver, DETACHED_HEIGHT, DETACHED_WIDTH, LIST_PANES_FORMAT,
+    build_send_text_args_chunked, build_viewer_session_name, list_clients_args, list_panes_args,
+    list_sessions_args, parse_client_list, parse_pane_list, parse_session_groups,
+    pick_attached_group_session, Client, Pane, TmuxDriver, DETACHED_HEIGHT, DETACHED_WIDTH,
+    LIST_CLIENTS_FORMAT, LIST_PANES_FORMAT, LIST_SESSIONS_FORMAT,
 };
 pub use types::{
     normalize_tty, DriverResult, LaunchRequest, NullDriver, SessionRef, TerminalDriver, TASK_ID_ENV,

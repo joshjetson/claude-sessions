@@ -87,15 +87,66 @@ fn turn_duration_marks_the_turn_finished() {
 }
 
 #[test]
-fn a_pending_tool_call_is_working_briefly_then_awaiting() {
+fn a_pending_tool_call_is_working_however_long_it_runs() {
+    // This used to flip to "awaiting" after thirty seconds. Duration says
+    // nothing about whose turn it is: a build, a test suite, a browser step and
+    // a sleep loop all run for minutes. Calling those "awaiting" reported that a
+    // session wanted you when it was busy — one task sat four minutes into a
+    // shell script reading "awaiting" while its own activity label said
+    // "running command".
+    //
+    // A permission prompt is indistinguishable from a slow tool in the
+    // transcript, and is handled where it belongs: the daemon raises a "may be
+    // blocked" notification after a couple of minutes of silence.
     let entry = assistant_tool_use("Bash");
+    for ago in [20, 45, 240, 3_600] {
+        assert_eq!(
+            detect_session_status(Some(&entry), seconds_ago(ago), now()),
+            SessionStatus::Working,
+            "{ago}s into a tool call"
+        );
+    }
+}
+
+#[test]
+fn a_question_is_awaiting_immediately_however_fresh_the_write() {
+    // Checked ahead of the freshness rule: the agent has handed control back,
+    // so there is nothing recency can add. Without this the row read "working"
+    // for the first ten seconds of every question asked.
+    for tool in ["AskUserQuestion", "ExitPlanMode"] {
+        let entry = assistant_tool_use(tool);
+        assert_eq!(
+            detect_session_status(Some(&entry), now(), now()),
+            SessionStatus::Awaiting,
+            "{tool} should be awaiting the moment it lands"
+        );
+    }
+}
+
+#[test]
+fn a_tool_result_means_the_agent_is_thinking_not_waiting_on_you() {
+    // A tool's output came back and the agent has not spoken yet: it is
+    // thinking, or running the next tool. A long reasoning block routinely
+    // passes thirty seconds, and nobody is waiting on the person.
+    let mut entry = crate::types::LastEntry::of_kind(crate::types::EntryKind::User);
+    entry.has_tool_result = true;
+    for ago in [45, 300] {
+        assert_eq!(
+            detect_session_status(Some(&entry), seconds_ago(ago), now()),
+            SessionStatus::Working,
+            "{ago}s after a tool result"
+        );
+    }
+}
+
+#[test]
+fn something_a_person_typed_still_goes_to_awaiting_input() {
+    // The other kind of `user` entry. Unlike a tool result, this one really is
+    // waiting on a reply.
+    let entry = crate::types::LastEntry::of_kind(crate::types::EntryKind::User);
     assert_eq!(
-        detect_session_status(Some(&entry), seconds_ago(20), now()),
-        SessionStatus::Working
-    );
-    assert_eq!(
-        detect_session_status(Some(&entry), seconds_ago(45), now()),
-        SessionStatus::Awaiting
+        detect_session_status(Some(&entry), seconds_ago(60), now()),
+        SessionStatus::AwaitingInput
     );
 }
 

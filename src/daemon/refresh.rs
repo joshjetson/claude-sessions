@@ -165,13 +165,31 @@ fn enrich(
         .and_then(|path| caches.task_id(path, refs, now));
 
     let last_entry = parsed.as_ref().and_then(|p| p.last_entry.clone());
+    let activity_at = parsed
+        .as_ref()
+        .map(|p| p.last_timestamp.as_str())
+        .filter(|ts| !ts.is_empty())
+        .and_then(crate::util::parse_timestamp)
+        .map(SystemTime::from)
+        .unwrap_or(raw.session_mtime);
     let status = match (compacting, raw.status) {
         (true, _) => SessionStatus::Compacting,
         // A placeholder keeps the status the scanner gave it. Node recomputed
         // here and turned every `starting-<pid>` row into "idle", because a
         // process with no transcript yet has no trailing entry to judge.
         (false, Some(status)) => status,
-        (false, None) => detect_session_status(last_entry.as_ref(), raw.session_mtime, now),
+        // Aged from when the CONVERSATION last moved, not from the file's
+        // mtime.
+        //
+        // Claude Code appends bookkeeping entries — attachment, ai-title, mode,
+        // cost-state and others — at moments unrelated to the conversation, and
+        // every one of those writes touches the mtime. Ageing from the mtime
+        // made an idle session report "working" for ten seconds each time one
+        // landed, so sessions looked like they had started work on their own.
+        //
+        // The mtime is still the fallback for a transcript whose entries carry
+        // no timestamp at all.
+        (false, None) => detect_session_status(last_entry.as_ref(), activity_at, now),
     };
     let activity_detail = if compacting {
         "compacting".to_string()

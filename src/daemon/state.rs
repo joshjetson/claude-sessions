@@ -160,9 +160,22 @@ impl SessionIndex {
         }
         let mut by_id = HashMap::new();
         for (project, sessions) in &mut by_project {
-            // Newest first: the transcript's own last timestamp where it has
-            // one, the file's mtime where it does not.
-            sessions.sort_by_key(|session| std::cmp::Reverse(activity_at(session)));
+            // Ordered by when each session STARTED, oldest first.
+            //
+            // This used to sort by last activity, so whichever agent wrote most
+            // recently jumped to the top of its project and every row below it
+            // shifted down. With several agents working, the list reordered
+            // about once a second: you could not point at a row, and a keypress
+            // could land on a different session than the one you aimed at.
+            //
+            // Start time never changes while a session lives, so a row stays
+            // where it is for as long as it exists. Ties break on session id,
+            // which is stable too — two sessions can share a start second.
+            sessions.sort_by(|a, b| {
+                started_at(a)
+                    .cmp(&started_at(b))
+                    .then_with(|| a.session_id.cmp(&b.session_id))
+            });
             for (index, session) in sessions.iter().enumerate() {
                 by_id.insert(session.session_id.clone(), (project.clone(), index));
             }
@@ -201,9 +214,15 @@ impl SessionIndex {
 }
 
 /// A transcript's own last timestamp, falling back to the file's mtime.
-fn activity_at(session: &Session) -> SystemTime {
+/// When a session STARTED, which is what the tree orders on.
+///
+/// `lstart` is what `ps` reports and never changes while the process lives, so
+/// a row holds its position. The transcript's mtime is the fallback for a
+/// session whose start time could not be read — imperfect, but it at least does
+/// not move every time the agent writes.
+fn started_at(session: &Session) -> SystemTime {
     session
-        .last_timestamp
+        .lstart
         .as_deref()
         .and_then(crate::util::parse_timestamp)
         .map(SystemTime::from)

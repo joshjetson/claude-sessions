@@ -35,14 +35,47 @@ pub const DETACHED_WIDTH: u16 = 200;
 pub const DETACHED_HEIGHT: u16 = 50;
 
 /// `list-panes` format: the tty first, because it is what everything joins on.
-pub const LIST_PANES_FORMAT: &str = "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}";
+/// `pane_dead` last — see [`list_panes_args`] for why it is asked for at all.
+pub const LIST_PANES_FORMAT: &str =
+    "#{pane_tty}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_dead}";
+
+/// Attached clients, newest activity first.
+pub const LIST_CLIENTS_FORMAT: &str = "#{client_name}\t#{client_session}\t#{client_activity}";
+
+/// Session name to the group it belongs to, if any.
+pub const LIST_SESSIONS_FORMAT: &str = "#{session_name}\t#{session_group}";
 
 fn args(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|part| part.to_string()).collect()
 }
 
-pub fn list_panes_args() -> Vec<String> {
-    args(&["list-panes", "-a", "-F", LIST_PANES_FORMAT])
+/// Panes of ONE tmux session, with whether each one is dead.
+///
+/// This used to list `-a`, every pane on the machine. Two faults came from that.
+///
+/// Every viewer is a GROUPED session, so it shares the real session's windows
+/// and lists the same panes again. With 47 viewers open, `-a` returned 47 copies
+/// of every pane, and the tty -> pane map kept whichever copy printed last — a
+/// viewer, not the real session. Feeding that name back into the viewer builder
+/// is what made the names nest: `claude-sessions-view0-view1-view1-…`.
+///
+/// And `pane_dead` was not asked for. tmux keeps a dead pane (`remain-on-exit`),
+/// so its tty stays listed. macOS reuses pty device names, so four ttys were
+/// held by both a live pane and a dead one — one keypress away from opening a
+/// finished task's tab instead of the running one.
+///
+/// Scoping to the target session fixes the first and makes the output 47x
+/// smaller. `pane_dead` fixes the second.
+pub fn list_panes_args(target: &str) -> Vec<String> {
+    args(&["list-panes", "-s", "-t", target, "-F", LIST_PANES_FORMAT])
+}
+
+pub fn list_clients_args() -> Vec<String> {
+    args(&["list-clients", "-F", LIST_CLIENTS_FORMAT])
+}
+
+pub fn list_sessions_args() -> Vec<String> {
+    args(&["list-sessions", "-F", LIST_SESSIONS_FORMAT])
 }
 
 pub fn build_new_session_args(
@@ -164,11 +197,22 @@ pub struct Pane {
     pub pane_id: String,
     pub session_name: String,
     pub window_index: String,
+    /// tmux keeps a dead pane around under `remain-on-exit`, and its tty stays
+    /// listed. A dead pane must never displace a live one on the same tty.
+    pub dead: bool,
+}
+
+/// An attached tmux client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Client {
+    pub name: String,
+    pub session: String,
+    pub activity: u64,
 }
 
 /// Parse `list-panes` output into a tty -> pane index.
 pub fn parse_pane_list(stdout: &str) -> HashMap<String, Pane> {
-    let mut map = HashMap::new();
+    let mut map: HashMap<String, Pane> = HashMap::new();
     for line in stdout.lines() {
         if line.trim().is_empty() {
             continue;
@@ -180,14 +224,20 @@ pub fn parse_pane_list(stdout: &str) -> HashMap<String, Pane> {
         if tty.is_empty() || pane_id.is_empty() {
             continue;
         }
-        map.insert(
-            tty.to_string(),
-            Pane {
-                pane_id: pane_id.to_string(),
-                session_name: fields.next().unwrap_or_default().to_string(),
-                window_index: fields.next().unwrap_or_default().to_string(),
-            },
-        );
+        let pane = Pane {
+            pane_id: pane_id.to_string(),
+            session_name: fields.next().unwrap_or_default().to_string(),
+            window_index: fields.next().unwrap_or_default().to_string(),
+            dead: fields.next().unwrap_or_default() == "1",
+        };
+        // Never demote a live pane to a dead one. macOS reuses pty device names,
+        // so one tty can be held by both, and the live pane is always the answer.
+        if let Some(held) = map.get(tty) {
+            if !held.dead && pane.dead {
+                continue;
+            }
+        }
+        map.insert(tty.to_string(), pane);
     }
     map
 }
@@ -224,7 +274,9 @@ impl TmuxDriver {
         let Some(dev) = normalize_tty(session.tty.as_deref()) else {
             return Err("This session has no TTY, so tmux cannot address it.".to_string());
         };
-        let res = self.exec.run("tmux", &list_panes_args(), TIMEOUT);
+        let res = self
+            .exec
+            .run("tmux", &list_panes_args(&self.target), TIMEOUT);
         if !res.ok {
             return Err(format!("tmux list-panes failed: {}", res.failure_message()));
         }
@@ -310,7 +362,22 @@ impl TerminalDriver for TmuxDriver {
             Ok(pane) => pane,
             Err(error) => return DriverResult::failed(error),
         };
-        let window = format!("{}:{}", pane.session_name, pane.window_index);
+        // Drive the session somebody is actually looking at.
+        //
+        // A viewer is a grouped session sharing the target's windows, so
+        // selecting a window on the TARGET moves a session nobody is attached
+        // to and the visible tab does not change. The attached client — on the
+        // target, or on any session in its group — is the one whose view moves.
+        let clients = self.exec.run("tmux", &list_clients_args(), TIMEOUT);
+        let sessions = self.exec.run("tmux", &list_sessions_args(), TIMEOUT);
+        let attached_session = pick_attached_group_session(
+            &parse_client_list(&clients.stdout),
+            &parse_session_groups(&sessions.stdout),
+            &self.target,
+        );
+
+        let on = attached_session.as_deref().unwrap_or(&pane.session_name);
+        let window = format!("{}:{}", on, pane.window_index);
         let selected = self
             .exec
             .run("tmux", &args(&["select-window", "-t", &window]), TIMEOUT);
@@ -322,6 +389,11 @@ impl TerminalDriver for TmuxDriver {
             &args(&["select-pane", "-t", &pane.pane_id]),
             TIMEOUT,
         );
+        // An attached client means the view already moved; there is nothing to
+        // open and nothing to tell the user.
+        if attached_session.is_some() {
+            return DriverResult::ok();
+        }
 
         // Selecting only moves tmux's own cursor. With nobody attached that is
         // invisible, and telling the user to go and type `tmux attach`
@@ -372,4 +444,72 @@ impl TerminalDriver for TmuxDriver {
         }
         DriverResult::ok()
     }
+}
+
+/// Parse `list-clients` output, newest activity first.
+pub fn parse_client_list(stdout: &str) -> Vec<Client> {
+    let mut clients: Vec<Client> = stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let (Some(name), Some(session)) = (fields.next(), fields.next()) else {
+                return None;
+            };
+            if name.is_empty() || session.is_empty() {
+                return None;
+            }
+            Some(Client {
+                name: name.to_string(),
+                session: session.to_string(),
+                activity: fields.next().unwrap_or_default().parse().unwrap_or(0),
+            })
+        })
+        .collect();
+    clients.sort_by_key(|client| std::cmp::Reverse(client.activity));
+    clients
+}
+
+/// Parse `list-sessions` output into session -> group.
+pub fn parse_session_groups(stdout: &str) -> HashMap<String, String> {
+    stdout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter_map(|line| {
+            let mut fields = line.split('\t');
+            let name = fields.next()?;
+            if name.is_empty() {
+                return None;
+            }
+            Some((
+                name.to_string(),
+                fields.next().unwrap_or_default().to_string(),
+            ))
+        })
+        .collect()
+}
+
+/// Which attached session to drive, given the target.
+///
+/// A viewer is a grouped session sharing the target's windows, so selecting a
+/// window on the TARGET moves a session nobody is looking at. The client that is
+/// actually attached — to the target, or to any session in its group — is the
+/// one whose view changes.
+pub fn pick_attached_group_session(
+    clients: &[Client],
+    groups: &HashMap<String, String>,
+    target: &str,
+) -> Option<String> {
+    let target_group = groups.get(target).filter(|g| !g.is_empty());
+    for client in clients {
+        if client.session == target {
+            return Some(client.session.clone());
+        }
+        if let Some(group) = target_group {
+            if groups.get(&client.session).is_some_and(|g| g == group) {
+                return Some(client.session.clone());
+            }
+        }
+    }
+    None
 }

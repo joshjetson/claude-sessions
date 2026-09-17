@@ -506,8 +506,14 @@ fn a_session_survives_the_real_wire_path_and_still_renders_as_working() {
     .map(|span| span.content.as_ref())
     .collect();
     assert!(row.contains("reading..."), "{row}");
-    assert!(row.contains("feat/wire"), "{row}");
     assert!(!row.contains("idle"), "{row}");
+    // The git branch used to be asserted here. The row no longer draws one —
+    // the task number took that column — so what this test proves is that the
+    // ACTIVITY survives the wire, which is the part the round-trip can lose.
+    assert!(
+        !row.contains("feat/wire"),
+        "the row should no longer draw a branch: {row}"
+    );
 }
 
 #[test]

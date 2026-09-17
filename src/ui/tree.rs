@@ -13,7 +13,7 @@ use ratatui::text::{Line, Span};
 use crate::config::{ConfigHandle, Group};
 use crate::types::{Session, SessionStatus};
 use crate::ui::theme::{color_from_name, color_of};
-use crate::util::{child_dir_of, context_percent, join_dir, trim_trailing_separators, truncate};
+use crate::util::{child_dir_of, join_dir, trim_trailing_separators, truncate};
 
 /// Sessions grouped by project name, which is the shape the tree is built from.
 pub type SessionsByProject = BTreeMap<String, Vec<Session>>;
@@ -271,47 +271,77 @@ fn format_session_row(session: &Session, config: &ConfigHandle) -> Line<'static>
         _ => status.label().to_string(),
     };
 
-    // The LAST message's usage, exactly as Node's `treefmt.js` read it: what the
-    // session is holding now, not the sum of every turn it has ever run.
-    let (tokens, context) = match session.last_usage.as_ref().map(|u| u.total_tokens()) {
-        Some(total) if total > 0 => (
-            format!("{}K", thousands(total)),
-            format!("({}%)", context_percent(total)),
-        ),
-        _ => (String::new(), String::new()),
+    // The LAST message's usage: what the session is holding now, not the sum of
+    // every turn it has ever run.
+    //
+    // No context percentage. It was a share of a fixed 200K window, which stopped
+    // meaning anything once the header gained a real usage readout, and the space
+    // now carries the task number — the thing people actually ask of this list:
+    // "which task is that?".
+    let tokens = match session.last_usage.as_ref().map(|u| u.total_tokens()) {
+        Some(total) if total > 0 => format!("{}K", thousands(total)),
+        _ => String::new(),
     };
 
-    let name = match config.session_nickname(&session.session_id) {
-        Some(nickname) => Span::styled(
-            truncate(nickname, 20),
-            Style::default()
-                .fg(color_from_name("white"))
-                .add_modifier(Modifier::BOLD),
-        ),
-        None if session.starting => Span::styled(
+    // A session with no task shows nothing here, and plenty legitimately have
+    // none: a hand-started session, a merge-conflict run, the dashboard's own.
+    let task = match session.task_id {
+        Some(id) => format!("#{id}"),
+        None => String::new(),
+    };
+
+    // The plain text is kept alongside the styled span: the column after this
+    // one is padded against its DISPLAY width, and a Span cannot be measured
+    // without unwrapping it again.
+    let (name_text, name) = match config.session_nickname(&session.session_id) {
+        Some(nickname) => {
+            let text = truncate(nickname, 20);
+            let span = Span::styled(
+                text.clone(),
+                Style::default()
+                    .fg(color_from_name("white"))
+                    .add_modifier(Modifier::BOLD),
+            );
+            (text, span)
+        }
+        None if session.starting => (
             "new".to_string(),
-            Style::default().fg(color_from_name("cyan")),
+            Span::styled(
+                "new".to_string(),
+                Style::default().fg(color_from_name("cyan")),
+            ),
         ),
-        None => Span::raw(session.session_id.chars().take(4).collect::<String>()),
+        None => {
+            let text: String = session.session_id.chars().take(4).collect();
+            (text.clone(), Span::raw(text))
+        }
     };
 
-    let mut spans = vec![
+    // Status goes LAST, and every column before it is padded to a fixed width.
+    //
+    // Status is the only field whose text changes length constantly — "idle" one
+    // second, "Editing session-row.test.js..." the next. Anything to its right
+    // moved every time it changed, so the whole line jittered. With it at the
+    // end, only its own tail moves and the columns you read stay put.
+    //
+    // The git branch used to sit at the end in magenta. It is gone: the task
+    // number says the same thing in less space, and every QA branch for one task
+    // looks like every other.
+    //
+    // Padding is measured on the DISPLAY width, never the byte length — a
+    // nickname can hold multi-byte glyphs, and counting bytes would push every
+    // column out by their length.
+    Line::from(vec![
         Span::styled("    ●", style),
         Span::raw(" "),
         name,
-        Span::raw("  "),
+        Span::raw(column_gap(&name_text, 10)),
+        Span::styled(task.clone(), Style::default().fg(color_from_name("green"))),
+        Span::raw(column_gap(&task, 8)),
+        Span::styled(tokens.clone(), gray()),
+        Span::raw(column_gap(&tokens, 7)),
         Span::styled(label, style),
-        Span::styled(format!("  {tokens}"), gray()),
-        Span::styled(format!(" {context}"), gray()),
-    ];
-    if let Some(branch) = session.git_branch.as_deref().filter(|b| *b != "HEAD") {
-        spans.push(Span::raw("  "));
-        spans.push(Span::styled(
-            truncate(branch, 25),
-            Style::default().fg(color_from_name("magenta")),
-        ));
-    }
-    Line::from(spans)
+    ])
 }
 
 /// An owned snapshot of whichever row the cursor is on.
@@ -354,4 +384,13 @@ impl TreeItem<'_> {
             TreeItem::Inactive { path, .. } => SelectedRow::Inactive { path: path.clone() },
         }
     }
+}
+
+/// The spaces that carry a column out to a fixed width, always at least one.
+///
+/// Measured on the display width rather than the byte length: see the note on
+/// the session row.
+fn column_gap(text: &str, width: usize) -> String {
+    let used = unicode_width::UnicodeWidthStr::width(text);
+    " ".repeat(width.saturating_sub(used).max(1))
 }

@@ -231,7 +231,7 @@ fn item_keys_are_stable_and_distinct_per_kind() {
 }
 
 #[test]
-fn a_session_row_carries_its_status_dot_label_and_context_meter() {
+fn a_session_row_carries_its_status_dot_label_and_token_count() {
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
     s.last_usage = Some(usage(72_000));
@@ -244,7 +244,8 @@ fn a_session_row_carries_its_status_dot_label_and_context_meter() {
     assert!(rendered.contains("abcd"), "short id: {rendered}");
     assert!(rendered.contains("idle"), "{rendered}");
     assert!(rendered.contains("72K"), "{rendered}");
-    assert!(rendered.contains("(36%)"), "context meter: {rendered}");
+    // No percentage: the row carries the task number in that space now.
+    assert!(!rendered.contains('%'), "{rendered}");
 }
 
 #[test]
@@ -327,7 +328,7 @@ fn a_starting_session_reads_as_new() {
 }
 
 #[test]
-fn a_detached_head_is_not_shown_as_a_branch() {
+fn no_session_row_draws_a_git_branch() {
     let (_dir, config) = temp_config();
     let mut head = session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle);
     head.git_branch = Some("HEAD".to_string());
@@ -342,8 +343,14 @@ fn a_detached_head_is_not_shown_as_a_branch() {
             &config,
         )
     };
-    assert!(!of(&head).contains("HEAD"));
-    assert!(of(&named).contains("feat/wide"));
+    // The row used to end with the branch in magenta, and this test guarded the
+    // one case that read badly: a detached HEAD showing as the word "HEAD".
+    //
+    // The column is gone entirely. The task number says the same thing in less
+    // space, and every QA branch for one task looks like every other — so the
+    // guard is now the stronger one: no branch at all, named or detached.
+    assert!(!of(&head).contains("HEAD"), "{}", of(&head));
+    assert!(!of(&named).contains("feat/wide"), "{}", of(&named));
 }
 
 #[test]
@@ -406,10 +413,12 @@ fn long_running() -> crate::types::Session {
 
 #[test]
 fn the_context_meter_reads_the_last_message_not_the_running_total() {
-    // GOLDEN, against `formatContextUsage` / `treefmt.js`: the row shows what
-    // the session is holding (input + both cache counters + output of the LAST
-    // assistant message), never the cumulative sum — 87M of lifetime cache
-    // reads is not 43,725% of a context window.
+    // GOLDEN: the row shows what the session is holding (input + both cache
+    // counters + output of the LAST assistant message), never the cumulative
+    // sum — 87M of lifetime cache reads is not one session's context.
+    //
+    // The percentage that made the original bug visible is gone from the row,
+    // so the count itself is now the whole guard.
     let (_dir, config) = temp_config();
     let s = long_running();
     let rendered = line_text(
@@ -421,15 +430,20 @@ fn the_context_meter_reads_the_last_message_not_the_running_total() {
     );
     assert!(rendered.contains("150K"), "last-message tokens: {rendered}");
     assert!(
-        rendered.contains("(75%)"),
-        "last-message percent: {rendered}"
+        !rendered.contains('%'),
+        "the row carries no percentage: {rendered}"
     );
 }
 
 #[test]
-fn a_session_holding_more_than_200k_is_measured_against_the_million_window() {
-    // The `887K (444%)` row: the token count was right and the denominator was
-    // not. A session cannot hold more context than it was given.
+fn a_session_row_shows_its_token_count_and_no_percentage() {
+    // This began as the `887K (444%)` row: the token count was right and the
+    // denominator was not, and the fix measured against the real window.
+    //
+    // The percentage is now gone from the row altogether — it was a share of a
+    // fixed window, which stopped meaning anything once the header gained a real
+    // usage readout, and the space carries the task number instead. The token
+    // count still has to be right, so that half of the original guard stays.
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
     s.last_usage = Some(crate::types::Usage {
@@ -446,12 +460,14 @@ fn a_session_holding_more_than_200k_is_measured_against_the_million_window() {
         &config,
     );
     assert!(rendered.contains("887K"), "{rendered}");
-    assert!(rendered.contains("(89%)"), "{rendered}");
-    assert!(!rendered.contains("444%"), "{rendered}");
+    assert!(
+        !rendered.contains('%'),
+        "the row should carry no percentage: {rendered}"
+    );
 }
 
 #[test]
-fn the_meter_is_the_same_number_over_the_wire_as_it_is_in_process() {
+fn the_token_count_is_the_same_over_the_wire_as_it_is_in_process() {
     // Both transports, one answer: the embedded struct and the one that came
     // back off the daemon's JSON must render the identical row. `wire_session`
     // strips `cumulativeUsage`, so a client that measured the wrong field would
@@ -470,5 +486,106 @@ fn the_meter_is_the_same_number_over_the_wire_as_it_is_in_process() {
         )
     };
     assert_eq!(row(&embedded), row(&wired));
-    assert!(row(&wired).contains("(75%)"), "{}", row(&wired));
+    // The percentage this used to check is gone from the row, so the token
+    // count carries it: a client that measured the wrong field reads zero.
+    assert!(row(&wired).contains("150K"), "{}", row(&wired));
+}
+
+#[test]
+fn a_session_row_shows_the_task_it_is_working() {
+    // The column that replaced the context percentage, and the answer to the
+    // question people actually ask of this list: "which task is that?".
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.task_id = Some(6688);
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    assert!(rendered.contains("#6688"), "{rendered}");
+}
+
+#[test]
+fn a_session_with_no_task_shows_no_task_column() {
+    // Plenty legitimately have none: a hand-started session, a merge-conflict
+    // run, the dashboard's own. The column is blank, not "#null".
+    let (_dir, config) = temp_config();
+    let s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    assert!(!rendered.contains('#'), "{rendered}");
+}
+
+#[test]
+fn the_status_is_the_last_thing_on_the_row() {
+    // Status is the only field whose text changes length constantly. With it at
+    // the end, only its own tail moves and the columns you read stay put.
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.task_id = Some(6688);
+    s.last_usage = Some(crate::types::Usage {
+        input_tokens: Some(72_000),
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+        output_tokens: None,
+    });
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    let at = |needle: &str| {
+        rendered
+            .find(needle)
+            .unwrap_or_else(|| panic!("{needle} missing from {rendered}"))
+    };
+    assert!(at("abcd") < at("#6688"), "{rendered}");
+    assert!(at("#6688") < at("72K"), "{rendered}");
+    assert!(at("72K") < at("idle"), "{rendered}");
+    assert!(rendered.trim_end().ends_with("idle"), "{rendered}");
+}
+
+#[test]
+#[ignore = "prints the rows: cargo test --lib -- --ignored --nocapture ui::tests::tree::print_session_rows"]
+fn print_session_rows() {
+    let (_dir, config) = temp_config();
+    let mut rows = Vec::new();
+    for (id, task, tokens, status) in [
+        ("cbc3", Some(6688_i64), 133_000_u64, SessionStatus::Working),
+        ("9280", Some(6685), 118_000, SessionStatus::Working),
+        ("6c92", None, 116_000, SessionStatus::Idle),
+        ("98f4", Some(6673), 532_000, SessionStatus::Awaiting),
+    ] {
+        let mut s = session(id, "/Users/x/dev/alpha", status);
+        s.task_id = task;
+        s.last_usage = Some(crate::types::Usage {
+            input_tokens: Some(tokens),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+            output_tokens: None,
+        });
+        rows.push(s);
+    }
+    for s in &rows {
+        println!(
+            "{}",
+            line_text(
+                &TreeItem::Session {
+                    project_name: "x/alpha",
+                    session: s
+                },
+                &config
+            )
+        );
+    }
 }

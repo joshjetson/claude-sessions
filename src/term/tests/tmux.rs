@@ -3,8 +3,9 @@
 use crate::term::{
     build_attach_shell_command, build_kill_pane_args, build_new_session_args,
     build_new_window_args, build_send_enter_args, build_send_text_args_chunked,
-    build_viewer_session_name, list_panes_args, parse_pane_list, Pane, DETACHED_HEIGHT,
-    DETACHED_WIDTH, SEND_CHUNK_SIZE,
+    build_viewer_session_name, list_panes_args, parse_client_list, parse_pane_list,
+    parse_session_groups, pick_attached_group_session, Pane, DETACHED_HEIGHT, DETACHED_WIDTH,
+    SEND_CHUNK_SIZE,
 };
 
 #[test]
@@ -44,7 +45,8 @@ fn a_second_launch_adds_a_window_to_the_existing_session() {
 
 #[test]
 fn parses_list_panes_output_into_a_tty_index() {
-    let map = parse_pane_list("/dev/ttys004\t%3\tclaude-sessions\t2\n/dev/ttys009\t%7\tother\t0\n");
+    let map =
+        parse_pane_list("/dev/ttys004\t%3\tclaude-sessions\t2\t0\n/dev/ttys009\t%7\tother\t0\t0\n");
     assert_eq!(map.len(), 2);
     assert_eq!(
         map.get("/dev/ttys004"),
@@ -52,6 +54,7 @@ fn parses_list_panes_output_into_a_tty_index() {
             pane_id: "%3".to_string(),
             session_name: "claude-sessions".to_string(),
             window_index: "2".to_string(),
+            dead: false,
         })
     );
 }
@@ -65,9 +68,16 @@ fn malformed_or_empty_pane_output_yields_an_empty_index() {
 
 #[test]
 fn the_pane_format_asks_for_the_tty_first_because_that_is_the_join_key() {
-    let args = list_panes_args();
-    assert_eq!(args[..3], ["list-panes", "-a", "-F"]);
-    assert!(args[3].starts_with("#{pane_tty}"));
+    let args = list_panes_args("claude-sessions");
+    // Scoped to ONE session, not `-a`. Every viewer is a grouped session sharing
+    // the target's windows, so `-a` returned a copy of every pane per viewer and
+    // the map kept a viewer's name — which is what made viewer names nest.
+    assert_eq!(args[..4], ["list-panes", "-s", "-t", "claude-sessions"]);
+    assert_eq!(args[4], "-F");
+    assert!(args[5].starts_with("#{pane_tty}"));
+    // And it asks whether the pane is dead: macOS reuses pty names, so one tty
+    // can be held by both a live pane and a dead one.
+    assert!(args[5].ends_with("#{pane_dead}"), "{}", args[5]);
 }
 
 #[test]
@@ -170,4 +180,103 @@ fn reuses_an_existing_viewer_rather_than_failing_on_it() {
 fn a_session_name_with_a_quote_in_it_cannot_break_out_of_the_shell_word() {
     let cmd = build_attach_shell_command("it's", "0");
     assert!(cmd.contains("'it'\\''s'"), "{cmd}");
+}
+
+#[test]
+fn a_dead_pane_never_displaces_a_live_one_on_the_same_tty() {
+    // macOS reuses pty device names, so one tty is held by both a live pane and
+    // a finished one. Whichever printed last used to win — one keypress away
+    // from opening a finished task's tab instead of the running one.
+    let live_first = parse_pane_list("/dev/ttys004\t%3\tcs\t2\t0\n/dev/ttys004\t%9\tcs\t7\t1\n");
+    assert_eq!(live_first.get("/dev/ttys004").unwrap().pane_id, "%3");
+
+    // …and the other order, which is the one that used to break.
+    let dead_first = parse_pane_list("/dev/ttys004\t%9\tcs\t7\t1\n/dev/ttys004\t%3\tcs\t2\t0\n");
+    assert_eq!(dead_first.get("/dev/ttys004").unwrap().pane_id, "%3");
+}
+
+#[test]
+fn the_attached_client_decides_which_session_is_driven() {
+    // A viewer is a grouped session sharing the target's windows. Selecting a
+    // window on the TARGET moves a session nobody is looking at.
+    let clients = parse_client_list(
+        "/dev/ttys010\tclaude-sessions-view0\t200\n/dev/ttys011\tunrelated\t300\n",
+    );
+    let groups = parse_session_groups(
+        "claude-sessions\tcsgroup\nclaude-sessions-view0\tcsgroup\nunrelated\t\n",
+    );
+    assert_eq!(
+        pick_attached_group_session(&clients, &groups, "claude-sessions").as_deref(),
+        Some("claude-sessions-view0")
+    );
+}
+
+#[test]
+fn a_client_on_the_target_itself_wins_outright() {
+    let clients = parse_client_list("/dev/ttys010\tclaude-sessions\t100\n");
+    let groups = parse_session_groups("claude-sessions\tcsgroup\n");
+    assert_eq!(
+        pick_attached_group_session(&clients, &groups, "claude-sessions").as_deref(),
+        Some("claude-sessions")
+    );
+}
+
+#[test]
+fn nothing_attached_means_nothing_to_drive() {
+    // The caller then opens a viewer tab instead of silently selecting a window
+    // nobody can see.
+    let clients = parse_client_list("/dev/ttys010\tunrelated\t100\n");
+    let groups = parse_session_groups("claude-sessions\tcsgroup\nunrelated\t\n");
+    assert_eq!(
+        pick_attached_group_session(&clients, &groups, "claude-sessions"),
+        None
+    );
+}
+
+#[test]
+fn clients_come_back_newest_activity_first() {
+    let clients = parse_client_list("/dev/a\ts1\t100\n/dev/b\ts2\t900\n/dev/c\ts3\t500\n");
+    assert_eq!(
+        clients
+            .iter()
+            .map(|c| c.session.as_str())
+            .collect::<Vec<_>>(),
+        ["s2", "s3", "s1"]
+    );
+}
+
+#[test]
+fn malformed_client_and_session_lines_are_skipped() {
+    assert!(parse_client_list("").is_empty());
+    assert!(parse_client_list("garbage\n\n").is_empty());
+    assert!(parse_client_list("\ts1\t5\n").is_empty());
+    assert!(parse_session_groups("").is_empty());
+    assert!(parse_session_groups("\tg\n").is_empty());
+}
+
+#[test]
+fn real_tmux_output_resolves_a_reused_tty_to_the_live_pane() {
+    // Captured verbatim from a live server, where four panes had exited under
+    // `remain-on-exit` and macOS had reused their pty names. ttys006 is held by
+    // BOTH a live pane (%249, window 0) and a dead one (%3, window 3) — and the
+    // dead one prints last, so it used to win.
+    let map = parse_pane_list(
+        "/dev/ttys006\t%249\tclaude-sessions\t0\t0\n\
+         /dev/ttys003\t%1\tclaude-sessions\t1\t1\n\
+         /dev/ttys005\t%2\tclaude-sessions\t2\t1\n\
+         /dev/ttys006\t%3\tclaude-sessions\t3\t1\n\
+         /dev/ttys007\t%250\tclaude-sessions\t4\t0\n\
+         /dev/ttys008\t%251\tclaude-sessions\t5\t0\n",
+    );
+
+    let six = map.get("/dev/ttys006").expect("ttys006");
+    assert_eq!(six.pane_id, "%249", "the dead pane displaced the live one");
+    assert_eq!(six.window_index, "0");
+    assert!(!six.dead);
+
+    // The ttys that only ever held a dead pane still resolve — there is nothing
+    // better to offer, and dropping them would make focus fail with "no pane"
+    // rather than opening the window the session ended in.
+    assert!(map.get("/dev/ttys003").unwrap().dead);
+    assert_eq!(map.len(), 5);
 }

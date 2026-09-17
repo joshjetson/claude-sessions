@@ -298,7 +298,23 @@ pub fn detect_session_status(
     // is what Node's negative `ageSec < 10` comparison did too.
     let age = now.duration_since(session_mtime).unwrap_or(Duration::ZERO);
 
+    // A question or a plan awaiting approval is checked FIRST, ahead of the
+    // freshness rule below. It is unambiguous — the agent has handed control
+    // back — so there is nothing for recency to add, and without this the row
+    // read "working" for the first ten seconds of every question asked.
+    if entry.awaits_user_decision() {
+        return SessionStatus::Awaiting;
+    }
+
     if age < FRESH_WRITE {
+        return SessionStatus::Working;
+    }
+
+    // A tool's output came back and the agent has not spoken yet: it is
+    // thinking, or running the next tool. Nobody is waiting on the person,
+    // however long it takes — a long reasoning block routinely passes thirty
+    // seconds.
+    if entry.is_tool_result() {
         return SessionStatus::Working;
     }
 
@@ -317,12 +333,21 @@ pub fn detect_session_status(
             }
         }
         EntryKind::Assistant => {
+            // A pending tool call is the agent WORKING, with no time limit.
+            // Duration says nothing: a build, a test suite, a browser step and a
+            // sleep loop all run for minutes. Calling those "awaiting" told you a
+            // session wanted you when it was busy — one task sat four minutes
+            // into a shell script reading "awaiting" while its own activity
+            // label said "running command".
+            //
+            // A permission prompt also looks like this and cannot be told apart
+            // from a slow tool in the transcript. That case is handled where it
+            // belongs: the daemon still raises a "may be blocked" NOTIFICATION
+            // after a couple of minutes of silence. An advisory nudge costs
+            // little; a status line that misreports every long-running session
+            // costs attention all day.
             if entry.has_tool_use() {
-                if age < TOOL_CALL_GRACE {
-                    SessionStatus::Working
-                } else {
-                    SessionStatus::Awaiting
-                }
+                SessionStatus::Working
             } else if age < REPLY_GRACE {
                 SessionStatus::AwaitingInput
             } else {
