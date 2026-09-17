@@ -21,7 +21,7 @@ use crate::daemon::client::{self, Response};
 use crate::daemon::server::{self, ServerHandle};
 use crate::daemon::{Engine, EngineOptions, NewNotification};
 use crate::db::Db;
-use crate::scan::Scanner;
+use crate::scan::{Discovery, Scanner};
 use crate::term::SpawnPolicy;
 use crate::types::NotificationStatus;
 
@@ -60,7 +60,7 @@ pub(crate) fn served() -> Served {
         ..EngineOptions::with_scanner(
             paths.clone(),
             config,
-            Scanner::new(FakeProcesses::new(), paths.clone()),
+            Scanner::new(FakeProcesses::new(), paths.clone(), Discovery::Processes),
         )
     }));
     // Port 0: never a fixed one. A suite that pinned a port would fight the

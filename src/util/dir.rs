@@ -131,7 +131,10 @@ pub fn is_within_dir(path: &str, dir: &str) -> bool {
 /// prefix test, which on Windows matched nothing, so every Windows session fell
 /// through to the ungrouped list at the bottom.
 pub fn child_dir_of<'a>(path: &'a str, dir: &str) -> Option<&'a str> {
-    let rest = under(trim_trailing_separators(path), trim_trailing_separators(dir))?;
+    let rest = under(
+        trim_trailing_separators(path),
+        trim_trailing_separators(dir),
+    )?;
     let name = rest.split(SEPARATORS).next().unwrap_or_default();
     (!name.is_empty()).then_some(name)
 }

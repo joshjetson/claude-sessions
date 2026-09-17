@@ -29,6 +29,7 @@ mod protocol;
 mod refresh;
 mod routes;
 mod server;
+mod transcripts;
 mod watchers;
 mod wire;
 
@@ -38,7 +39,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::scan::Scanner;
+use crate::scan::{Discovery, Scanner};
 
 use super::completion::DailyLogRecord;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -83,6 +84,10 @@ pub(crate) struct Setup {
     pub(crate) deploy: Option<super::engine::DeployFetch>,
     /// Refused everywhere but the one test that drives a real child process.
     pub(crate) spawn: Option<SpawnPolicy>,
+    /// How sessions are discovered. `None` is the process table, which is what
+    /// every test but the transcript-only ones wants — they run the layer a
+    /// machine with no readable process table uses, on this one.
+    pub(crate) discovery: Option<Discovery>,
 }
 
 pub(crate) fn engine() -> TestEngine {
@@ -119,7 +124,11 @@ pub(crate) fn engine_with(setup: Setup) -> TestEngine {
         ..EngineOptions::with_scanner(
             paths.clone(),
             config,
-            Scanner::new(procs.clone(), paths.clone()),
+            Scanner::new(
+                procs.clone(),
+                paths.clone(),
+                setup.discovery.unwrap_or(Discovery::Processes),
+            ),
         )
     });
 

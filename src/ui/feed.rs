@@ -25,8 +25,7 @@ use crate::transcript::{Collect, TranscriptCursor};
 use crate::types::{Notification, RawSession, Session, SessionStatus};
 use crate::ui::tree::SessionsByProject;
 use crate::util::{
-    activity_label, detect_session_status, parse_timestamp, project_name,
-    trim_trailing_separators,
+    activity_label, detect_session_status, parse_timestamp, project_name, trim_trailing_separators,
 };
 
 /// Steady-state scan cadence.

@@ -102,8 +102,7 @@ fn config_with_group(path: &str) -> (tempfile::TempDir, crate::config::ConfigHan
     let json = serde_json::json!({ "groups": [{ "name": "Dev", "path": path }] });
     std::fs::write(&paths.config_path, json.to_string()).expect("write config");
     let home = paths.home.clone();
-    let config =
-        crate::config::ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
+    let config = crate::config::ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
     (dir, config, home)
 }
 
@@ -246,6 +245,27 @@ fn a_session_row_carries_its_status_dot_label_and_context_meter() {
     assert!(rendered.contains("idle"), "{rendered}");
     assert!(rendered.contains("72K"), "{rendered}");
     assert!(rendered.contains("(36%)"), "context meter: {rendered}");
+}
+
+#[test]
+fn a_session_with_no_process_still_renders_its_row() {
+    // The transcript-only case: everything the row shows comes from the
+    // transcript, and the columns a process would have fill are simply absent
+    // rather than blanking the line.
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.pids.clear();
+    s.tty = None;
+    s.lstart = None;
+    s.last_usage = Some(usage(72_000));
+    let item = TreeItem::Session {
+        project_name: "x/alpha",
+        session: &s,
+    };
+    let rendered = line_text(&item, &config);
+    assert!(rendered.contains("abcd"), "{rendered}");
+    assert!(rendered.contains("idle"), "{rendered}");
+    assert!(rendered.contains("72K"), "{rendered}");
 }
 
 #[test]
