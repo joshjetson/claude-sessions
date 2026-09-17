@@ -361,3 +361,83 @@ fn the_status_cell_carries_its_own_colour() {
         assert!(role.is_some(), "the status cell lost its style");
     }
 }
+
+#[test]
+fn a_run_row_shows_the_task_name() {
+    // The regression this exists for: the row pushed the PADDING computed from
+    // the name and never pushed the name itself. Every other assertion still
+    // passed — the id was there, the status cell was there, and the row was
+    // comfortably inside the pane because it was missing its widest column. On
+    // screen it rendered as a column of bare ids at ragged indentation, since
+    // the "indent" was really the leftover padding and so varied with the
+    // length of the name nobody could see.
+    let row = row_for(6685, 133);
+    assert!(
+        row.contains("Medication master description length cap"),
+        "the task name is missing from the row: {row:?}"
+    );
+}
+
+#[test]
+fn every_run_row_shows_its_name_at_every_width() {
+    let (board, runs, ask) = fixture();
+    let ctx = run_ctx(&ask);
+    let items = build_board_tree_with_runs(&board, &expanded(), &runs, Some(&ctx));
+
+    for tree_cols in [133_u16, 102, 76, 50] {
+        for item in &items {
+            let BoardItem::QaRunTask {
+                task: Some(task), ..
+            } = item
+            else {
+                continue;
+            };
+            let row = text(&format_board_item(item, &ctx_at(tree_cols)));
+            // The name is truncated at narrow widths, so assert on a prefix
+            // rather than the whole thing.
+            let head: String = task.name.chars().take(8).collect();
+            assert!(
+                row.contains(&head),
+                "at {tree_cols} cols the row lost its name: {row:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_id_column_lands_in_the_same_place_on_every_row() {
+    // What made the bug obvious on screen: the ids stepped left and right by
+    // the length of the missing name. They must line up.
+    let (board, runs, ask) = fixture();
+    let ctx = run_ctx(&ask);
+    let items = build_board_tree_with_runs(&board, &expanded(), &runs, Some(&ctx));
+
+    let columns: Vec<usize> = items
+        .iter()
+        .filter(|i| matches!(i, BoardItem::QaRunTask { .. }))
+        .map(|item| {
+            let row = text(&format_board_item(item, &ctx_at(133)));
+            row.find('#').expect("every run row carries an id")
+        })
+        .collect();
+
+    assert!(columns.len() > 1, "need several rows to compare");
+    assert!(
+        columns.iter().all(|at| *at == columns[0]),
+        "the id column is ragged across rows: {columns:?}"
+    );
+}
+
+#[test]
+#[ignore = "prints the rows for eyeballing: cargo test -- --ignored --nocapture"]
+fn print_the_rows() {
+    let (board, runs, ask) = fixture();
+    let ctx = run_ctx(&ask);
+    let items = build_board_tree_with_runs(&board, &expanded(), &runs, Some(&ctx));
+    for cols in [133_u16, 76] {
+        println!("\n{} cols {}", cols, "-".repeat(cols as usize - 10));
+        for item in &items {
+            println!("{}", text(&format_board_item(item, &ctx_at(cols))));
+        }
+    }
+}
