@@ -41,7 +41,22 @@ pub fn watch_or_drop(state: &mut AppState, project: &str, stage: &str, existing:
 pub fn run_command(state: &mut AppState, command: RunCommand) {
     match command.action {
         RunAction::FillLanes => fill_lanes(state, &command.run_id),
-        RunAction::StartCoordinator => start_coordinator(state, &command.run_id),
+        RunAction::StartCoordinator => start_coordinator(state, &command.run_id, &command.context),
+        // Ask first, then start: the answer comes back as a StartCoordinator
+        // carrying whatever was typed.
+        RunAction::StartCoordinatorWithContext => {
+            let stage = state
+                .board
+                .runs
+                .iter()
+                .find(|run| run.id == command.run_id)
+                .map(|run| run.stage_name.clone())
+                .unwrap_or_default();
+            state.dialog = Some(crate::ui::dialogs::Dialog::RunContext(
+                crate::ui::dialogs::RunContext::new(&command.run_id, &stage),
+            ));
+            state.dirty = true;
+        }
         RunAction::ToggleMode => toggle_mode(state, &command.run_id),
         RunAction::StopWatching => {
             if state.board.stop_watching(&command.run_id) {
@@ -149,7 +164,7 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
 ///
 /// It watches. It does not spawn — admission lives outside any model — and in
 /// shadow mode it answers nothing.
-fn start_coordinator(state: &mut AppState, run_id: &str) {
+fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
     let Some(run) = state
         .board
         .runs
@@ -177,6 +192,11 @@ fn start_coordinator(state: &mut AppState, run_id: &str) {
 
     let mut request =
         crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::QaRun);
+    // Typed at launch, and told to outrank the coordinator's generic
+    // instructions — the same contract every other pipeline gives it.
+    if !extra_context.is_empty() {
+        request = request.context(extra_context);
+    }
     request.extras.insert(
         crate::pipeline::definitions::RUN_ID_VAR.to_string(),
         run.id.clone(),
