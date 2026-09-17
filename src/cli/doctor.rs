@@ -15,8 +15,6 @@
 
 use std::fmt::Write as _;
 use std::fs;
-use std::io::Read as _;
-use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Result;
@@ -29,6 +27,12 @@ use crate::scan::{
     argv_is_interactive_claude, is_interactive_claude, is_script_runtime, session_files_in,
     PlatformProcessSource, ProcessSource,
 };
+
+mod probe;
+#[cfg(test)]
+mod tests;
+
+use probe::{ago, env_or, on_path, pid_list, shebang};
 
 pub fn run(paths: &Paths, config: &ConfigHandle) -> Result<()> {
     print!("{}", report(paths, config));
@@ -108,42 +112,6 @@ fn claude_cli(out: &mut String) {
     }
 }
 
-/// The first executable of this name on `PATH`.
-///
-/// Read here rather than shelled out to `which`: it is four lines, it cannot
-/// fail for lack of a helper binary, and it is the same PATH this process
-/// would launch with — which is the question being asked.
-fn on_path(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|dir| dir.join(program))
-        .find(|candidate| is_executable(candidate))
-}
-
-fn is_executable(path: &Path) -> bool {
-    let Ok(meta) = fs::metadata(path) else {
-        return false;
-    };
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.is_file() && meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        meta.is_file()
-    }
-}
-
-/// The `#!` line, for a file that has one.
-pub(crate) fn shebang(path: &Path) -> Option<String> {
-    let mut head = [0u8; 256];
-    let read = fs::File::open(path).ok()?.read(&mut head).ok()?;
-    let rest = head[..read].strip_prefix(b"#!")?;
-    let end = rest.iter().position(|byte| *byte == b'\n')?;
-    Some(String::from_utf8_lossy(&rest[..end]).trim().to_string())
-}
-
 // --- transcripts ------------------------------------------------------------
 
 fn transcripts(out: &mut String, paths: &Paths) {
@@ -185,12 +153,6 @@ fn transcripts(out: &mut String, paths: &Paths) {
         Some((at, name)) => row(out, "newest", format!("{} ({name})", ago(at))),
         None => row(out, "newest", "none — the store is empty"),
     }
-}
-
-/// How long ago, in the same words the session rows use.
-fn ago(at: SystemTime) -> String {
-    let then = chrono::DateTime::<chrono::Utc>::from(at);
-    crate::util::time_ago(then, chrono::Utc::now())
 }
 
 // --- discovery --------------------------------------------------------------
@@ -266,17 +228,6 @@ fn processes(out: &mut String) {
             ),
         },
     );
-}
-
-fn pid_list(pids: &[u32]) -> String {
-    match pids.is_empty() {
-        true => "none".to_string(),
-        false => pids
-            .iter()
-            .map(u32::to_string)
-            .collect::<Vec<_>>()
-            .join(", "),
-    }
 }
 
 // --- the daemon -------------------------------------------------------------
@@ -390,17 +341,3 @@ fn configuration(out: &mut String, paths: &Paths, config: &ConfigHandle) {
         env_or(&["CLAUDE_SESSIONS_HOME"]),
     );
 }
-
-/// The first of these variables that is set, named, or `unset`. Paths only —
-/// nothing here reads a variable that could hold a secret.
-fn env_or(keys: &[&str]) -> String {
-    for key in keys {
-        if let Some(value) = std::env::var_os(key).filter(|value| !value.is_empty()) {
-            return format!("{key}={}", value.to_string_lossy());
-        }
-    }
-    "unset".to_string()
-}
-
-#[cfg(test)]
-mod tests;

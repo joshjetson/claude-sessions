@@ -280,9 +280,11 @@ pub fn render_content(
 
 /// The one-row status bar. `hints` are drawn dim and their keys bright, which is
 /// what makes a dense row of shortcuts scannable at a glance.
-/// The status bar. `feed` names where the sessions on screen came from and how
-/// stale they are — it sits beside the clock rather than among the key hints
-/// because it is a fact about the screen, not something to press.
+///
+/// `feed` names where the sessions on screen came from and how stale they are.
+/// It sits beside the clock rather than among the hints because it is a fact
+/// about the screen, not something to press — and it goes first so that the
+/// narrowest terminal still shows it while the hints are trimmed away.
 pub fn render_status(
     frame: &mut Frame,
     area: Rect,

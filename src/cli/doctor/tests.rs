@@ -5,7 +5,8 @@ use std::fs;
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::{report, shebang};
+use super::probe::shebang;
+use super::report;
 use crate::config::{ConfigHandle, EnvOverrides};
 use crate::paths::Paths;
 use crate::test_support::StubDaemon;
