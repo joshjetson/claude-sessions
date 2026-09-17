@@ -1,4 +1,5 @@
-//! SIGINT and SIGTERM, without a dependency.
+//! Being told to stop, without a dependency: SIGINT and SIGTERM on Unix, the
+//! console control events on Windows.
 //!
 //! `signal(2)` is two integers and a function pointer, and std already links
 //! libc everywhere this runs — declaring it here is cheaper than putting

@@ -170,20 +170,26 @@ pub trait TerminalDriver: Send + Sync {
 pub struct NullDriver;
 
 const NO_DRIVER: &str = "No terminal driver available.";
-const NO_DRIVER_LAUNCH: &str =
-    "No terminal driver available. Install tmux, or run under iTerm2 on macOS.";
 
-/// A refusal, plus the platform note where the reason is a phase rather than a
-/// missing install.
+/// The null driver's answer.
 ///
-/// On Unix the error already says what to install, so the hint stays empty and
-/// nothing about the existing answers changes; on a platform with no driver
-/// implementation at all, a person who installs tmux is owed the reason that
-/// still did not help.
-fn no_driver(error: &'static str) -> DriverResult {
+/// `advise` is set for `launch`, the one call where what to do about it earns
+/// the second sentence — the others happen inside a flow that has already said
+/// it. That sentence comes from [`crate::platform::NO_TERMINAL_HINT`], because
+/// what to do differs: on Unix it is installing something, and on a platform
+/// the drivers have not reached yet installing tmux would not have helped.
+///
+/// It goes in the error rather than only in `hint` because the error is what a
+/// caller shows; the hint is carried as well, for one that starts reading it.
+fn no_driver(advise: bool) -> DriverResult {
+    let error = if advise {
+        format!("{NO_DRIVER} {}", crate::platform::NO_TERMINAL_HINT)
+    } else {
+        NO_DRIVER.to_string()
+    };
     DriverResult {
         ok: false,
-        error: Some(error.to_string()),
+        error: Some(error),
         hint: crate::platform::terminal_notice(),
     }
 }
@@ -198,18 +204,18 @@ impl TerminalDriver for NullDriver {
     }
 
     fn launch(&self, _request: &LaunchRequest) -> DriverResult {
-        no_driver(NO_DRIVER_LAUNCH)
+        no_driver(true)
     }
 
     fn send_text(&self, _session: &SessionRef, _text: &str) -> DriverResult {
-        no_driver(NO_DRIVER)
+        no_driver(false)
     }
 
     fn focus(&self, _session: &SessionRef) -> DriverResult {
-        no_driver(NO_DRIVER)
+        no_driver(false)
     }
 
     fn close(&self, _session: &SessionRef) -> DriverResult {
-        no_driver(NO_DRIVER)
+        no_driver(false)
     }
 }
