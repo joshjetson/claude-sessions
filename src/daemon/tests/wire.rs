@@ -3,10 +3,13 @@
 //! The heavy-field stripping is ported from the `payload trimming` block of
 //! `test/daemon.test.js`; Phase 6 serialises exactly what these tests inspect.
 
-use std::time::Duration;
+use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 use super::*;
+use crate::config::{ConfigHandle, EnvOverrides};
 use crate::daemon::{wire_session, NewNotification, NOTIFICATION_LIMIT};
+use crate::paths::Paths;
 use crate::types::{
     CumulativeUsage, Notification, NotificationKind, NotificationLevel, NotificationStatus, Prompt,
     Usage,
@@ -394,4 +397,190 @@ fn an_event_serialises_as_its_wire_name_and_camel_case_payload() {
         assert_eq!(event.name(), name);
         assert_eq!(serde_json::to_value(&event).unwrap()["event"], name);
     }
+}
+
+// --- the shape itself, against the Node payload -----------------------------
+
+/// Everything a row can carry, filled in, so the golden below pins every key.
+fn fully_populated() -> Session {
+    Session {
+        session_id: "3c1ff751-0aff-4c15-b26d-a57bc0d60613".to_string(),
+        pids: vec![17400, 17422],
+        cwd: "/Users/x/dev/alpha".to_string(),
+        tty: Some("ttys004".to_string()),
+        lstart: Some("Mon Jul 20 13:42:29 2026".to_string()),
+        session_file: Some(PathBuf::from("/transcripts/alpha.jsonl")),
+        session_mtime: SystemTime::UNIX_EPOCH + Duration::from_millis(1_789_656_676_090),
+        session_size: Some(313_144_173),
+        status: SessionStatus::Working,
+        activity_detail: "reading".to_string(),
+        starting: false,
+        git_branch: Some("feat/wire".to_string()),
+        last_timestamp: Some("2026-09-17T14:51:15.961Z".to_string()),
+        last_usage: Some(Usage {
+            input_tokens: Some(2),
+            cache_creation_input_tokens: Some(2_847),
+            cache_read_input_tokens: Some(142_784),
+            output_tokens: Some(916),
+        }),
+        last_entry: Some(tool_entry("Read")),
+        cumulative_usage: Some(CumulativeUsage {
+            input_tokens: 196,
+            ..CumulativeUsage::default()
+        }),
+        prompts: vec![Prompt {
+            text: "go".to_string(),
+            timestamp: "2026-09-17T14:00:00.000Z".to_string(),
+        }],
+        task_id: Some(5238),
+    }
+}
+
+#[test]
+fn the_wire_shape_is_the_node_payload_key_for_key() {
+    // GOLDEN. This JSON is the protocol: `wireSession` in the Node engine, as
+    // `server.js` broadcasts it. Names, camelCase, and units — `sessionMtime`
+    // is epoch milliseconds (Node sends `stat.mtimeMs`), not a struct, and the
+    // three heavy fields are absent rather than null.
+    let json = serde_json::to_value(wire_session(&fully_populated())).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "sessionId": "3c1ff751-0aff-4c15-b26d-a57bc0d60613",
+            "pids": [17400, 17422],
+            "cwd": "/Users/x/dev/alpha",
+            "tty": "ttys004",
+            "lstart": "Mon Jul 20 13:42:29 2026",
+            "sessionFile": "/transcripts/alpha.jsonl",
+            "sessionMtime": 1_789_656_676_090u64,
+            "sessionSize": 313_144_173,
+            "status": "working",
+            "activityDetail": "reading",
+            "starting": false,
+            "gitBranch": "feat/wire",
+            "lastTimestamp": "2026-09-17T14:51:15.961Z",
+            "lastUsage": {
+                "input_tokens": 2,
+                "cache_creation_input_tokens": 2_847,
+                "cache_read_input_tokens": 142_784,
+                "output_tokens": 916,
+            },
+            "taskId": 5238,
+        })
+    );
+}
+
+#[test]
+fn a_session_survives_the_real_wire_path_and_still_renders_as_working() {
+    // The bug this rules out: a client that recomputed status from the stripped
+    // `lastEntry` would read `Idle` for every row. Server → JSON → client
+    // structs → the row the tree draws.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::for_test(dir.path());
+    let config = ConfigHandle::load_from(&paths.config_path, &paths.home, EnvOverrides::default());
+
+    let json = serde_json::to_string(&wire_session(&fully_populated())).unwrap();
+    let received: Session = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(received.status, SessionStatus::Working);
+    assert_eq!(received.activity_detail, "reading");
+    assert_eq!(received.git_branch.as_deref(), Some("feat/wire"));
+    assert_eq!(received.lstart.as_deref(), Some("Mon Jul 20 13:42:29 2026"));
+    assert_eq!(
+        received.session_file.as_deref(),
+        Some(std::path::Path::new("/transcripts/alpha.jsonl")),
+        "the conversation pane opens this file itself — it must survive"
+    );
+    assert_eq!(received.session_mtime, fully_populated().session_mtime);
+    assert!(received.last_entry.is_none(), "still stripped");
+
+    let row: String = crate::ui::tree::format_tree_item(
+        &crate::ui::tree::TreeItem::Session {
+            project_name: "x/alpha",
+            session: &received,
+        },
+        &config,
+    )
+    .spans
+    .iter()
+    .map(|span| span.content.as_ref())
+    .collect();
+    assert!(row.contains("reading..."), "{row}");
+    assert!(row.contains("feat/wire"), "{row}");
+    assert!(!row.contains("idle"), "{row}");
+}
+
+#[test]
+fn a_payload_from_the_legacy_tool_still_parses() {
+    // Cross-compat, the direction that used to fail hard: Node sends pids as
+    // strings (its scanner regexes them out of `ps`) and an empty `sessionFile`
+    // for a placeholder. A strict reader rejected the session, which dropped
+    // the whole tick and showed an empty tree.
+    let node = r#"{
+        "sessionId": "starting-937",
+        "pids": ["937", "938"],
+        "cwd": "/Users/x/dev/alpha",
+        "tty": "ttys004",
+        "lstart": "Mon Jul 20 13:42:29 2026",
+        "sessionFile": "",
+        "sessionMtime": 1789656676090.5,
+        "status": "starting",
+        "activityDetail": "",
+        "starting": true,
+        "todosFormatted": "1 todo"
+    }"#;
+    let session: Session = serde_json::from_str(node).unwrap();
+    assert_eq!(session.pids, vec![937, 938]);
+    assert_eq!(session.status, SessionStatus::Starting);
+    assert!(session.starting);
+    assert_eq!(
+        session.session_mtime,
+        SystemTime::UNIX_EPOCH + Duration::from_millis(1_789_656_676_090)
+    );
+}
+
+#[test]
+fn a_10x_daemons_session_time_still_parses() {
+    // Our own 1.0 daemons serialised `SystemTime`'s struct form. A dashboard
+    // that upgraded before the daemon did must still read them.
+    let legacy = r#"{
+        "sessionId": "s1",
+        "pids": [1],
+        "cwd": "/x",
+        "sessionMtime": {"secs_since_epoch": 1789656676, "nanos_since_epoch": 90000000},
+        "status": "working",
+        "activityDetail": "reading"
+    }"#;
+    let session: Session = serde_json::from_str(legacy).unwrap();
+    assert_eq!(
+        session.session_mtime,
+        SystemTime::UNIX_EPOCH + Duration::from_millis(1_789_656_676_090)
+    );
+    assert_eq!(session.status, SessionStatus::Working);
+}
+
+#[test]
+fn a_snapshot_with_keys_we_do_not_know_still_delivers_the_ones_we_do() {
+    // Tolerance both ways: the legacy snapshot nests `taskSessions` inside
+    // `sessions` and sends `blockedTasks` as entry pairs. Whatever else moves,
+    // the sessions themselves must still arrive.
+    let node = r#"{
+        "sessions": {
+            "byProject": {"x/alpha": [{
+                "sessionId": "s1", "pids": [7], "cwd": "/Users/x/dev/alpha",
+                "sessionMtime": 1789656676090, "status": "working",
+                "activityDetail": "reading"
+            }]},
+            "stats": {"totalSessions": 1, "totalProjects": 1},
+            "taskSessions": {}, "archivedTasks": []
+        },
+        "discoveredDirs": {"/Users/x/dev": ["alpha"]},
+        "notifications": [],
+        "opticsTasks": []
+    }"#;
+    let snapshot: crate::daemon::Snapshot = serde_json::from_str(node).unwrap();
+    let sessions = &snapshot.sessions.by_project["x/alpha"];
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].status, SessionStatus::Working);
+    assert_eq!(snapshot.sessions.stats.total_sessions, 1);
 }

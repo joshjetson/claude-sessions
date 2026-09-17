@@ -20,6 +20,7 @@ use crate::daemon::{protocol, server, Engine, EngineOptions};
 use crate::paths::Paths;
 use crate::term::SpawnPolicy;
 
+mod doctor;
 mod hooks;
 mod journal;
 pub(crate) mod markers;
@@ -105,6 +106,8 @@ pub struct Cli {
 pub enum Command {
     /// Run the background daemon, or ask about one: `daemon status`, `daemon stop`
     Daemon(DaemonArgs),
+    /// Print a diagnosis of this machine's setup, for pasting into a bug report
+    Doctor,
     /// Report the calling session finished its work
     Done(DoneArgs),
     /// Fire a notification for the calling session
@@ -258,6 +261,7 @@ pub fn run() -> Result<()> {
     match cli.command {
         None => crate::ui::run_dashboard(paths, config, SpawnPolicy::detect()),
         Some(Command::Daemon(args)) => daemon(paths, config, args),
+        Some(Command::Doctor) => doctor::run(&paths, &config),
         Some(Command::Notify(args)) => markers::notify(&paths, &config, args),
         Some(Command::Done(args)) => markers::done(&paths, args),
         Some(Command::Blocked(args)) => markers::blocked(&paths, args),
@@ -284,6 +288,15 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
         Some("status") => {
             let Some(info) = client::probe(port, client::PROBE_TIMEOUT) else {
                 println!("no daemon on :{port}");
+                // Whatever it printed on the way down is the only thing that
+                // can explain why there is nothing there now.
+                if let Some(error) = protocol::daemon_log_last_error(&paths) {
+                    println!(
+                        "last error in {}:",
+                        protocol::daemon_log_path(&paths).display()
+                    );
+                    println!("  {error}");
+                }
                 std::process::exit(1);
             };
             println!(
@@ -292,6 +305,14 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
                 info.uptime.round(),
                 info.clients
             );
+            // WHICH daemon, always — the question nobody thought to ask while
+            // two programs of the same name shared one port.
+            println!("  running: {}", info.describe());
+            if !info.is_this_implementation() {
+                println!(
+                    "  this build will NOT mirror it: a dashboard started now scans on its own."
+                );
+            }
             Ok(())
         }
         Some("stop") => {
@@ -299,6 +320,10 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
                 println!("no daemon on :{port}");
                 std::process::exit(1);
             };
+            // Named before it is stopped, and stopped either way: an explicit
+            // command is exactly how somebody clears a port that the wrong
+            // program is holding.
+            println!("stopping {} on :{port}", info.describe());
             if !DaemonClient::new(port).shutdown() {
                 fail(format!("could not stop the daemon on :{port}"));
             }

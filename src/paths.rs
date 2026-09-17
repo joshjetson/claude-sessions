@@ -25,6 +25,11 @@ pub struct PathEnv {
     pub db: Option<PathBuf>,
     /// `CLAUDE_PROJECTS_DIR` — relocates Claude Code's transcript store.
     pub projects_dir: Option<PathBuf>,
+    /// `CLAUDE_CONFIG_DIR` — Claude Code's own variable for relocating the
+    /// whole of `~/.claude`. Someone who exports it has their transcripts
+    /// under it, and a dashboard that kept reading `~/.claude/projects` would
+    /// find an empty directory and report no sessions.
+    pub config_dir: Option<PathBuf>,
     /// `QA_SCREENSHOT_ROOT` — the QAden plugin's own override, read here so the
     /// run-state reader and QAden itself agree on where a task's QA directory
     /// is.
@@ -37,6 +42,7 @@ impl PathEnv {
             sessions_home: env_path("CLAUDE_SESSIONS_HOME"),
             db: env_path("CLAUDE_SESSIONS_DB"),
             projects_dir: env_path("CLAUDE_PROJECTS_DIR"),
+            config_dir: env_path("CLAUDE_CONFIG_DIR"),
             qa_root: env_path("QA_SCREENSHOT_ROOT"),
         }
     }
@@ -73,7 +79,7 @@ pub struct Paths {
     /// `notify.json` — how the helper CLIs find the daemon's port.
     pub port_file: PathBuf,
     pub db_path: PathBuf,
-    /// `~/.claude`.
+    /// `~/.claude`, or wherever `CLAUDE_CONFIG_DIR` puts it.
     pub claude_dir: PathBuf,
     /// Claude Code's transcript store, `~/.claude/projects` by default.
     pub projects_dir: PathBuf,
@@ -105,7 +111,13 @@ impl Paths {
             .sessions_home
             .clone()
             .unwrap_or_else(|| default_runtime.clone());
-        let claude_dir = home.join(".claude");
+        // Claude Code's own override wins over the default location, and
+        // `CLAUDE_PROJECTS_DIR` still wins over both — it names one directory
+        // where this names the whole tree.
+        let claude_dir = env
+            .config_dir
+            .clone()
+            .unwrap_or_else(|| home.join(".claude"));
         Paths {
             tasks_dir: runtime_dir.join("tasks"),
             logs_dir: runtime_dir.join("logs"),
@@ -154,6 +166,7 @@ impl Paths {
                 sessions_home: Some(root.join("runtime")),
                 db: None,
                 projects_dir: Some(root.join("projects")),
+                config_dir: None,
                 qa_root: Some(root.join("qaden")),
             },
         );
@@ -198,9 +211,69 @@ impl Paths {
 
     /// Claude Code stores a project's transcripts under the cwd with every `/`
     /// replaced by `-`; see [`crate::util::cwd_to_project_dir`].
+    ///
+    /// On Windows the name is found by reading the listing instead — see
+    /// [`project_dir_for`].
     pub fn project_transcripts(&self, cwd: &str) -> PathBuf {
-        self.projects_dir.join(crate::util::cwd_to_project_dir(cwd))
+        project_dir_for(&self.projects_dir, cwd, MATCH_BY_LISTING)
     }
+}
+
+/// Whether a cwd has to be matched against the directory listing rather than
+/// encoded into a name directly.
+///
+/// On Unix the encoding is known and exercised by every session on every
+/// machine this tool has ever run on: `/` becomes `-`, and the name can be
+/// built without reading anything. On Windows it is NOT known. The documented
+/// rule says "every non-alphanumeric character becomes `-`", which would make
+/// `C:\Users\jane` into `C--Users-jane`; Claude Code might equally collapse the
+/// run and write `C-Users-jane`, and no build here has been able to check
+/// against a real install. Guessing wrong means a Windows machine finds no
+/// transcripts at all and the sessions list is silently empty.
+///
+/// So on Windows the guess is not made: the directory that is already there is
+/// matched back to the cwd instead, which is right for either spelling and for
+/// any spelling a future release picks.
+const MATCH_BY_LISTING: bool = cfg!(windows);
+
+/// The transcript directory for `cwd` under `projects_dir`.
+///
+/// `by_listing` is [`MATCH_BY_LISTING`], passed rather than read so the Windows
+/// behaviour is testable everywhere. With it off this is one `join` and no
+/// syscall — the Unix path, unchanged and deliberately cheap, because the
+/// scanner asks this per project per tick.
+///
+/// With it on, the listing decides: both sides are reduced to their letters and
+/// digits ([`normalise_name`]) and the directory whose name reduces to the same
+/// thing as the cwd wins. `C--Users-jane-app`, `C-Users-jane-app` and
+/// `C:\Users\jane\app` all reduce to `cusersjaneapp`, so any of the plausible
+/// encodings resolves without this file knowing which one is real. Ties go to
+/// the first name in sort order, so the answer does not depend on readdir
+/// order.
+///
+/// The encoded name is still the answer when nothing matches — a project whose
+/// directory does not exist yet has to resolve to something, and an empty
+/// directory reads as no sessions either way.
+pub(crate) fn project_dir_for(projects_dir: &Path, cwd: &str, by_listing: bool) -> PathBuf {
+    let encoded = projects_dir.join(crate::util::cwd_to_project_dir(cwd));
+    if !by_listing {
+        return encoded;
+    }
+    matching_project_dir(projects_dir, cwd).unwrap_or(encoded)
+}
+
+fn matching_project_dir(projects_dir: &Path, cwd: &str) -> Option<PathBuf> {
+    let target = crate::util::normalise_name(cwd);
+    if target.is_empty() {
+        return None;
+    }
+    std::fs::read_dir(projects_dir)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.file_name())
+        .filter(|name| crate::util::normalise_name(&name.to_string_lossy()) == target)
+        .min()
+        .map(|name| projects_dir.join(name))
 }
 
 /// The variables that name the user's home directory, most authoritative first.
@@ -247,6 +320,7 @@ mod tests {
             sessions_home: home.map(PathBuf::from),
             db: db.map(PathBuf::from),
             projects_dir: projects.map(PathBuf::from),
+            config_dir: None,
             qa_root: None,
         }
     }
@@ -385,12 +459,114 @@ mod tests {
     }
 
     #[test]
+    fn claude_code_s_own_config_dir_variable_moves_the_whole_claude_tree() {
+        // Claude Code documents CLAUDE_CONFIG_DIR as the way to relocate
+        // `~/.claude`; a machine that exports it keeps its transcripts there,
+        // and a dashboard reading the default path reports no sessions while
+        // sessions are running.
+        let moved = Paths::resolve(
+            Path::new("/home/dev"),
+            &PathEnv {
+                config_dir: Some(PathBuf::from("/opt/claude-home")),
+                ..PathEnv::default()
+            },
+        );
+        assert_eq!(moved.claude_dir, Path::new("/opt/claude-home"));
+        assert_eq!(moved.projects_dir, Path::new("/opt/claude-home/projects"));
+        assert_eq!(moved.todos_dir, Path::new("/opt/claude-home/todos"));
+
+        // The narrower variable still wins: it names one directory where
+        // CLAUDE_CONFIG_DIR names the tree it usually sits in.
+        let both = Paths::resolve(
+            Path::new("/home/dev"),
+            &PathEnv {
+                config_dir: Some(PathBuf::from("/opt/claude-home")),
+                projects_dir: Some(PathBuf::from("/srv/transcripts")),
+                ..PathEnv::default()
+            },
+        );
+        assert_eq!(both.projects_dir, Path::new("/srv/transcripts"));
+        assert_eq!(both.todos_dir, Path::new("/opt/claude-home/todos"));
+    }
+
+    #[test]
     fn transcripts_live_under_the_encoded_cwd() {
         let p = Paths::resolve(Path::new("/home/dev"), &PathEnv::default());
         assert_eq!(
             p.project_transcripts("/Users/k/dev/app"),
             Path::new("/home/dev/.claude/projects/-Users-k-dev-app")
         );
+    }
+
+    /// A projects directory holding one arbitrarily-named transcript folder.
+    fn projects_holding(name: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir(dir.path().join(name)).expect("mkdir");
+        dir
+    }
+
+    #[test]
+    fn the_unix_path_is_built_not_looked_up() {
+        // No syscall, and the answer does not depend on what is on disk: a
+        // directory spelled some other way is NOT what `/Users/k/dev/app`
+        // resolves to, and a project with no directory yet still resolves.
+        let dir = projects_holding("-Users-k-dev-app-something-else");
+        assert_eq!(
+            project_dir_for(dir.path(), "/Users/k/dev/app", false),
+            dir.path().join("-Users-k-dev-app")
+        );
+    }
+
+    #[test]
+    fn a_windows_cwd_resolves_to_whichever_spelling_is_on_disk() {
+        // The encoding Claude Code uses for a drive letter is NOT confirmed:
+        // `C:\Users\jane\app` could be written either of these ways. Both
+        // resolve, because the listing is matched back to the cwd instead of a
+        // name being guessed — which is the whole point, since guessing wrong
+        // means an empty sessions list on a machine that is running all day.
+        for spelling in ["C--Users-jane-app", "C-Users-jane-app"] {
+            let dir = projects_holding(spelling);
+            assert_eq!(
+                project_dir_for(dir.path(), "C:\\Users\\jane\\app", true),
+                dir.path().join(spelling),
+                "{spelling} did not resolve"
+            );
+        }
+    }
+
+    #[test]
+    fn matching_by_listing_ignores_punctuation_and_case_but_not_the_path() {
+        let dir = projects_holding("c--users-jane-app");
+        // Same directory, whatever separators the cwd was written with.
+        for cwd in ["C:\\Users\\Jane\\app", "C:/Users/Jane/app"] {
+            assert_eq!(
+                project_dir_for(dir.path(), cwd, true),
+                dir.path().join("c--users-jane-app")
+            );
+        }
+        // A different project is not matched to it: it falls back to the
+        // encoded name, whichever way this build spells one.
+        let other = "C:\\Users\\jane\\other";
+        assert_eq!(
+            project_dir_for(dir.path(), other, true),
+            dir.path().join(crate::util::cwd_to_project_dir(other))
+        );
+    }
+
+    #[test]
+    fn an_unmatched_cwd_falls_back_to_the_encoded_name() {
+        // Nothing on disk yet — a project nobody has run Claude Code in. The
+        // name has to be relative, or `join` would drop the base and point the
+        // scan at the repository itself.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cwd = "C:\\Users\\jane\\app";
+        let resolved = project_dir_for(dir.path(), cwd, true);
+        assert_eq!(
+            resolved,
+            dir.path().join(crate::util::cwd_to_project_dir(cwd))
+        );
+        assert!(resolved.starts_with(dir.path()), "{}", resolved.display());
+        assert_eq!(project_dir_for(dir.path(), "", true), dir.path().to_owned());
     }
 
     #[test]

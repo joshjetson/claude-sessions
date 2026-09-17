@@ -7,22 +7,55 @@
 //! a tick cheap (an `lsof` per process per second was ~70ms of every scan).
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 use crate::paths::Paths;
-use crate::transcript::TaskRefCache;
+use crate::transcript::{SessionCwdCache, TaskRefCache};
 use crate::types::{RawSession, SessionStatus};
 use crate::util::{cwd_to_project_dir, start_time_instant};
 
 use super::detect::{
-    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+    argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
+    is_script_runtime, launch_task_id, session_id_flag,
 };
-use super::files::SessionFilesCache;
+use super::files::{current_stat, SessionFilesCache};
 use super::pairing::pair_processes_to_sessions;
 use super::process::{ClaudeProcess, PlatformProcessSource, ProcessRow, ProcessSource};
+use super::transcripts::transcript_sessions;
 use std::cmp::Reverse;
+
+/// Where a tick's sessions come from.
+///
+/// Not a `cfg`: the whole transcript layer is compiled, tested and reasoned
+/// about on every platform, and a test picks the variant it wants rather than
+/// the compiler picking for it. [`Discovery::for_platform`] is what production
+/// asks, and it asks [`crate::platform::LIVE_DISCOVERY`] — so the day native
+/// process discovery lands on Windows, that flag flips and this layer switches
+/// off with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Discovery {
+    /// The process table names the sessions, and the transcripts are matched to
+    /// the processes that are writing them. Every session carries a pid, a tty
+    /// and a start time, and everything in the app that acts on a session
+    /// works.
+    Processes,
+    /// The transcript store is the only evidence there is: a file written to
+    /// recently is a session. No pid, no tty, no start time — see
+    /// [`super::transcripts`] for what that costs and why it still beats an
+    /// empty screen.
+    Transcripts,
+}
+
+impl Discovery {
+    pub const fn for_platform() -> Self {
+        if crate::platform::LIVE_DISCOVERY {
+            Discovery::Processes
+        } else {
+            Discovery::Transcripts
+        }
+    }
+}
 
 /// What one `ps -o command=` line said about a process. Fixed for its lifetime,
 /// so it is read once.
@@ -32,6 +65,23 @@ struct ArgvInfo {
     /// A helper in its flag spelling (`claude --bg-pty-host`), invisible to
     /// `ps -o comm`.
     helper: bool,
+    /// The command line says this is an interactive session. Only consulted
+    /// for a process whose `comm` is a [script
+    /// runtime](is_script_runtime) — an npm or bun install of Claude Code,
+    /// which `ps` reports as `node`.
+    claude: bool,
+}
+
+impl ArgvInfo {
+    /// Everything one command line is read for, in one place — the three
+    /// questions used to be asked at three different points in the tick.
+    fn read(argv: &str) -> Self {
+        ArgvInfo {
+            session_id: session_id_flag(argv),
+            helper: is_helper_flag(argv),
+            claude: argv_is_interactive_claude(argv),
+        }
+    }
 }
 
 /// The scan, with its caches.
@@ -39,6 +89,7 @@ struct ArgvInfo {
 pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     source: S,
     paths: Paths,
+    discovery: Discovery,
     /// A process's working directory is fixed for its lifetime, so each pid is
     /// `lsof`ed once. All three pid caches are pruned to the live pids every
     /// tick, so none of them can grow unbounded.
@@ -47,6 +98,10 @@ pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     launch_tasks: HashMap<u32, Option<i64>>,
     files: SessionFilesCache,
     task_refs: TaskRefCache,
+    /// Where each transcript says it was started. Only [`Discovery::Transcripts`]
+    /// asks — with a process there is an `lsof` answer, which is the process's
+    /// own truth rather than what it wrote down.
+    session_cwds: SessionCwdCache,
 }
 
 impl Scanner<PlatformProcessSource> {
@@ -54,20 +109,26 @@ impl Scanner<PlatformProcessSource> {
     /// platform has them, and a source that answers "no processes" where it
     /// does not. See [`crate::platform::LIVE_DISCOVERY`].
     pub fn system(paths: Paths) -> Self {
-        Scanner::new(PlatformProcessSource::default(), paths)
+        Scanner::new(
+            PlatformProcessSource::default(),
+            paths,
+            Discovery::for_platform(),
+        )
     }
 }
 
 impl<S: ProcessSource> Scanner<S> {
-    pub fn new(source: S, paths: Paths) -> Self {
+    pub fn new(source: S, paths: Paths, discovery: Discovery) -> Self {
         Scanner {
             source,
             paths,
+            discovery,
             cwds: HashMap::new(),
             argv: HashMap::new(),
             launch_tasks: HashMap::new(),
             files: SessionFilesCache::new(),
             task_refs: TaskRefCache::new(),
+            session_cwds: SessionCwdCache::new(),
         }
     }
 
@@ -75,6 +136,13 @@ impl<S: ProcessSource> Scanner<S> {
     /// which asks the same question of the same files.
     pub fn task_refs(&mut self) -> &mut TaskRefCache {
         &mut self.task_refs
+    }
+
+    /// Where each transcript says it was started, for the layer that has no
+    /// process to ask. Exposed for the same reason [`Scanner::task_refs`] is:
+    /// one cache, asserted on rather than assumed.
+    pub fn session_cwds(&mut self) -> &mut SessionCwdCache {
+        &mut self.session_cwds
     }
 
     /// The cached directory listings, for a caller that wants a project's
@@ -87,26 +155,27 @@ impl<S: ProcessSource> Scanner<S> {
     /// task resolved. Helpers, scratch-directory workers and processes whose
     /// cwd could not be read are already gone.
     pub fn processes(&mut self) -> Vec<ClaudeProcess> {
-        let rows: Vec<_> = self
-            .source
-            .list()
-            .into_iter()
-            .filter(|row| is_interactive_claude(&row.comm))
-            .collect();
-
-        let alive: HashSet<u32> = rows.iter().map(|row| row.pid).collect();
+        let listing = self.source.list();
+        let alive: HashSet<u32> = listing.iter().map(|row| row.pid).collect();
         self.cwds.retain(|pid, _| alive.contains(pid));
         self.argv.retain(|pid, _| alive.contains(pid));
         self.launch_tasks.retain(|pid, _| alive.contains(pid));
 
-        let need_cwd = uncached(&rows, &self.cwds);
-        if !need_cwd.is_empty() {
-            // A cwd that could not be read is NOT remembered: that process is
-            // asked again next tick rather than being dropped for good.
-            self.cwds.extend(self.source.cwds(&need_cwd));
-        }
+        // Two ways a row can be a session. Its own name settles it — a native
+        // install, which is all the Node original ever handled — or its name is
+        // only the script runtime executing it, and then nothing but the
+        // command line can say. The second group is why a machine with Claude
+        // Code installed from npm showed an empty dashboard.
+        let considered: Vec<ProcessRow> = listing
+            .into_iter()
+            .filter(|row| is_interactive_claude(&row.comm) || is_script_runtime(&row.comm))
+            .collect();
 
-        let need_argv = uncached(&rows, &self.argv);
+        // ONE batched `ps -o command=` for both groups, and once per pid ever —
+        // a command line is fixed for a process's lifetime. Deliberately ahead
+        // of the cwd read below: `lsof` costs ~100ms a process and must never
+        // be paid for every `node` on the machine.
+        let need_argv = uncached(&considered, &self.argv);
         if !need_argv.is_empty() {
             let lines = self.source.argv(&need_argv);
             for pid in &need_argv {
@@ -114,14 +183,26 @@ impl<S: ProcessSource> Scanner<S> {
                 // A process that exited between the two calls gets a definite
                 // answer too, so it is not re-queried on every tick for as long
                 // as it stays in the listing.
-                self.argv.insert(
-                    *pid,
-                    ArgvInfo {
-                        session_id: session_id_flag(cmd),
-                        helper: is_helper_flag(cmd),
-                    },
-                );
+                self.argv.insert(*pid, ArgvInfo::read(cmd));
             }
+        }
+
+        // A runtime row has to be vouched for by its command line; a named row
+        // is already in, and its argv only adds the session id and the
+        // flag-spelled helper check further down.
+        let rows: Vec<ProcessRow> = considered
+            .into_iter()
+            .filter(|row| {
+                is_interactive_claude(&row.comm)
+                    || self.argv.get(&row.pid).is_some_and(|argv| argv.claude)
+            })
+            .collect();
+
+        let need_cwd = uncached(&rows, &self.cwds);
+        if !need_cwd.is_empty() {
+            // A cwd that could not be read is NOT remembered: that process is
+            // asked again next tick rather than being dropped for good.
+            self.cwds.extend(self.source.cwds(&need_cwd));
         }
 
         let need_env = uncached(&rows, &self.launch_tasks);
@@ -153,11 +234,25 @@ impl<S: ProcessSource> Scanner<S> {
             .collect()
     }
 
-    /// One tick: every live session, grouped by project directory.
+    /// One tick: every live session, however this platform can see them.
     ///
     /// `now` is passed in rather than read, so a tick sees one instant and the
     /// placeholder rows below are testable without sleeping.
     pub fn scan_sessions(&mut self, now: SystemTime) -> Vec<RawSession> {
+        match self.discovery {
+            Discovery::Processes => self.scan_processes(now),
+            Discovery::Transcripts => transcript_sessions(
+                &self.paths.projects_dir,
+                &mut self.files,
+                &mut self.session_cwds,
+                now,
+            ),
+        }
+    }
+
+    /// One tick from the process table: every live session, grouped by project
+    /// directory.
+    fn scan_processes(&mut self, now: SystemTime) -> Vec<RawSession> {
         let groups = group_by_project(self.processes());
         let mut sessions: Vec<RawSession> = Vec::new();
         let mut by_id: HashMap<String, usize> = HashMap::new();
@@ -276,11 +371,6 @@ fn group_by_project(procs: Vec<ClaudeProcess>) -> Vec<ProjectGroup> {
         group.procs.sort_by_key(|proc| Reverse(proc.start));
     }
     order
-}
-
-fn current_stat(path: &Path) -> Option<(SystemTime, u64)> {
-    let meta = fs::metadata(path).ok()?;
-    Some((meta.modified().ok()?, meta.len()))
 }
 
 fn non_empty(value: &str) -> Option<String> {

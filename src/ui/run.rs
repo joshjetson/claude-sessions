@@ -33,10 +33,11 @@ use crate::transcript::{Collect, TranscriptCursor};
 use crate::ui::actions::{ActionResult, ActionWorker, BoardServices};
 use crate::ui::app::{body_area, draw};
 use crate::ui::conversation::ConversationMeta;
-use crate::ui::feed::{EmbeddedFeed, FeedEvent, SessionFeed};
+use crate::ui::feed::FeedEvent;
 use crate::ui::feed_remote::RemoteFeed;
 use crate::ui::keys::handle_key;
 use crate::ui::state::{Action, AppState, Quit};
+use crate::ui::transport::FeedHandle;
 
 /// How long the loop waits for a key before doing its periodic work.
 pub const TICK: Duration = Duration::from_millis(100);
@@ -170,13 +171,15 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
     let _diagnostics = crate::diagnostics::start(&paths, "dashboard", config.diagnostics());
     let usage_interval = config.usage().interval;
     let worker = ActionWorker::start(driver_or_null(&config, policy), policy, services);
-    let remote = connect_feed(&paths, &config);
+    let (feed, notice) = open_feed(&paths, &config);
     let mut state = AppState::new(paths.clone(), config);
     state.qa_heads = qa_heads;
-    let mut feed: Box<dyn SessionFeed> = match remote {
-        Some(remote) => Box::new(remote),
-        None => Box::new(EmbeddedFeed::start(paths, group_paths(&state))),
-    };
+    // Before the first frame, so a dashboard that could not reach its daemon
+    // says so on the screen it opens with rather than looking merely quiet.
+    if let Some(notice) = notice {
+        state.note_feed(notice);
+    }
+    refresh_transcripts_notice(&mut state);
 
     let mut screen = CrosstermScreen::new();
     screen.acquire()?;
@@ -187,7 +190,7 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         &mut terminal,
         &mut screen,
         &mut state,
-        feed.as_mut(),
+        feed,
         &worker,
         policy,
         usage_interval,
@@ -204,7 +207,7 @@ fn event_loop(
     terminal: &mut Tui,
     screen: &mut CrosstermScreen,
     state: &mut AppState,
-    feed: &mut dyn SessionFeed,
+    mut feed: FeedHandle,
     worker: &ActionWorker,
     policy: SpawnPolicy,
     usage_interval: Option<Duration>,
@@ -216,6 +219,12 @@ fn event_loop(
     let mut next_usage = usage_interval.map(|interval| Instant::now() + interval);
 
     loop {
+        // The status bar names the transport and how stale it is, so an empty
+        // pane can always be told apart from a feed that has stopped talking.
+        let status = feed.status();
+        state.dirty |= state.feed != status;
+        state.feed = status;
+
         if state.dirty {
             terminal.draw(|frame| draw(frame, state))?;
             state.dirty = false;
@@ -234,6 +243,13 @@ fn event_loop(
             }
         }
 
+        // A remote feed that has said nothing at all since it connected is
+        // not a quiet machine, it is a broken transport: take the scan back
+        // and say why.
+        if let Some(notice) = feed.fall_back_if_silent(&state.paths, group_paths(&state.config)) {
+            state.note_feed(notice);
+        }
+
         for event in feed.drain() {
             match event {
                 FeedEvent::Sessions {
@@ -241,8 +257,14 @@ fn event_loop(
                     discovered,
                 } => {
                     state.discovered_dirs = discovered;
+                    let empty = by_project.is_empty();
                     state.apply_sessions(by_project);
                     sync_selected_meta(state);
+                    // Only when there is nothing to show: the answer costs a
+                    // `stat` and it is only ever read by the empty pane.
+                    if empty {
+                        refresh_transcripts_notice(state);
+                    }
                 }
                 FeedEvent::Notification(notification) => state.push_notification(*notification),
                 FeedEvent::Board(update) => state.apply_board(*update),
@@ -264,9 +286,9 @@ fn event_loop(
         for result in worker.drain() {
             match result {
                 ActionResult::Flash(message) => state.flash(message),
-                ActionResult::Refresh => feed.request_refresh(),
+                ActionResult::Refresh => feed.feed().request_refresh(),
                 ActionResult::Launched => {
-                    feed.note_launch();
+                    feed.feed().note_launch();
                     state.dirty = true;
                 }
                 ActionResult::Usage(usage) => state.apply_usage(*usage),
@@ -297,24 +319,24 @@ fn event_loop(
                     // The group list can have changed since the last scan (`a`
                     // and `d` edit it), and the scan thread owns its own copy —
                     // so a refresh re-syncs it. `set_groups` scans immediately.
-                    feed.set_groups(group_paths(state));
+                    feed.feed().set_groups(group_paths(&state.config));
                 }
                 Action::SelectSession { session_file, .. } => {
                     conversation = open_conversation(state, session_file);
                     state.dirty = true;
                 }
                 Action::LaunchSession { .. } => {
-                    feed.note_launch();
+                    feed.feed().note_launch();
                     worker.submit(action);
                 }
                 // Deploys belong to the engine, not to the worker: the child
                 // has to outlive this dashboard.
                 Action::StartDeploy { project } => {
-                    if let Some(message) = feed.start_deploy(&project) {
+                    if let Some(message) = feed.feed().start_deploy(&project) {
                         state.flash(message);
                     }
                 }
-                Action::CancelDeploy { project } => feed.cancel_deploy(&project),
+                Action::CancelDeploy { project } => feed.feed().cancel_deploy(&project),
                 Action::OpenEditor { path, line } => {
                     // The only action the main thread runs itself: it has to
                     // hand over the terminal, which the worker cannot do.
@@ -328,12 +350,12 @@ fn event_loop(
                 }
                 // The daemon owns the usage hook when there is one, so the
                 // check runs once however many dashboards are attached.
-                Action::RefreshUsage if feed.refresh_usage() => {}
+                Action::RefreshUsage if feed.feed().refresh_usage() => {}
                 other => {
                     // A task launch has to be registered with the pending queue
                     // BEFORE the terminal opens, or nothing will claim the
                     // session it starts.
-                    crate::ui::board::note_launch(feed, &other);
+                    crate::ui::board::note_launch(feed.feed(), &other);
                     worker.submit(other);
                 }
             }
@@ -350,7 +372,7 @@ fn event_loop(
             // point of it. Shift-Q stops the daemon too, so nothing is left
             // running in the background.
             if quit == Quit::ShutdownAll {
-                feed.shutdown_daemon();
+                feed.feed().shutdown_daemon();
             }
             return Ok(());
         }
@@ -369,26 +391,66 @@ fn odoo_client(config: &ConfigHandle) -> Option<std::sync::Arc<crate::odoo::Odoo
 /// Which transport the dashboard runs on, decided exactly as the Node entry
 /// point decided it: a daemon unless one is disabled, started if none is
 /// answering and autostart is on, and an in-process engine if either of those
-/// says no. `None` here means "fall back to embedded".
-fn connect_feed(paths: &Paths, config: &ConfigHandle) -> Option<RemoteFeed> {
+/// says no.
+///
+/// The second half of the answer is new, and is the whole point: when the
+/// daemon could not be reached, the sentence saying why comes back with the
+/// feed. Falling back was always right; falling back in silence is what made
+/// a broken daemon and a quiet machine look identical.
+fn open_feed(paths: &Paths, config: &ConfigHandle) -> (FeedHandle, Option<String>) {
     if !config.daemon_enabled() {
-        return None;
+        return (FeedHandle::embedded(paths, group_paths(config)), None);
     }
     let port = protocol::resolve_port(config, paths, None);
-    let target = client::ensure_daemon(paths, port, config.daemon_autostart())?;
-    Some(RemoteFeed::connect(target.port))
+    match client::ensure_daemon(paths, port, config.daemon_autostart()) {
+        Ok(target) => (
+            FeedHandle::remote(target.port, Box::new(RemoteFeed::connect(target.port))),
+            None,
+        ),
+        Err(reason) => (
+            FeedHandle::embedded(paths, group_paths(config)),
+            Some(format!("{reason} Scanning from this dashboard instead.")),
+        ),
+    }
 }
 
-fn group_paths(state: &AppState) -> Vec<String> {
-    state
-        .config
+fn group_paths(config: &ConfigHandle) -> Vec<String> {
+    config
         .groups()
         .iter()
         .map(|group| group.path.clone())
         .collect()
 }
 
-fn open_conversation(state: &mut AppState, file: Option<PathBuf>) -> Option<TranscriptCursor> {
+/// Whether Claude Code has ever written a transcript where this build looks
+/// for them.
+///
+/// A first-ever run, a machine whose Claude home was relocated, an isolated
+/// tree pointed at the wrong place: all three show an empty sessions pane, and
+/// the pane can only say which if somebody asks the filesystem. Asked on an
+/// empty tick and nowhere near a render path (brief §10 mandate #9).
+fn refresh_transcripts_notice(state: &mut AppState) {
+    let dir = state.paths.projects_dir.clone();
+    let empty = std::fs::read_dir(&dir)
+        .map(|mut entries| entries.next().is_none())
+        .unwrap_or(true);
+    let notice = empty.then(|| {
+        format!(
+            "No transcripts under {} — start a session with `claude`, or set \
+             CLAUDE_CONFIG_DIR if your Claude home is somewhere else.",
+            dir.display()
+        )
+    });
+    if state.transcripts_notice != notice {
+        state.transcripts_notice = notice;
+        state.dirty = true;
+    }
+}
+
+pub(crate) fn open_conversation(
+    state: &mut AppState,
+    file: Option<PathBuf>,
+) -> Option<TranscriptCursor> {
     let path = file?;
     let mut cursor = TranscriptCursor::open(&path, Collect::SessionAndConversation).ok()?;
     let _ = cursor.poll();

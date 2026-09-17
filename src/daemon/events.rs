@@ -42,9 +42,13 @@ pub struct SessionStats {
 }
 
 /// The payload of a `sessions` event: one tick's worth of everything the tree
-/// draws.
+/// draws. Node's `server.js` sends exactly these three keys.
+///
+/// Missing keys default rather than failing the whole payload: a client that
+/// refuses to parse a tick because one key moved shows an empty tree, which is
+/// the worst possible way to report a protocol difference.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct SessionsEvent {
     pub by_project: BTreeMap<String, Vec<Session>>,
     pub stats: SessionStats,
@@ -52,8 +56,12 @@ pub struct SessionsEvent {
 }
 
 /// Everything a client that just connected needs to be current.
+///
+/// Defaulted field by field for the same reason as [`SessionsEvent`]: a
+/// snapshot from a daemon that keys one field differently still delivers every
+/// other field, rather than leaving the dashboard with nothing at all.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(default, rename_all = "camelCase")]
 pub struct Snapshot {
     pub sessions: SessionsEvent,
     pub task_sessions: BTreeMap<i64, TaskLink>,

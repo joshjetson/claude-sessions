@@ -14,6 +14,7 @@ mod pairing;
 mod process;
 mod projects;
 mod scanner;
+mod transcripts;
 
 use std::cell::RefCell;
 use std::collections::HashMap;

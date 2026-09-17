@@ -18,7 +18,7 @@ use std::time::SystemTime;
 
 use crate::daemon::TaskLink;
 use crate::types::Session;
-use crate::util::parse_timestamp;
+use crate::util::{parse_timestamp, same_dir, trim_trailing_separators};
 
 /// Every live session working a task, most recently active FIRST.
 ///
@@ -160,11 +160,9 @@ pub fn match_session_by_cwd<'a>(
     sessions: impl Iterator<Item = &'a Session>,
     cwd: &str,
 ) -> Option<&'a Session> {
-    let target = cwd.trim_end_matches('/');
+    let target = trim_trailing_separators(cwd);
     if target.is_empty() {
         return None;
     }
-    sessions
-        .into_iter()
-        .find(|s| s.cwd.trim_end_matches('/') == target)
+    sessions.into_iter().find(|s| same_dir(&s.cwd, target))
 }

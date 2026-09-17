@@ -1,7 +1,5 @@
 //! Reading `ps` and `lsof` output.
 
-#[cfg(target_os = "macos")]
-use crate::scan::is_interactive_claude;
 use crate::scan::{parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row};
 use crate::util::start_time_instant;
 
@@ -85,27 +83,6 @@ fn pid_prefixed_output_keeps_the_rest_of_the_line_verbatim() {
     assert!(map[&502].contains("CLAUDE_SESSIONS_TASK_ID=6137"));
 }
 
-/// The one test that touches the real machine: proof that the format above is
-/// still what `ps` prints. Ignored by default so the suite stays hermetic.
-#[test]
-#[ignore = "shells out to the real ps"]
-#[cfg(target_os = "macos")]
-fn the_real_ps_output_still_parses() {
-    use crate::scan::{ProcessSource, SystemProcessSource};
-
-    let rows = SystemProcessSource::new().list();
-    assert!(!rows.is_empty(), "ps returned nothing parseable");
-    assert!(
-        rows.iter().any(|r| start_time_instant(&r.lstart).is_some()),
-        "no row carried a readable start time"
-    );
-    // Whatever is running, `launchd` is pid 1 and is not a claude session.
-    assert!(rows.iter().any(|r| r.pid == 1));
-    assert!(rows
-        .iter()
-        .all(|r| !r.comm.is_empty() || !is_interactive_claude(&r.comm)));
-}
-
 /// A platform whose process table cannot be read yet answers every question
 /// emptily, and never with a panic or a hang — which is what lets the scanner
 /// above it run unchanged and simply find nothing live.
@@ -124,12 +101,63 @@ fn the_unsupported_source_answers_every_call_with_nothing() {
 #[test]
 fn a_scan_on_an_unsupported_platform_is_empty_rather_than_broken() {
     use crate::paths::Paths;
-    use crate::scan::{Scanner, UnsupportedProcessSource};
+    use crate::scan::{Discovery, Scanner, UnsupportedProcessSource};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut scanner = Scanner::new(UnsupportedProcessSource, Paths::for_test(dir.path()));
+    let mut scanner = Scanner::new(
+        UnsupportedProcessSource,
+        Paths::for_test(dir.path()),
+        Discovery::Processes,
+    );
     assert!(scanner.processes().is_empty());
     assert!(scanner
         .scan_sessions(std::time::SystemTime::now())
         .is_empty());
+}
+
+// --- this machine -----------------------------------------------------------
+
+/// The parsers above are pinned against captured output; this one asks the
+/// machine the tests are running on, which is the only way the suite can tell
+/// that `ps` here prints what the parser expects.
+///
+/// Everything it asserts is about THIS process, so it is deterministic: the
+/// runner is alive, it has a working directory, and it has a command line.
+/// Three developers on three fresh machines saw an empty dashboard, and no
+/// test in the suite would have gone red for any machine-specific reason.
+#[cfg(unix)]
+#[test]
+fn the_real_process_table_answers_for_this_process() {
+    use crate::scan::{ProcessSource, SystemProcessSource};
+
+    let source = SystemProcessSource::new();
+    let me = std::process::id();
+
+    let rows = source.list();
+    assert!(!rows.is_empty(), "the process listing parsed to nothing");
+    let mine = rows
+        .iter()
+        .find(|row| row.pid == me)
+        .unwrap_or_else(|| panic!("this process ({me}) is not in {} parsed rows", rows.len()));
+    assert!(
+        start_time_instant(&mine.lstart).is_some(),
+        "`ps` printed a start time this build cannot read: {:?}",
+        mine.lstart
+    );
+    assert!(!mine.comm.is_empty());
+
+    // The working directory, which discovery drops a process for not having.
+    let cwd = source.cwds(&[me]);
+    assert_eq!(
+        cwd.get(&me).map(std::path::PathBuf::from),
+        std::env::current_dir().ok(),
+        "the working directory reader answered wrongly for this process"
+    );
+
+    // The command line, which is what a script install is recognised by.
+    let argv = source.argv(&[me]);
+    assert!(
+        argv.get(&me).is_some_and(|line| !line.is_empty()),
+        "no command line for this process"
+    );
 }

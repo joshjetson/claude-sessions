@@ -7,7 +7,8 @@
 //! like the tool spawning work by itself.
 
 use crate::scan::{
-    is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude, launch_task_id, session_id_flag,
+    argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
+    is_script_runtime, launch_task_id, session_id_flag,
 };
 
 #[test]
@@ -94,6 +95,54 @@ fn leaves_real_working_directories_alone() {
     assert!(!is_daemon_scratch_cwd(""));
 }
 
+/// The rule with its platform facts passed in, so the Windows shape is checked
+/// on every platform rather than only on the one that has it.
+mod scratch {
+    use crate::scan::detect::scratch_cwd;
+
+    const UNIX: (Option<&str>, &[char]) = (Some("/tmp"), &['/']);
+    const WINDOWS: (Option<&str>, &[char]) = (None, &['/', '\\']);
+
+    fn unix(cwd: &str) -> bool {
+        scratch_cwd(cwd, UNIX.0, UNIX.1)
+    }
+
+    fn windows(cwd: &str) -> bool {
+        scratch_cwd(cwd, WINDOWS.0, WINDOWS.1)
+    }
+
+    #[test]
+    fn the_unix_rule_is_the_one_node_shipped() {
+        // `/\/(private\/)?tmp\/cc-daemon-\d+\//`, unchanged.
+        assert!(unix("/private/tmp/cc-daemon-501/f733b519/spare"));
+        assert!(unix("/tmp/cc-daemon-501/abc/spare"));
+        assert!(!unix("/Users/k/dev/cc-daemon-notes"));
+        // Anywhere but the temp directory is somebody's checkout.
+        assert!(!unix("/Users/k/dev/cc-daemon-501/spare"));
+    }
+
+    #[test]
+    fn a_windows_worker_is_recognised_wherever_temp_points() {
+        // %TEMP% is redirected per user, per session and by every CI runner, so
+        // the segment carries the evidence rather than the path it sits under.
+        assert!(windows(
+            r"C:\Users\dev\AppData\Local\Temp\cc-daemon-7\f733b519\spare"
+        ));
+        assert!(windows(r"D:\scratch\cc-daemon-12\spare"));
+        assert!(windows("C:/Users/dev/AppData/Local/Temp/cc-daemon-7/spare"));
+    }
+
+    #[test]
+    fn a_windows_checkout_that_merely_reads_like_one_is_left_alone() {
+        assert!(!windows(r"C:\src\cc-daemon-notes\app"));
+        assert!(!windows(r"C:\src\cc-daemon-\spare"));
+        // The last segment of a path is a working directory, not a parent of
+        // one — Node required the trailing separator and so does this.
+        assert!(!windows(r"C:\Temp\cc-daemon-7"));
+        assert!(!windows(""));
+    }
+}
+
 const UUID: &str = "0198e4f0-1b3c-7a2d-9f4e-5c6b7a8d9e0f";
 
 #[test]
@@ -148,4 +197,84 @@ fn an_environment_value_is_never_read_as_a_command_line_flag() {
     assert_eq!(launch_task_id(&environ), None);
     // …and the value only reaches session_id_flag if somebody passes it there.
     assert_eq!(session_id_flag("claude"), None);
+}
+
+// --- script installs --------------------------------------------------------
+
+/// The npm and bun installs of Claude Code: `claude` on `PATH` is a script with
+/// a `#!/usr/bin/env node` line, so the kernel execs the runtime and `ps -o
+/// comm` reports it. Every release before this one matched on `comm` alone and
+/// therefore reported no sessions on such a machine.
+#[test]
+fn a_runtime_command_name_says_nothing_about_the_process() {
+    for comm in [
+        "node",
+        "/usr/local/bin/node",
+        "/opt/homebrew/bin/bun",
+        "deno",
+        // Debian's spelling, and Windows' file extension.
+        "nodejs",
+        "C:\\Program Files\\nodejs\\node.exe",
+    ] {
+        assert!(is_script_runtime(comm), "{comm} is a script runtime");
+        assert!(
+            !is_interactive_claude(comm),
+            "{comm} must not be a session on its name alone"
+        );
+    }
+}
+
+#[test]
+fn a_native_install_is_not_a_runtime_and_needs_no_command_line() {
+    for comm in ["claude", "/Users/k/.local/bin/claude"] {
+        assert!(!is_script_runtime(comm));
+        assert!(is_interactive_claude(comm));
+    }
+    // Something whose name merely starts the same way is not the runtime.
+    assert!(!is_script_runtime("nodemon"));
+    assert!(!is_script_runtime("/usr/bin/node-gyp"));
+}
+
+#[test]
+fn an_npm_installed_session_is_recognised_from_its_command_line() {
+    assert!(argv_is_interactive_claude(
+        "/Users/x/.nvm/versions/node/v22/bin/node /Users/x/.nvm/versions/node/v22/bin/claude"
+    ));
+    assert!(argv_is_interactive_claude(
+        "bun /Users/x/.bun/install/global/node_modules/@anthropic-ai/claude-code/cli.js"
+    ));
+}
+
+#[test]
+fn the_deny_list_fires_on_a_command_line_exactly_as_it_does_on_a_command_name() {
+    // Same helpers, same rules — a prewarmed worker started through node is
+    // still a prewarmed worker.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude bg-spare"
+    ));
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude mcp serve"
+    ));
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude daemon"
+    ));
+    // And the flag spelling, which `comm` can never show.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude --bg-pty-host"
+    ));
+    // This tool itself, launched however.
+    assert!(!argv_is_interactive_claude(
+        "node /usr/local/bin/claude-sessions"
+    ));
+}
+
+#[test]
+fn a_node_process_that_is_not_claude_is_never_a_session() {
+    for argv in [
+        "node /Users/x/dev/api/server.js",
+        "/usr/local/bin/node --watch build.mjs",
+        "bun run dev",
+    ] {
+        assert!(!argv_is_interactive_claude(argv), "{argv}");
+    }
 }

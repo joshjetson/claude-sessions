@@ -18,12 +18,14 @@
 
 mod cursor;
 mod entry;
+mod head;
 mod parse;
 mod task_ref;
 mod tool_use;
 
 pub use cursor::{CursorPoll, TranscriptCursor};
 pub use entry::{extract_text_content, Content, ContentBlock, Entry, Message};
+pub use head::{read_head, session_cwd, HeadCache, SessionCwdCache, CWD_HEAD_BYTES};
 pub use parse::{
     parse_conversation, parse_session_and_conversation, parse_session_file, Collect,
     INITIAL_TAIL_SIZE, MAX_PROMPTS, MAX_TAIL_SIZE,
