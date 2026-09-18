@@ -21,7 +21,7 @@ fn notif(id: &str, ts: &str, kind: NotificationKind, status: NotificationStatus)
         cwd: String::new(),
         project: String::new(),
         session_id: None,
-        task_id: Some(6688),
+        task_id: Some(4101),
         level: NotificationLevel::Warn,
         kind,
         ts: ts.to_string(),
@@ -48,7 +48,7 @@ fn session(tty: Option<&str>) -> Session {
         last_entry: None,
         cumulative_usage: None,
         prompts: Vec::new(),
-        task_id: Some(6688),
+        task_id: Some(4101),
     }
 }
 
@@ -70,7 +70,7 @@ fn the_newest_open_prompt_wins() {
             NotificationStatus::Unread,
         ),
     ];
-    assert_eq!(open_prompt(all.iter(), 6688).unwrap().id, "b");
+    assert_eq!(open_prompt(all.iter(), 4101).unwrap().id, "b");
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn a_resolved_prompt_is_not_open() {
         NotificationKind::Question,
         NotificationStatus::Resolved,
     )];
-    assert!(open_prompt(all.iter(), 6688).is_none());
+    assert!(open_prompt(all.iter(), 4101).is_none());
 }
 
 #[test]
@@ -92,7 +92,7 @@ fn ordinary_progress_is_not_a_prompt() {
         NotificationKind::Info,
         NotificationStatus::Unread,
     )];
-    assert!(open_prompt(all.iter(), 6688).is_none());
+    assert!(open_prompt(all.iter(), 4101).is_none());
 }
 
 #[test]
@@ -106,7 +106,7 @@ fn an_answer_is_delivered_to_the_live_session() {
     let live = session(Some("ttys004"));
     let sessions = vec![&live];
 
-    match decide(&all, &sessions, 6688, "the MR preview build") {
+    match decide(&all, &sessions, 4101, "the MR preview build") {
         AnswerDecision::Deliver { session, resolve } => {
             assert_eq!(session.session_id, "abcd");
             assert_eq!(resolve, vec!["a".to_string()]);
@@ -129,7 +129,7 @@ fn the_kind_comes_from_the_record_not_the_caller() {
     let sessions = vec![&live];
 
     assert_eq!(
-        decide(&all, &sessions, 6688, "yes, PASS is right"),
+        decide(&all, &sessions, 4101, "yes, PASS is right"),
         AnswerDecision::Refused(AnswerRefusal::VerdictIsHuman)
     );
 }
@@ -140,7 +140,7 @@ fn nothing_asked_means_nothing_to_answer() {
     let live = session(Some("ttys004"));
     let sessions = vec![&live];
     assert!(matches!(
-        decide(&[], &sessions, 6688, "hello"),
+        decide(&[], &sessions, 4101, "hello"),
         AnswerDecision::Refused(AnswerRefusal::UnknownKind(_))
     ));
 }
@@ -154,7 +154,7 @@ fn an_empty_answer_is_refused_before_a_session_is_needed() {
         NotificationStatus::Unread,
     )];
     assert_eq!(
-        decide(&all, &[], 6688, "   "),
+        decide(&all, &[], 4101, "   "),
         AnswerDecision::Refused(AnswerRefusal::Empty)
     );
 }
@@ -168,7 +168,7 @@ fn no_live_session_is_reported_as_such() {
         NotificationStatus::Unread,
     )];
     assert_eq!(
-        decide(&all, &[], 6688, "an answer"),
+        decide(&all, &[], 4101, "an answer"),
         AnswerDecision::Refused(AnswerRefusal::NoSession)
     );
 }
@@ -184,7 +184,7 @@ fn a_session_with_no_terminal_is_refused_rather_than_worked_around() {
     let orphan = session(None);
     let sessions = vec![&orphan];
     assert_eq!(
-        decide(&all, &sessions, 6688, "an answer"),
+        decide(&all, &sessions, 4101, "an answer"),
         AnswerDecision::Refused(AnswerRefusal::NoTty)
     );
 }
@@ -210,7 +210,7 @@ fn every_open_question_for_the_task_is_resolved_not_just_the_newest() {
     let live = session(Some("ttys004"));
     let sessions = vec![&live];
 
-    match decide(&all, &sessions, 6688, "answer") {
+    match decide(&all, &sessions, 4101, "answer") {
         AnswerDecision::Deliver { resolve, .. } => {
             assert_eq!(resolve.len(), 2, "older open questions were left asking");
         }

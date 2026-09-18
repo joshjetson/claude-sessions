@@ -29,7 +29,7 @@ fn session(tty: Option<&str>) -> Session {
         last_entry: None,
         cumulative_usage: None,
         prompts: Vec::new(),
-        task_id: Some(6688),
+        task_id: Some(4101),
     }
 }
 

@@ -10,11 +10,11 @@ use crate::pipeline::resolve_pipeline;
 use crate::pipeline::vars::PromptVars;
 
 fn prompt(triage: bool) -> String {
-    let mut vars = PromptVars::new(6688, "https://odoo.example/web#id=6688");
+    let mut vars = PromptVars::new(4101, "https://odoo.example/web#id=4101");
     vars.extras
         .insert(RUN_ID_VAR.to_string(), "Aurora::Quality Assurance".into());
     vars.extras
-        .insert(TASK_IDS_VAR.to_string(), "6688, 6685, 6681".into());
+        .insert(TASK_IDS_VAR.to_string(), "4101, 4102, 4103".into());
     vars.extras.insert(QA_ROOT_VAR.to_string(), "/qa".into());
     vars.extras
         .insert(TRIAGE_VAR.to_string(), triage.to_string());
@@ -132,7 +132,7 @@ fn the_run_is_told_its_own_task_list() {
     // A run owns its list from launch. Re-reading the stage would drop a task
     // that failed QA and moved out of it.
     let prompt = prompt(false);
-    assert!(prompt.contains("6688, 6685, 6681"));
+    assert!(prompt.contains("4101, 4102, 4103"));
     assert!(prompt.contains("Aurora::Quality Assurance"));
 }
 

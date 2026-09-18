@@ -499,7 +499,7 @@ fn a_session_row_shows_the_task_it_is_working() {
     // question people actually ask of this list: "which task is that?".
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
-    s.task_id = Some(6688);
+    s.task_id = Some(4101);
     let rendered = line_text(
         &TreeItem::Session {
             project_name: "x/alpha",
@@ -507,7 +507,7 @@ fn a_session_row_shows_the_task_it_is_working() {
         },
         &config,
     );
-    assert!(rendered.contains("#6688"), "{rendered}");
+    assert!(rendered.contains("#4101"), "{rendered}");
 }
 
 #[test]
@@ -532,7 +532,7 @@ fn the_status_is_the_last_thing_on_the_row() {
     // the end, only its own tail moves and the columns you read stay put.
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
-    s.task_id = Some(6688);
+    s.task_id = Some(4101);
     s.last_usage = Some(crate::types::Usage {
         input_tokens: Some(72_000),
         cache_creation_input_tokens: None,
@@ -551,8 +551,8 @@ fn the_status_is_the_last_thing_on_the_row() {
             .find(needle)
             .unwrap_or_else(|| panic!("{needle} missing from {rendered}"))
     };
-    assert!(at("abcd") < at("#6688"), "{rendered}");
-    assert!(at("#6688") < at("72K"), "{rendered}");
+    assert!(at("abcd") < at("#4101"), "{rendered}");
+    assert!(at("#4101") < at("72K"), "{rendered}");
     assert!(at("72K") < at("idle"), "{rendered}");
     assert!(rendered.trim_end().ends_with("idle"), "{rendered}");
 }
@@ -563,10 +563,10 @@ fn print_session_rows() {
     let (_dir, config) = temp_config();
     let mut rows = Vec::new();
     for (id, task, tokens, status) in [
-        ("cbc3", Some(6688_i64), 133_000_u64, SessionStatus::Working),
-        ("9280", Some(6685), 118_000, SessionStatus::Working),
+        ("cbc3", Some(4101_i64), 133_000_u64, SessionStatus::Working),
+        ("9280", Some(4102), 118_000, SessionStatus::Working),
         ("6c92", None, 116_000, SessionStatus::Idle),
-        ("98f4", Some(6673), 532_000, SessionStatus::Awaiting),
+        ("98f4", Some(4105), 532_000, SessionStatus::Awaiting),
     ] {
         let mut s = session(id, "/Users/x/dev/alpha", status);
         s.task_id = task;
