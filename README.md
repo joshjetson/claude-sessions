@@ -559,6 +559,17 @@ Issues and PRs welcome. `cargo fmt`, `cargo clippy --all-targets -- -D warnings`
 `cargo test` must pass; CI also builds with a fresh dependency resolve (no lockfile) so
 `cargo install` never needs `--locked`.
 
+To run your own checkout over the copy on your PATH:
+
+```bash
+scripts/install-local.sh          # install the working tree as it stands
+scripts/install-local.sh main     # check out and fast-forward main first
+```
+
+It builds, installs, checks that your PATH actually finds the new binary, and stops any
+running daemon so the new build owns the port — a daemon keeps executing the code it
+started with, so replacing the file on disk is not enough.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
