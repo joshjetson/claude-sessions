@@ -117,7 +117,7 @@ release:
     - test -n "$GITLAB_PUSH_TOKEN" || { echo "set GITLAB_PUSH_TOKEN (project token, write_repository)"; exit 1; }
     - VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
     - |
-      if curl -sf "https://crates.io/api/v1/crates/claude-sessions/$VERSION" >/dev/null; then
+      if curl -sf -A "claude-sessions-release" "https://crates.io/api/v1/crates/claude-sessions/$VERSION" >/dev/null; then
         PUBLISHED=yes
       else
         PUBLISHED=no
@@ -141,6 +141,10 @@ release:
         git commit -m "Release $NEXT [skip ci]"
         git push -o ci.skip "$PUSH" "HEAD:main"
         TAG="v$NEXT"
+      fi
+    - |
+      if git ls-remote --tags "$PUSH" "refs/tags/$TAG" | grep -q "$TAG"; then
+        echo "$TAG already exists — nothing to release"; exit 0
       fi
     - git tag "$TAG"
     - git push "$PUSH" "$TAG"
