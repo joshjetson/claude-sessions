@@ -122,7 +122,7 @@ release:
       else
         PUBLISHED=no
       fi
-    - PUSH="https://oauth2:${GITLAB_PUSH_TOKEN}@git.zelif.cam/Zelifcam/internal/rust-claude-sessions.git"
+    - PUSH="https://oauth2:${GITLAB_PUSH_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
     - |
       if [ "$PUBLISHED" = "no" ]; then
         echo "version $VERSION is new — tagging it as-is"
@@ -135,7 +135,7 @@ release:
         echo "version $VERSION already published — auto-bumping to $NEXT"
         sed -i -E "0,/^version = \"$VERSION\"/s//version = \"$NEXT\"/" Cargo.toml
         sed -i -E "/name = \"claude-sessions\"/{n;s/^version = \".*\"/version = \"$NEXT\"/}" Cargo.lock
-        git config user.email "ci@git.zelif.cam"
+        git config user.email "release-bot@${CI_SERVER_HOST}"
         git config user.name "release-bot"
         git add Cargo.toml Cargo.lock
         git commit -m "Release $NEXT [skip ci]"
