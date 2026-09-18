@@ -41,6 +41,45 @@ pub enum TreeItem<'a> {
     /// A folder inside a group with nothing running in it. `n` starts a session
     /// here — it is the only way to launch into a repo that is currently quiet.
     Inactive { name: &'a str, path: String },
+    /// A QA run, drawn above the projects. Collapsed it is the coordinator and
+    /// nothing else, because the coordinator is the run's single point of
+    /// contact. Expanded it adds the QA sessions underneath.
+    Run {
+        run_id: &'a str,
+        stage: &'a str,
+        coordinator: Option<&'a Session>,
+        agents: usize,
+        asking: usize,
+        expanded: bool,
+    },
+    /// One QA session under its run. `session` is `None` for a task the run
+    /// covers but has not started, which is a real state and not an error.
+    RunAgent {
+        run_id: &'a str,
+        task_id: i64,
+        session: Option<&'a Session>,
+        asking: bool,
+    },
+}
+
+/// A run, prepared for the tree.
+///
+/// Built by the caller rather than here, so this module keeps knowing only
+/// about sessions and never reaches into the board.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunSection<'a> {
+    pub run_id: &'a str,
+    pub stage: &'a str,
+    pub coordinator: Option<&'a Session>,
+    pub agents: Vec<RunAgentRow<'a>>,
+}
+
+/// One task of a run, prepared for the tree.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunAgentRow<'a> {
+    pub task_id: i64,
+    pub session: Option<&'a Session>,
+    pub asking: bool,
 }
 
 impl TreeItem<'_> {
@@ -52,6 +91,10 @@ impl TreeItem<'_> {
             TreeItem::Session { session, .. } => format!("s:{}", session.session_id),
             TreeItem::Separator { name, .. } => format!("g:{name}"),
             TreeItem::Inactive { path, .. } => format!("i:{path}"),
+            TreeItem::Run { run_id, .. } => format!("r:{run_id}"),
+            TreeItem::RunAgent {
+                run_id, task_id, ..
+            } => format!("ra:{run_id}:{task_id}"),
         }
     }
 
@@ -65,6 +108,8 @@ impl TreeItem<'_> {
                 .map(|s| s.cwd.clone()),
             TreeItem::Session { session, .. } => Some(session.cwd.clone()),
             TreeItem::Separator { .. } => None,
+            TreeItem::Run { coordinator, .. } => coordinator.map(|s| s.cwd.clone()),
+            TreeItem::RunAgent { session, .. } => session.map(|s| s.cwd.clone()),
         }
     }
 }
@@ -95,7 +140,7 @@ pub fn build_grouped_tree<'a>(
     groups: &'a [Group],
     discovered: &'a BTreeMap<String, Vec<String>>,
 ) -> Vec<TreeItem<'a>> {
-    build_grouped_tree_with(by_project, expanded, groups, discovered, true)
+    build_grouped_tree_with(by_project, expanded, groups, discovered, true, &[])
 }
 
 /// The same, told whether to draw a group's quiet folders.
@@ -109,8 +154,13 @@ pub fn build_grouped_tree_with<'a>(
     groups: &'a [Group],
     discovered: &'a BTreeMap<String, Vec<String>>,
     show_inactive: bool,
+    runs: &'a [RunSection<'a>],
 ) -> Vec<TreeItem<'a>> {
     let mut items = Vec::new();
+    // Runs first, above the group separators. A run is what the reviewer came
+    // to look at while one is open, and the section disappears entirely when
+    // none is — so it costs a quiet dashboard nothing.
+    emit_runs(&mut items, runs, expanded);
     if groups.is_empty() {
         for (name, sessions) in by_project {
             emit_project(&mut items, name, sessions, expanded);
@@ -206,6 +256,46 @@ pub fn build_grouped_tree_with<'a>(
     items
 }
 
+/// Emit the Runs section, or nothing at all when no run is open.
+fn emit_runs<'a>(
+    items: &mut Vec<TreeItem<'a>>,
+    runs: &'a [RunSection<'a>],
+    expanded: &HashSet<String>,
+) {
+    if runs.is_empty() {
+        return;
+    }
+    items.push(TreeItem::Separator {
+        name: "Runs",
+        // Not a configured group, so `d` cannot remove it — the same contract
+        // the "Other sessions" divider has.
+        group_index: None,
+    });
+    for run in runs {
+        let key = format!("r:{}", run.run_id);
+        let is_expanded = expanded.contains(&key);
+        items.push(TreeItem::Run {
+            run_id: run.run_id,
+            stage: run.stage,
+            coordinator: run.coordinator,
+            agents: run.agents.len(),
+            asking: run.agents.iter().filter(|agent| agent.asking).count(),
+            expanded: is_expanded,
+        });
+        if !is_expanded {
+            continue;
+        }
+        for agent in &run.agents {
+            items.push(TreeItem::RunAgent {
+                run_id: run.run_id,
+                task_id: agent.task_id,
+                session: agent.session,
+                asking: agent.asking,
+            });
+        }
+    }
+}
+
 fn emit_project<'a>(
     items: &mut Vec<TreeItem<'a>>,
     name: &'a str,
@@ -274,6 +364,81 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
             ])
         }
         TreeItem::Session { session, .. } => format_session_row(session, config),
+        TreeItem::Run {
+            stage,
+            coordinator,
+            agents,
+            asking,
+            expanded,
+            ..
+        } => {
+            let arrow = if *expanded { "▼" } else { "▶" };
+            // The coordinator's own state, because a run whose coordinator has
+            // died still shows its QA sessions working and looks healthy.
+            let (dot, state) = match coordinator {
+                Some(session) => (
+                    Style::default().fg(color_of(session.status.color())),
+                    session.status.label().to_string(),
+                ),
+                None => (gray(), "no coordinator".to_string()),
+            };
+            let agents = if *agents == 1 {
+                "1 agent".to_string()
+            } else {
+                format!("{agents} agents")
+            };
+            // Only when it is not zero: a column reading "0 asking" on every
+            // quiet run trains people to stop reading it.
+            let waiting = if *asking > 0 {
+                Span::styled(
+                    format!("  {asking} asking"),
+                    Style::default()
+                        .fg(color_from_name("yellow"))
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw(String::new())
+            };
+            Line::from(vec![
+                Span::raw(format!("{arrow} ")),
+                Span::styled("●", dot),
+                Span::styled(
+                    format!(" {}", truncate(stage, 24)),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  coordinator".to_string(), gray()),
+                Span::styled(format!("  {agents}"), gray()),
+                waiting,
+                Span::styled(format!("  {state}"), gray()),
+            ])
+        }
+        TreeItem::RunAgent {
+            task_id,
+            session,
+            asking,
+            ..
+        } => {
+            // An indented session row, so a run's agents read as the same kind
+            // of thing as every other session in this list.
+            let Some(session) = session else {
+                return Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(format!("#{task_id}"), gray()),
+                    Span::styled("  not started".to_string(), gray()),
+                ]);
+            };
+            let mut line = format_session_row(session, config);
+            line.spans.insert(0, Span::raw("  "));
+            if *asking {
+                line.spans.push(Span::styled(
+                    "  ← asks you".to_string(),
+                    Style::default()
+                        .fg(color_from_name("yellow"))
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+            line
+        }
     }
 }
 
@@ -383,6 +548,11 @@ pub enum SelectedRow {
     Inactive {
         path: String,
     },
+    /// A run header. Enter expands it, and the run menu is still reached from
+    /// the board — this row is a view, not a second control surface.
+    Run {
+        run_id: String,
+    },
 }
 
 impl TreeItem<'_> {
@@ -400,6 +570,21 @@ impl TreeItem<'_> {
                 pids: session.pids.clone(),
             },
             TreeItem::Inactive { path, .. } => SelectedRow::Inactive { path: path.clone() },
+            TreeItem::Run { run_id, .. } => SelectedRow::Run {
+                run_id: (*run_id).to_string(),
+            },
+            // A run's agent IS a session, and everything that works on a
+            // session row works here: view it, focus its terminal, nickname it.
+            TreeItem::RunAgent { session, .. } => match session {
+                Some(session) => SelectedRow::Session {
+                    session_id: session.session_id.clone(),
+                    pids: session.pids.clone(),
+                },
+                None => SelectedRow::Separator {
+                    name: String::new(),
+                    group_index: None,
+                },
+            },
         }
     }
 }

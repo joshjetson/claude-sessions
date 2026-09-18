@@ -59,6 +59,14 @@ pub static QA_RUN_PIPELINE: PipelineDef = PipelineDef {
         .detail("A session that reviews one task in depth loses the ability to watch the other six. If a pass needs doing, it belongs in its own session."),
 
         StepDef::new(
+            "watch",
+            "How you find out",
+            "Sweep the backlog at start, then wait to be prodded.",
+            watch,
+        )
+        .detail("A question is a row in the notifications table, unresolved until something answers it, so one asked before this session existed is still waiting rather than lost. That is why the run starts the coordinator first and the QA sessions immediately after, with no handshake between them."),
+
+        StepDef::new(
             "triage",
             "Answer, or escalate",
             "Answers what it can from project context and escalates the rest.",
@@ -134,6 +142,18 @@ fn no_qa(_vars: &PromptVars) -> String {
      You are watching passes, not performing one. If you find yourself reading a diff in detail, \
      stop — that is a signal the work belongs in its own session."
         .to_string()
+}
+
+fn watch(vars: &PromptVars) -> String {
+    format!(
+        " Start by reading every task's run.json under the QA directory, including the tasks whose \
+         sessions began before you did — a question asked before you existed is still open and \
+         still waiting, not lost. After that you do not poll. The dashboard types a line into this \
+         session when a task in run \"{}\" asks something, naming the task. Treat that line as your \
+         cue to read that task's state and act. If you are ever unsure whether you missed one, \
+         re-read the run.json files rather than assuming you were told.",
+        run_id(vars)
+    )
 }
 
 fn triage(vars: &PromptVars) -> String {

@@ -97,16 +97,73 @@ pub struct QaRun {
     /// Tasks this run has started, so it cannot start one twice.
     pub spawned: Vec<i64>,
     pub mode: RunMode,
+    /// The coordinator's session, once it is identified.
+    ///
+    /// `None` covers two different states, and the run row says which: no
+    /// coordinator was started, or one was and has not written its transcript
+    /// yet. `coordinator_pending` tells them apart.
+    pub coordinator_session: Option<String>,
+    /// How to recognise the coordinator after launch.
+    ///
+    /// The daemon's launch queue does this job for tasks, and it keys on a task
+    /// id. A coordinator belongs to the run and to no task, so the same match
+    /// runs here instead. Cleared once the session is found.
+    pub coordinator_pending: Option<CoordinatorPending>,
+}
+
+/// What a just-launched coordinator is recognised by.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoordinatorPending {
+    /// The folder it was launched in.
+    pub cwd: String,
+    /// Sessions that already existed at launch, so the new one is the one that
+    /// is not in this set.
+    pub known_session_ids: Vec<String>,
+}
+
+/// Which session is the coordinator, given what is running now.
+///
+/// Deliberately strict. A session is the coordinator only when it is new, in
+/// the launch folder, and holds no task of its own. The cost of matching
+/// nothing is a run that shows "starting" for another second. The cost of
+/// matching wrongly is the dashboard calling a QA pass the coordinator, and
+/// then routing every question to a session that was told not to answer them.
+pub fn resolve_coordinator<'a>(
+    pending: &CoordinatorPending,
+    sessions: impl Iterator<Item = &'a Session>,
+) -> Option<String> {
+    let wanted = crate::util::trim_trailing_separators(&pending.cwd);
+    if wanted.is_empty() {
+        return None;
+    }
+    sessions
+        .filter(|session| {
+            // A process that has not written its transcript yet appears as a
+            // placeholder that matches every launch in the folder. Waiting is
+            // the smaller fault.
+            session.session_file.is_some()
+                && session.task_id.is_none()
+                && !pending.known_session_ids.contains(&session.session_id)
+                && crate::util::same_dir(&session.cwd, wanted)
+        })
+        .map(|session| session.session_id.clone())
+        .next()
 }
 
 /// How much a coordinating session is allowed to do on the reviewer's behalf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RunMode {
-    /// Record what it would have answered, answer nothing.
-    #[default]
+    /// Record what it would have answered, answer nothing. A calibration mode:
+    /// it measures the coordinator against the reviewer without letting it
+    /// speak. Reachable from config, not from the run menu.
     Shadow,
-    /// Also answer questions of fact. Judgment calls and verdicts still
-    /// escalate — see the answer policy, which enforces that independently.
+    /// Answer questions of fact, and escalate everything else. The default,
+    /// because a coordinator that answers nothing leaves every question with
+    /// the reviewer, which is the job it was added to take on.
+    ///
+    /// Judgment calls, verdicts and Odoo writes still escalate or refuse — see
+    /// the answer policy, which enforces that independently of the prompt.
+    #[default]
     Triage,
 }
 

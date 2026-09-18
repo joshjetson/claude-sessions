@@ -44,12 +44,14 @@ pub struct TreeSnapshot {
 
 pub fn tree_snapshot(state: &AppState) -> TreeSnapshot {
     let groups = state.config.groups();
+    let runs = state.run_sections();
     let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,
         &groups,
         &state.discovered_dirs,
         state.config.show_inactive_folders(),
+        &runs,
     );
     let keys: Vec<String> = items.iter().map(TreeItem::key).collect();
     let selected = state.tree_sel.resolve(&keys);
@@ -332,6 +334,15 @@ fn on_select(state: &mut AppState, snapshot: &TreeSnapshot) {
             }
         }
         Some(SelectedRow::Session { session_id, .. }) => select_session(state, session_id),
+        // A run row toggles like a project row. The run MENU is still reached
+        // with Enter on the board — this row shows the run, it does not act on
+        // it, so Enter here cannot start anything by accident.
+        Some(SelectedRow::Run { run_id }) => {
+            let key = format!("r:{run_id}");
+            if !state.expanded_projects.remove(&key) {
+                state.expanded_projects.insert(key);
+            }
+        }
         _ => {}
     }
 }
@@ -357,6 +368,14 @@ fn on_expand(state: &mut AppState, snapshot: &TreeSnapshot, expand: bool) {
                 if let Some(project) = project {
                     state.expanded_projects.remove(&project);
                 }
+            }
+        }
+        Some(SelectedRow::Run { run_id }) => {
+            let key = format!("r:{run_id}");
+            if expand {
+                state.expanded_projects.insert(key);
+            } else {
+                state.expanded_projects.remove(&key);
             }
         }
         _ => {}

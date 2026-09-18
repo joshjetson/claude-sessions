@@ -346,3 +346,34 @@ fn a_group_list_of_the_wrong_shape_does_not_lose_the_rest_of_the_config() {
     assert!(config.groups().is_empty());
     assert_eq!(config.chat().theme, "monokai");
 }
+
+// --- the coordinator's mode --------------------------------------------------
+
+#[test]
+fn a_coordinator_is_in_triage_unless_config_says_shadow() {
+    // Triage is the working mode. A coordinator that answers nothing leaves
+    // every question with the reviewer, which is the job it exists to take on.
+    let (_dir, config) = handle(json!({}));
+    assert_eq!(config.qa_coordinator_mode(), crate::qarun::RunMode::Triage);
+}
+
+#[test]
+fn shadow_is_reachable_from_config() {
+    let (_dir, config) = handle(json!({ "qa": { "coordinatorMode": "shadow" } }));
+    assert_eq!(config.qa_coordinator_mode(), crate::qarun::RunMode::Shadow);
+}
+
+#[test]
+fn a_misspelled_mode_falls_back_to_triage_rather_than_silence() {
+    // The failure to avoid: "shaddow" resolving to shadow-like behaviour by
+    // accident. A coordinator that quietly answers nothing looks exactly like
+    // one that is broken, and nobody would know which they had.
+    let (_dir, config) = handle(json!({ "qa": { "coordinatorMode": "shaddow" } }));
+    assert_eq!(config.qa_coordinator_mode(), crate::qarun::RunMode::Triage);
+}
+
+#[test]
+fn the_mode_is_case_insensitive() {
+    let (_dir, config) = handle(json!({ "qa": { "coordinatorMode": "Shadow" } }));
+    assert_eq!(config.qa_coordinator_mode(), crate::qarun::RunMode::Shadow);
+}

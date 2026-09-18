@@ -334,7 +334,9 @@ impl BoardSlice {
             started_at: crate::util::iso_now(),
             lane_limit: None,
             spawned: Vec::new(),
-            mode: RunMode::Shadow,
+            mode: RunMode::default(),
+            coordinator_session: None,
+            coordinator_pending: None,
         });
         Some(covered)
     }

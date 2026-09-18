@@ -272,6 +272,7 @@ fn run(
         Action::SendToSession(spec) => {
             board::send_to_session(&spec, services, driver, policy, results)
         }
+        Action::NudgeCoordinator(spec) => board::nudge_coordinator(&spec, driver, policy, results),
         Action::Resume(request) => board::resume(&request, services, driver, policy, results),
         Action::MoveStage {
             task_id,

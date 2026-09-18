@@ -43,7 +43,9 @@ pub use launch::{
 };
 pub use runs::{jump_to_next_ask, run_command, watch_or_drop};
 pub use slice::{live_task_ids, BoardDetail, BoardSlice, BoardUpdate, DetailAnswers};
-pub use spec::{short, LaunchSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec};
+pub use spec::{
+    short, LaunchSpec, NudgeSpec, PromptContext, ResumePurpose, ResumeRequest, SendSpec,
+};
 pub use start::{start, task_url, StartRequest};
 pub use view::{label, snapshot, window, BoardRow, BoardSnapshot, BoardWindow};
 

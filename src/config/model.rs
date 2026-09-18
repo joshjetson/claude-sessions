@@ -481,6 +481,18 @@ pub struct QaBlock {
     /// concurrency number would catch that.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane_limit: Option<usize>,
+    /// `"shadow"` puts every coordinator in calibration mode.
+    ///
+    /// Absent means triage, which is the working mode: the coordinator answers
+    /// questions of fact and escalates everything else. Shadow answers nothing
+    /// and only records what it would have said, so the agreement rate can be
+    /// read before the coordinator is trusted with anything.
+    ///
+    /// A config setting rather than a per-run toggle. Calibration is a decision
+    /// about the coordinator as a whole, and a mode that could be flipped per
+    /// run would produce an agreement number mixed from both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinator_mode: Option<String>,
 }
 
 /// How the sessions tree is drawn.

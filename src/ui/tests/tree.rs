@@ -26,6 +26,8 @@ fn names(items: &[TreeItem<'_>]) -> Vec<String> {
             TreeItem::Project { name, .. } => format!("proj:{name}"),
             TreeItem::Session { session, .. } => format!("sess:{}", session.session_id),
             TreeItem::Inactive { name, .. } => format!("dir:{name}"),
+            TreeItem::Run { run_id, .. } => format!("run:{run_id}"),
+            TreeItem::RunAgent { task_id, .. } => format!("agent:{task_id}"),
         })
         .collect()
 }
@@ -612,7 +614,7 @@ fn quiet_folders_are_hidden_by_default() {
     );
     let groups = vec![Group::new("Dev", "/Users/x/dev")];
 
-    let hidden = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, false);
+    let hidden = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, false, &[]);
     assert!(
         !hidden
             .iter()
@@ -645,7 +647,7 @@ fn quiet_folders_come_back_when_asked_for() {
     );
     let groups = vec![Group::new("Dev", "/Users/x/dev")];
 
-    let shown = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, true);
+    let shown = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, true, &[]);
     let quiet: Vec<&str> = shown
         .iter()
         .filter_map(|item| match item {
@@ -655,4 +657,182 @@ fn quiet_folders_come_back_when_asked_for() {
         .collect();
     // `alpha` has a live session, so it is a project row and not a quiet folder.
     assert_eq!(quiet, ["bravo", "charlie"]);
+}
+
+// --- the Runs section --------------------------------------------------------
+
+fn run_section<'a>(
+    run_id: &'a str,
+    stage: &'a str,
+    coordinator: Option<&'a crate::types::Session>,
+    agents: Vec<crate::ui::tree::RunAgentRow<'a>>,
+) -> crate::ui::tree::RunSection<'a> {
+    crate::ui::tree::RunSection {
+        run_id,
+        stage,
+        coordinator,
+        agents,
+    }
+}
+
+#[test]
+fn no_run_means_no_runs_section() {
+    // The section costs a quiet dashboard nothing. A permanent empty header
+    // would be one more row to read past every time.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let items = build_grouped_tree_with(&sessions, &HashSet::new(), &[], &dirs, false, &[]);
+    assert!(
+        !items
+            .iter()
+            .any(|item| matches!(item, TreeItem::Separator { name, .. } if name == &"Runs")),
+        "the Runs section appeared with no run open"
+    );
+}
+
+#[test]
+fn a_collapsed_run_shows_the_coordinator_and_nothing_else() {
+    // The coordinator is the run's single point of contact, so it is what the
+    // closed row is. Seven agent rows under every run would put the sessions
+    // list back where it started.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let coord = session("coord", "/repo/alpha", SessionStatus::Idle);
+    let agents = vec![
+        crate::ui::tree::RunAgentRow {
+            task_id: 4101,
+            session: None,
+            asking: false,
+        },
+        crate::ui::tree::RunAgentRow {
+            task_id: 4102,
+            session: None,
+            asking: true,
+        },
+    ];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        Some(&coord),
+        agents,
+    )];
+
+    let items = build_grouped_tree_with(&sessions, &HashSet::new(), &[], &dirs, false, &runs);
+
+    assert_eq!(
+        names(&items),
+        vec!["sep:Runs".to_string(), "run:p::QA".to_string()],
+        "a collapsed run drew more than its coordinator row"
+    );
+}
+
+#[test]
+fn opening_a_run_shows_its_agents() {
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let coord = session("coord", "/repo/alpha", SessionStatus::Idle);
+    let agents = vec![
+        crate::ui::tree::RunAgentRow {
+            task_id: 4101,
+            session: None,
+            asking: false,
+        },
+        crate::ui::tree::RunAgentRow {
+            task_id: 4102,
+            session: None,
+            asking: true,
+        },
+    ];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        Some(&coord),
+        agents,
+    )];
+
+    let mut expanded = HashSet::new();
+    expanded.insert("r:p::QA".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &[], &dirs, false, &runs);
+
+    assert_eq!(
+        names(&items),
+        vec![
+            "sep:Runs".to_string(),
+            "run:p::QA".to_string(),
+            "agent:4101".to_string(),
+            "agent:4102".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_run_row_says_when_it_has_no_coordinator() {
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    // A run whose coordinator died still shows its QA sessions working, and
+    // looks healthy. The row is the only place that can say otherwise.
+    let coord_less = run_section("p::QA", "Quality Assurance", None, Vec::new());
+    let items = build_grouped_tree_with(
+        &sessions,
+        &HashSet::new(),
+        &[],
+        &dirs,
+        false,
+        std::slice::from_ref(&coord_less),
+    );
+    let run = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::Run { .. }))
+        .expect("run row");
+    let (_cfg_dir, config) = temp_config();
+    let text = line_text(run, &config);
+    assert!(
+        text.contains("no coordinator"),
+        "the run row does not say the coordinator is missing: {text:?}"
+    );
+}
+
+#[test]
+fn a_run_row_counts_the_agents_that_are_asking() {
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let coord = session("coord", "/repo/alpha", SessionStatus::Idle);
+    let agents = vec![
+        crate::ui::tree::RunAgentRow {
+            task_id: 4101,
+            session: None,
+            asking: true,
+        },
+        crate::ui::tree::RunAgentRow {
+            task_id: 4102,
+            session: None,
+            asking: true,
+        },
+        crate::ui::tree::RunAgentRow {
+            task_id: 4103,
+            session: None,
+            asking: false,
+        },
+    ];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        Some(&coord),
+        agents,
+    )];
+    let items = build_grouped_tree_with(&sessions, &HashSet::new(), &[], &dirs, false, &runs);
+    let run = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::Run { .. }))
+        .expect("run row");
+    let (_cfg_dir, config) = temp_config();
+    let text = line_text(run, &config);
+    assert!(
+        text.contains("2 asking"),
+        "expected a waiting count: {text:?}"
+    );
+    assert!(
+        text.contains("3 agents"),
+        "expected an agent count: {text:?}"
+    );
 }

@@ -100,6 +100,8 @@ pub enum Action {
     /// Type a revision into a session that is already open, rather than
     /// resuming its id into a second process against the same conversation.
     SendToSession(Box<SendSpec>),
+    /// Wake a run's coordinator so it reads a question. Never focuses.
+    NudgeCoordinator(Box<crate::ui::board::NudgeSpec>),
     /// Find a task's archived conversation and open it. The lookup restores the
     /// transcript into Claude Code's own project directory, so it is file I/O
     /// and belongs off the draw thread.
