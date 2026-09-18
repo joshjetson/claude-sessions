@@ -49,7 +49,8 @@ pub use tmux::{
     LIST_CLIENTS_FORMAT, LIST_PANES_FORMAT, LIST_SESSIONS_FORMAT,
 };
 pub use types::{
-    normalize_tty, DriverResult, LaunchRequest, NullDriver, SessionRef, TerminalDriver, TASK_ID_ENV,
+    normalize_tty, DriverResult, LaunchRequest, NullDriver, SessionRef, TerminalDriver, RUN_ID_ENV,
+    TASK_ID_ENV,
 };
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ fn the_shared_migration_sequence_is_pinned() {
 
     assert_eq!(
         db.schema_version(),
-        4,
+        5,
         "the schema version moved — is the Node app's src/db.ts at the same number?"
     );
 
@@ -160,6 +160,21 @@ fn the_shared_migration_sequence_is_pinned() {
     assert!(
         notification_columns(&db).contains(&"kind".to_string()),
         "migration 4 is missing — the sequence has diverged from the Node app"
+    );
+
+    // 5 — watched QA runs. THIS ONE IS NOT IN THE NODE APP.
+    //
+    // The sequences diverge here on purpose, and the reasoning is worth keeping
+    // because the general rule says not to. Node is frozen: the work moved to
+    // this port and nothing new is being added there. Index 5 existing here and
+    // nowhere there is safe in both orders — Node's loop ends at 4 and has
+    // nothing at 5 to skip, and this app applies 5 over a file Node left at 4.
+    //
+    // What would NOT be safe is the Node app later adding a DIFFERENT migration
+    // at index 5. If that ever happens, it must be this same SQL.
+    assert!(
+        table_exists(&db, "qa_runs"),
+        "migration 5 is missing — a watched run will not survive a restart"
     );
 }
 
@@ -212,4 +227,100 @@ fn notification_columns(db: &Db) -> Vec<String> {
     db.rows("cols", "PRAGMA table_info(notifications)", [], |row| {
         row.get::<_, String>(1)
     })
+}
+
+// --- QA runs survive a restart ------------------------------------------------
+
+fn a_run(id: &str) -> crate::qarun::QaRun {
+    crate::qarun::QaRun {
+        id: id.to_string(),
+        project_name: "x/alpha".to_string(),
+        stage_name: "Quality Assurance".to_string(),
+        task_ids: vec![4101, 4102, 4103],
+        spawned: vec![4101],
+        started_at: "2026-09-18T10:00:00Z".to_string(),
+        lane_limit: None,
+        mode: crate::qarun::RunMode::Triage,
+        coordinator_started: true,
+    }
+}
+
+#[test]
+fn a_saved_run_comes_back_whole() {
+    // The point of the table: quitting the dashboard used to turn a seven-agent
+    // run back into seven unrelated rows.
+    let t = open();
+    let run = a_run("x/alpha::Quality Assurance");
+    t.db.save_qa_runs(std::slice::from_ref(&run));
+
+    let back = t.db.qa_runs();
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0], run);
+}
+
+#[test]
+fn saving_replaces_rather_than_accumulates() {
+    // Stopping a run has to REMOVE its row. An upsert would leave it behind and
+    // the run would come back after being dismissed.
+    let t = open();
+    t.db.save_qa_runs(&[a_run("one"), a_run("two")]);
+    t.db.save_qa_runs(&[a_run("two")]);
+
+    let back = t.db.qa_runs();
+    assert_eq!(back.len(), 1, "the removed run came back: {back:?}");
+    assert_eq!(back[0].id, "two");
+}
+
+#[test]
+fn saving_nothing_clears_the_table() {
+    let t = open();
+    t.db.save_qa_runs(&[a_run("one")]);
+    t.db.save_qa_runs(&[]);
+    assert!(t.db.qa_runs().is_empty());
+}
+
+#[test]
+fn a_lane_limit_round_trips_and_zero_is_no_cap() {
+    // 0 means "no cap" everywhere else, so a stored 0 must not read back as a
+    // cap of zero lanes — that would start nothing and look like a hang.
+    let t = open();
+    let capped = crate::qarun::QaRun {
+        lane_limit: Some(6),
+        ..a_run("capped")
+    };
+    t.db.save_qa_runs(std::slice::from_ref(&capped));
+    assert_eq!(t.db.qa_runs()[0].lane_limit, Some(6));
+
+    let zero = crate::qarun::QaRun {
+        lane_limit: Some(0),
+        ..a_run("capped")
+    };
+    t.db.save_qa_runs(std::slice::from_ref(&zero));
+    assert_eq!(t.db.qa_runs()[0].lane_limit, None);
+}
+
+#[test]
+fn shadow_mode_round_trips() {
+    let t = open();
+    let shadow = crate::qarun::QaRun {
+        mode: crate::qarun::RunMode::Shadow,
+        ..a_run("shadow")
+    };
+    t.db.save_qa_runs(std::slice::from_ref(&shadow));
+    assert_eq!(t.db.qa_runs()[0].mode, crate::qarun::RunMode::Shadow);
+}
+
+#[test]
+fn a_run_with_no_tasks_does_not_become_a_run_with_one() {
+    // An empty id list splits into one empty string. Parsing that as a task
+    // would give the run a phantom member.
+    let t = open();
+    let empty = crate::qarun::QaRun {
+        task_ids: Vec::new(),
+        spawned: Vec::new(),
+        ..a_run("empty")
+    };
+    t.db.save_qa_runs(std::slice::from_ref(&empty));
+    assert!(t.db.qa_runs()[0].task_ids.is_empty());
+    assert!(t.db.qa_runs()[0].spawned.is_empty());
 }

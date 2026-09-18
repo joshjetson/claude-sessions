@@ -251,12 +251,26 @@ pub fn all_discovered_dirs(discovered: &BTreeMap<String, Vec<String>>) -> Vec<St
 }
 
 /// The run-specific prompt values for a task, read off config once.
+/// The variables a prompt is rendered with.
+///
+/// `caller_extras` are the ones the START REQUEST carried, and they are merged
+/// LAST so a caller can override a task-derived default. They were dropped
+/// entirely once: the coordinator launch sets `runId`, `taskIds`, `qaRoot` and
+/// `triage` here, this function built its extras from the task alone, and the
+/// coordinator rendered its prompt with none of them.
+///
+/// The failure was quiet and expensive. With no `taskIds` the coordinator could
+/// not tell which tasks were in its run, so it guessed from file timestamps and
+/// reported eleven tasks for a run of seven. With no `triage` it took the
+/// shadow branch of its own prompt and answered nothing, while the run's mode
+/// said triage. Nothing errored; it simply did the wrong job carefully.
 pub fn prompt_context(
     config: &ConfigHandle,
     paths: &crate::paths::Paths,
     task: &Task,
     task_url: String,
     extra_context: &str,
+    caller_extras: &BTreeMap<String, String>,
 ) -> PromptContext {
     PromptContext {
         task_id: task.id,
@@ -274,6 +288,11 @@ pub fn prompt_context(
         ]
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
+        .chain(
+            caller_extras
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        )
         .collect(),
         // Filled in only by the conflict flow, which knows its merge request.
         mr: None,

@@ -664,11 +664,13 @@ fn quiet_folders_come_back_when_asked_for() {
 fn run_section<'a>(
     run_id: &'a str,
     stage: &'a str,
+    project: &'a str,
     coordinator: Option<&'a crate::types::Session>,
     agents: Vec<crate::ui::tree::RunAgentRow<'a>>,
 ) -> crate::ui::tree::RunSection<'a> {
     crate::ui::tree::RunSection {
         run_id,
+        project,
         stage,
         coordinator,
         agents,
@@ -713,6 +715,7 @@ fn a_collapsed_run_shows_the_coordinator_and_nothing_else() {
     let runs = vec![run_section(
         "p::QA",
         "Quality Assurance",
+        "x/alpha",
         Some(&coord),
         agents,
     )];
@@ -746,6 +749,7 @@ fn opening_a_run_shows_its_agents() {
     let runs = vec![run_section(
         "p::QA",
         "Quality Assurance",
+        "x/alpha",
         Some(&coord),
         agents,
     )];
@@ -771,7 +775,7 @@ fn a_run_row_says_when_it_has_no_coordinator() {
     let dirs = no_dirs();
     // A run whose coordinator died still shows its QA sessions working, and
     // looks healthy. The row is the only place that can say otherwise.
-    let coord_less = run_section("p::QA", "Quality Assurance", None, Vec::new());
+    let coord_less = run_section("p::QA", "Quality Assurance", "x/alpha", None, Vec::new());
     let items = build_grouped_tree_with(
         &sessions,
         &HashSet::new(),
@@ -817,6 +821,7 @@ fn a_run_row_counts_the_agents_that_are_asking() {
     let runs = vec![run_section(
         "p::QA",
         "Quality Assurance",
+        "x/alpha",
         Some(&coord),
         agents,
     )];
@@ -834,5 +839,173 @@ fn a_run_row_counts_the_agents_that_are_asking() {
     assert!(
         text.contains("3 agents"),
         "expected an agent count: {text:?}"
+    );
+}
+
+#[test]
+fn a_runs_agents_do_not_also_appear_under_their_project() {
+    // A session listed twice is a session you can select in two places and act
+    // on without knowing which row you were on. The run's section is the one
+    // that says what the session is FOR, so the project list gives it up.
+    let agent = session("aaa", "/Users/x/dev/alpha", SessionStatus::Working);
+    let other = session("zzz", "/Users/x/dev/alpha", SessionStatus::Idle);
+    let sessions = by_project(vec![agent.clone(), other]);
+    let dirs = no_dirs();
+
+    let agents = vec![crate::ui::tree::RunAgentRow {
+        task_id: 4101,
+        session: sessions.values().flatten().find(|s| s.session_id == "aaa"),
+        asking: false,
+    }];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        agents,
+    )];
+
+    let mut expanded = HashSet::new();
+    expanded.insert("x/alpha".to_string());
+    expanded.insert("r:p::QA".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &[], &dirs, false, &runs);
+
+    let rendered = names(&items);
+    assert_eq!(
+        rendered.iter().filter(|n| n.as_str() == "sess:aaa").count(),
+        0,
+        "the agent is still drawn under its project: {rendered:?}"
+    );
+    assert_eq!(
+        rendered
+            .iter()
+            .filter(|n| n.as_str() == "agent:4101")
+            .count(),
+        1,
+        "the agent is missing from its run: {rendered:?}"
+    );
+    // The session that is NOT in the run keeps its place.
+    assert!(
+        rendered.iter().any(|n| n == "sess:zzz"),
+        "an unrelated session was removed too: {rendered:?}"
+    );
+}
+
+#[test]
+fn a_project_whose_every_session_is_in_a_run_disappears() {
+    // Not an empty project — a project already on screen, further up. A header
+    // reading "0 sessions" would be a second, worse copy of the run.
+    let agent = session("aaa", "/Users/x/dev/alpha", SessionStatus::Working);
+    let sessions = by_project(vec![agent]);
+    let dirs = no_dirs();
+
+    let agents = vec![crate::ui::tree::RunAgentRow {
+        task_id: 4101,
+        session: sessions.values().flatten().next(),
+        asking: false,
+    }];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        agents,
+    )];
+
+    let items = build_grouped_tree_with(&sessions, &HashSet::new(), &[], &dirs, false, &runs);
+    let rendered = names(&items);
+    assert!(
+        !rendered.iter().any(|n| n.starts_with("proj:")),
+        "an emptied project header was still drawn: {rendered:?}"
+    );
+}
+
+#[test]
+fn the_coordinator_is_not_drawn_under_its_project_either() {
+    // It launches in the repo like everything else, so without this it appears
+    // as the run header AND as a nameless session two rows down.
+    let coord = session("coord", "/Users/x/dev/alpha", SessionStatus::Idle);
+    let sessions = by_project(vec![coord]);
+    let dirs = no_dirs();
+    let live = sessions.values().flatten().next();
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        live,
+        Vec::new(),
+    )];
+
+    let mut expanded = HashSet::new();
+    expanded.insert("x/alpha".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &[], &dirs, false, &runs);
+    let rendered = names(&items);
+    assert!(
+        !rendered.iter().any(|n| n == "sess:coord"),
+        "the coordinator is drawn twice: {rendered:?}"
+    );
+}
+
+#[test]
+fn a_grouped_project_drops_its_run_sessions_too() {
+    // The grouped branch builds its project rows separately from the flat one,
+    // so it filters separately and can be forgotten separately.
+    let agent = session("aaa", "/Users/x/dev/alpha", SessionStatus::Working);
+    let other = session("zzz", "/Users/x/dev/alpha", SessionStatus::Idle);
+    let sessions = by_project(vec![agent, other]);
+    let dirs = no_dirs();
+    let groups = vec![Group::new("Dev", "/Users/x/dev")];
+
+    let agents = vec![crate::ui::tree::RunAgentRow {
+        task_id: 4101,
+        session: sessions.values().flatten().find(|s| s.session_id == "aaa"),
+        asking: false,
+    }];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        agents,
+    )];
+
+    let mut expanded = HashSet::new();
+    expanded.insert("x/alpha".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &groups, &dirs, false, &runs);
+    let rendered = names(&items);
+    assert!(
+        !rendered.iter().any(|n| n == "sess:aaa"),
+        "the grouped branch still draws the agent twice: {rendered:?}"
+    );
+    assert!(
+        rendered.iter().any(|n| n == "sess:zzz"),
+        "the grouped branch dropped an unrelated session: {rendered:?}"
+    );
+}
+
+#[test]
+fn a_run_row_is_titled_by_its_project_not_its_stage() {
+    // Every QA run's stage is called "Quality Assurance", so the stage names
+    // nothing. The project says which codebase the row is about.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        Vec::new(),
+    )];
+    let items = build_grouped_tree_with(&sessions, &HashSet::new(), &[], &dirs, false, &runs);
+    let run = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::Run { .. }))
+        .expect("run row");
+    let (_cfg_dir, config) = temp_config();
+    let text = line_text(run, &config);
+    assert!(text.contains("x/alpha"), "the project is missing: {text:?}");
+    assert!(
+        !text.contains("Quality Assurance"),
+        "the stage is still the title: {text:?}"
     );
 }

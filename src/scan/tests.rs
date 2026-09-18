@@ -48,6 +48,7 @@ pub(crate) fn a_proc(pid: u32, start_ms: u64) -> ClaudeProcess {
         cwd: "/w".to_string(),
         session_id: None,
         launch_task_id: None,
+        launch_run_id: None,
     }
 }
 
@@ -217,4 +218,36 @@ impl ProcessSource for FakeProcesses {
             .filter_map(|pid| state.environ.get(pid).map(|v| (*pid, v.clone())))
             .collect()
     }
+}
+
+// --- reading the run id out of a process environment -------------------------
+
+#[test]
+fn a_run_id_is_read_from_the_environment() {
+    let line = "PATH=/usr/bin CLAUDE_SESSIONS_RUN_ID=Project::Quality HOME=/Users/x";
+    assert_eq!(
+        crate::scan::detect::launch_run_id(line),
+        Some("Project::Quality".to_string())
+    );
+}
+
+#[test]
+fn a_variable_that_merely_ends_in_the_key_is_not_a_run_id() {
+    // The same boundary rule the task id uses. Without it, MY_CLAUDE_SESSIONS_RUN_ID
+    // set by something else would be read as ours.
+    let line = "MY_CLAUDE_SESSIONS_RUN_ID=nope";
+    assert_eq!(crate::scan::detect::launch_run_id(line), None);
+}
+
+#[test]
+fn an_environment_without_a_run_id_yields_none() {
+    // Which is every session except a coordinator, so this is the common path.
+    let line = "PATH=/usr/bin CLAUDE_SESSIONS_TASK_ID=6688 HOME=/Users/x";
+    assert_eq!(crate::scan::detect::launch_run_id(line), None);
+}
+
+#[test]
+fn an_empty_run_id_value_is_not_a_run_id() {
+    let line = "CLAUDE_SESSIONS_RUN_ID= PATH=/usr/bin";
+    assert_eq!(crate::scan::detect::launch_run_id(line), None);
 }

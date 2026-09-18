@@ -433,6 +433,7 @@ fn fully_populated() -> Session {
             timestamp: "2026-09-17T14:00:00.000Z".to_string(),
         }],
         task_id: Some(5238),
+        run_id: None,
     }
 }
 

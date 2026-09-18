@@ -97,57 +97,86 @@ pub struct QaRun {
     /// Tasks this run has started, so it cannot start one twice.
     pub spawned: Vec<i64>,
     pub mode: RunMode,
-    /// The coordinator's session, once it is identified.
+    /// Whether this run has launched a coordinator.
     ///
-    /// `None` covers two different states, and the run row says which: no
-    /// coordinator was started, or one was and has not written its transcript
-    /// yet. `coordinator_pending` tells them apart.
-    pub coordinator_session: Option<String>,
-    /// How to recognise the coordinator after launch.
+    /// Only whether, not which. WHICH session it is gets resolved live from
+    /// `CLAUDE_SESSIONS_RUN_ID` every time it is needed — see
+    /// [`coordinator_of`] — so a coordinator that dies stops being reported as
+    /// present the moment its process goes, with nothing to invalidate.
     ///
-    /// The daemon's launch queue does this job for tasks, and it keys on a task
-    /// id. A coordinator belongs to the run and to no task, so the same match
-    /// runs here instead. Cleared once the session is found.
-    pub coordinator_pending: Option<CoordinatorPending>,
+    /// This flag exists only so the menu can refuse to start a second one
+    /// during the seconds before the first appears in a scan.
+    pub coordinator_started: bool,
 }
 
-/// What a just-launched coordinator is recognised by.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoordinatorPending {
-    /// The folder it was launched in.
-    pub cwd: String,
-    /// Sessions that already existed at launch, so the new one is the one that
-    /// is not in this set.
-    pub known_session_ids: Vec<String>,
+/// The run id as it travels through a process environment.
+///
+/// Percent-encoded, because `ps -E` prints the whole environment as one
+/// space-separated line and a value containing a space cannot be read back
+/// from it — the reader stops at the space and gets half an id. Run ids are
+/// `project::stage`, and stage names have spaces in them ("Quality
+/// Assurance"), so this is the normal case rather than an edge one.
+///
+/// `%` is encoded first, or decoding an id that legitimately contains `%20`
+/// would invent a space that was never there.
+pub fn encode_run_id(run_id: &str) -> String {
+    let mut out = String::with_capacity(run_id.len());
+    for ch in run_id.chars() {
+        match ch {
+            '%' => out.push_str("%25"),
+            c if c.is_whitespace() => out.push_str(&format!("%{:02X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The inverse of [`encode_run_id`].
+///
+/// Surrounding quotes are stripped first: the launch writes `export KEY=...`
+/// through a shell, and some platforms report the quoted form rather than the
+/// value the shell ended up with.
+pub fn decode_run_id(raw: &str) -> String {
+    let trimmed = raw.trim_matches(|c| c == '\'' || c == '"');
+    let bytes = trimmed.as_bytes();
+    let mut out = String::with_capacity(trimmed.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() + 1 && i + 3 <= bytes.len() {
+            if let Ok(code) = u8::from_str_radix(&trimmed[i + 1..i + 3], 16) {
+                out.push(code as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(trimmed[i..].chars().next().unwrap_or_default());
+        i += trimmed[i..].chars().next().map_or(1, char::len_utf8);
+    }
+    out
 }
 
 /// Which session is the coordinator, given what is running now.
 ///
-/// Deliberately strict. A session is the coordinator only when it is new, in
-/// the launch folder, and holds no task of its own. The cost of matching
-/// nothing is a run that shows "starting" for another second. The cost of
-/// matching wrongly is the dashboard calling a QA pass the coordinator, and
-/// then routing every question to a session that was told not to answer them.
-pub fn resolve_coordinator<'a>(
-    pending: &CoordinatorPending,
-    sessions: impl Iterator<Item = &'a Session>,
-) -> Option<String> {
-    let wanted = crate::util::trim_trailing_separators(&pending.cwd);
-    if wanted.is_empty() {
+/// Matched on `CLAUDE_SESSIONS_RUN_ID`, which the launch exports and the
+/// scanner reads back from `ps -E`. Nothing else carries it, so there is
+/// nothing to disambiguate.
+///
+/// This replaced a guess: "a new session, in the launch folder, holding no
+/// task". The run's own QA sessions satisfy all three for the moment between
+/// writing a transcript and that transcript being read for a task URL, and they
+/// start in the same folder seconds later — uncapped, seven of them at once. It
+/// was a race, and losing it meant the dashboard calling a QA pass the
+/// coordinator and typing every question into a session told not to answer
+/// questions. The environment cannot be raced: the variable is set before the
+/// process starts and is either there or not.
+pub fn coordinator_of<'a>(
+    run_id: &str,
+    mut sessions: impl Iterator<Item = &'a Session>,
+) -> Option<&'a Session> {
+    if run_id.is_empty() {
         return None;
     }
-    sessions
-        .filter(|session| {
-            // A process that has not written its transcript yet appears as a
-            // placeholder that matches every launch in the folder. Waiting is
-            // the smaller fault.
-            session.session_file.is_some()
-                && session.task_id.is_none()
-                && !pending.known_session_ids.contains(&session.session_id)
-                && crate::util::same_dir(&session.cwd, wanted)
-        })
-        .map(|session| session.session_id.clone())
-        .next()
+    sessions.find(|session| session.run_id.as_deref() == Some(run_id))
 }
 
 /// How much a coordinating session is allowed to do on the reviewer's behalf.

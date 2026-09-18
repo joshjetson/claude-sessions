@@ -109,6 +109,9 @@ pub struct LaunchSpec {
     pub known_session_ids: Vec<String>,
     /// Shown once the terminal is open.
     pub say: String,
+    /// Set only when this launch is a QA run's coordinator. Exported into the
+    /// session's environment so the scanner can recognise it later.
+    pub run_id: Option<String>,
 }
 
 /// Handing a revision to a session that is already open.
@@ -208,6 +211,8 @@ impl ResumeRequest {
                 request
             }),
             known_session_ids: self.known_session_ids.clone(),
+            // A resume is never a coordinator launch.
+            run_id: None,
             say: match self.purpose {
                 ResumePurpose::Revision => format!(
                     "Resumed #{task_id} ({}) with revision notes.",

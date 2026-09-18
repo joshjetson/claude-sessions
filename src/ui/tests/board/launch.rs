@@ -32,6 +32,7 @@ fn spec_for(dir: &tempfile::TempDir, prompt: Option<&str>) -> LaunchSpec {
         stage_move: None,
         known_session_ids: vec!["already-here".to_string()],
         say: String::new(),
+        run_id: None,
     }
 }
 
@@ -347,4 +348,48 @@ fn resuming_a_task_with_no_archive_says_so_and_opens_nothing() {
         "{said}"
     );
     assert!(harness.driver.launched().is_empty());
+}
+
+#[test]
+fn a_coordinator_launch_exports_the_run_id() {
+    // This variable is the whole of how a coordinator is recognised later. If
+    // the launch stops exporting it, every run reports "no coordinator" and
+    // nothing else fails — so it is asserted here rather than left to the
+    // matcher's own tests, which would keep passing.
+    let harness = harness();
+    let repo = tempfile::tempdir().expect("repo");
+    let spec = LaunchSpec {
+        run_id: Some("Project::Quality Assurance".to_string()),
+        ..spec_for(&repo, Some("x"))
+    };
+    run(&harness, &spec, SpawnPolicy::Allow);
+
+    let launches = harness.driver.launched();
+    assert!(
+        launches[0].env.contains(&(
+            crate::term::RUN_ID_ENV.to_string(),
+            "Project::Quality Assurance".to_string()
+        )),
+        "the run id was not exported: {:?}",
+        launches[0].env
+    );
+}
+
+#[test]
+fn an_ordinary_launch_exports_no_run_id() {
+    // The variable's PRESENCE is the answer to "is this a coordinator", so a QA
+    // session carrying one would be indistinguishable from the watcher.
+    let harness = harness();
+    let repo = tempfile::tempdir().expect("repo");
+    run(&harness, &spec_for(&repo, Some("x")), SpawnPolicy::Allow);
+
+    let launches = harness.driver.launched();
+    assert!(
+        !launches[0]
+            .env
+            .iter()
+            .any(|(key, _)| key == crate::term::RUN_ID_ENV),
+        "an ordinary launch exported a run id: {:?}",
+        launches[0].env
+    );
 }

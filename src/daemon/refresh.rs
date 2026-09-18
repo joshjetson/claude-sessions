@@ -211,6 +211,7 @@ fn enrich(
         cwd: raw.cwd,
         tty: raw.tty,
         lstart: raw.lstart,
+        run_id: raw.run_id,
         session_file: raw.session_file,
         session_mtime: raw.session_mtime,
         session_size: raw.session_size,

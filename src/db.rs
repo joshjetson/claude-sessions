@@ -29,6 +29,7 @@
 mod import;
 mod log;
 mod notifications;
+mod qa_runs;
 mod tasks;
 
 #[cfg(test)]
@@ -59,7 +60,7 @@ use crate::paths::Paths;
 /// So: append only, never renumber, and add the same SQL at the same index in
 /// the Node app's `src/db.ts`. Migrations 1 and 2 are the Node app's original
 /// schema verbatim, which is why a database it wrote is already at version 2.
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     // 1 — initial schema.
     "
     CREATE TABLE IF NOT EXISTS task_archive (
@@ -134,6 +135,30 @@ const MIGRATIONS: [&str; 4] = [
     "
     ALTER TABLE notifications ADD COLUMN kind TEXT NOT NULL DEFAULT 'info';
     CREATE INDEX IF NOT EXISTS notifications_kind_idx ON notifications(kind);
+    ",
+    // 5 — QA runs, so one survives quitting the dashboard.
+    //
+    // A run was memory only. Quitting ended the process and the grouping went
+    // with it: the coordinator and its agents kept running, but on restart the
+    // dashboard no longer knew they belonged together, so every one of them
+    // fell back to its project and the Runs section vanished. Nothing was
+    // broken except the dashboard's memory of it.
+    //
+    // `task_ids` and `spawned` are comma-separated rather than a child table.
+    // A run holds a handful of ids, they are always read and written whole, and
+    // a second table would need its own migration to say nothing more.
+    "
+    CREATE TABLE IF NOT EXISTS qa_runs (
+      id                  TEXT PRIMARY KEY,
+      project_name        TEXT NOT NULL DEFAULT '',
+      stage_name          TEXT NOT NULL DEFAULT '',
+      task_ids            TEXT NOT NULL DEFAULT '',
+      spawned             TEXT NOT NULL DEFAULT '',
+      started_at          TEXT NOT NULL DEFAULT '',
+      lane_limit          INTEGER,
+      mode                TEXT NOT NULL DEFAULT 'triage',
+      coordinator_started INTEGER NOT NULL DEFAULT 0
+    );
     ",
 ];
 

@@ -335,8 +335,7 @@ impl BoardSlice {
             lane_limit: None,
             spawned: Vec::new(),
             mode: RunMode::default(),
-            coordinator_session: None,
-            coordinator_pending: None,
+            coordinator_started: false,
         });
         Some(covered)
     }

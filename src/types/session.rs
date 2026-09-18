@@ -37,6 +37,12 @@ pub struct RawSession {
     /// Raw `ps -o lstart` text; formatted lazily by `util::format_start_time`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lstart: Option<String>,
+    /// `CLAUDE_SESSIONS_RUN_ID`, present only on a QA run's coordinator.
+    ///
+    /// The coordinator holds no task id, so this is what tells it apart from
+    /// the run's own QA sessions, which start in the same folder moments later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     /// `None` for a `starting-<pid>` placeholder that has no transcript yet.
     /// (Node used an empty string; the pairing rules hang off this being unset.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -100,6 +106,13 @@ pub struct Session {
     /// Odoo task this session is working, read from its transcript head.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<i64>,
+    /// The QA run this session coordinates, from `CLAUDE_SESSIONS_RUN_ID`.
+    ///
+    /// Set on a coordinator and on nothing else, which is what makes it a
+    /// reliable way to find one. Carried from the process environment rather
+    /// than the transcript, so it is known before a single line is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
 }
 
 /// One `*.jsonl` in a project's transcript directory.

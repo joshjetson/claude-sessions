@@ -46,6 +46,7 @@ pub enum TreeItem<'a> {
     /// contact. Expanded it adds the QA sessions underneath.
     Run {
         run_id: &'a str,
+        project: &'a str,
         stage: &'a str,
         coordinator: Option<&'a Session>,
         agents: usize,
@@ -69,6 +70,10 @@ pub enum TreeItem<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunSection<'a> {
     pub run_id: &'a str,
+    /// What the row is titled. The project, not the stage: with one run open
+    /// the stage is "Quality Assurance" for everybody and says nothing about
+    /// which codebase you are looking at.
+    pub project: &'a str,
     pub stage: &'a str,
     pub coordinator: Option<&'a Session>,
     pub agents: Vec<RunAgentRow<'a>>,
@@ -122,14 +127,6 @@ fn thousands(total: u64) -> u64 {
     (total as f64 / 1000.0).round() as u64
 }
 
-fn total_tokens(sessions: &[Session]) -> u64 {
-    sessions
-        .iter()
-        .filter_map(|s| s.last_usage.as_ref())
-        .map(|u| u.total_tokens())
-        .sum()
-}
-
 /// Build the tree. With no configured groups this is the flat project list
 /// (Node's `buildFlatTree`); with groups it is the grouped one. Node had two
 /// functions; the flat form is just the grouped form with one implicit group,
@@ -161,9 +158,16 @@ pub fn build_grouped_tree_with<'a>(
     // to look at while one is open, and the section disappears entirely when
     // none is — so it costs a quiet dashboard nothing.
     emit_runs(&mut items, runs, expanded);
+
+    // Every session a run already draws. They are removed from the projects
+    // below, because a session listed twice is a session you can select in two
+    // places and act on without knowing which row you were on. The run's own
+    // section is the one that says what the session is FOR, so it wins.
+    let owned = run_owned_ids(runs);
+
     if groups.is_empty() {
         for (name, sessions) in by_project {
-            emit_project(&mut items, name, sessions, expanded);
+            emit_project(&mut items, name, sessions, expanded, &owned);
         }
         return items;
     }
@@ -188,6 +192,7 @@ pub fn build_grouped_tree_with<'a>(
             let matching: Vec<&Session> = sessions
                 .iter()
                 .filter(|s| child_dir_of(&s.cwd, group_path).is_some())
+                .filter(|s| !owned.contains(s.session_id.as_str()))
                 .collect();
             let Some(first) = matching.first() else {
                 continue;
@@ -250,7 +255,7 @@ pub fn build_grouped_tree_with<'a>(
             group_index: None,
         });
         for name in unclaimed {
-            emit_project(&mut items, name, &by_project[name], expanded);
+            emit_project(&mut items, name, &by_project[name], expanded, &owned);
         }
     }
     items
@@ -276,6 +281,7 @@ fn emit_runs<'a>(
         let is_expanded = expanded.contains(&key);
         items.push(TreeItem::Run {
             run_id: run.run_id,
+            project: run.project,
             stage: run.stage,
             coordinator: run.coordinator,
             agents: run.agents.len(),
@@ -296,21 +302,52 @@ fn emit_runs<'a>(
     }
 }
 
+/// The sessions a run already draws, by id.
+fn run_owned_ids<'a>(runs: &'a [RunSection<'a>]) -> HashSet<&'a str> {
+    let mut owned = HashSet::new();
+    for run in runs {
+        if let Some(coordinator) = run.coordinator {
+            owned.insert(coordinator.session_id.as_str());
+        }
+        for agent in &run.agents {
+            if let Some(session) = agent.session {
+                owned.insert(session.session_id.as_str());
+            }
+        }
+    }
+    owned
+}
+
 fn emit_project<'a>(
     items: &mut Vec<TreeItem<'a>>,
     name: &'a str,
     sessions: &'a [Session],
     expanded: &HashSet<String>,
+    owned: &HashSet<&str>,
 ) {
+    let mine: Vec<&'a Session> = sessions
+        .iter()
+        .filter(|s| !owned.contains(s.session_id.as_str()))
+        .collect();
+    // A project whose every session belongs to a run is not an empty project —
+    // it is a project already on screen, further up. Drawing the header with
+    // "0 sessions" under it would be a second, worse copy of the run.
+    if mine.is_empty() {
+        return;
+    }
     let is_expanded = expanded.contains(name);
     items.push(TreeItem::Project {
         name,
-        session_count: sessions.len(),
-        total_tokens: total_tokens(sessions),
+        session_count: mine.len(),
+        total_tokens: mine
+            .iter()
+            .filter_map(|s| s.last_usage.as_ref())
+            .map(|u| u.total_tokens())
+            .sum(),
         expanded: is_expanded,
     });
     if is_expanded {
-        for session in sessions {
+        for session in mine {
             items.push(TreeItem::Session {
                 project_name: name,
                 session,
@@ -365,7 +402,7 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
         }
         TreeItem::Session { session, .. } => format_session_row(session, config),
         TreeItem::Run {
-            stage,
+            project,
             coordinator,
             agents,
             asking,
@@ -403,7 +440,7 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
                 Span::raw(format!("{arrow} ")),
                 Span::styled("●", dot),
                 Span::styled(
-                    format!(" {}", truncate(stage, 24)),
+                    format!(" {}", truncate(project, 24)),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("  coordinator".to_string(), gray()),
@@ -424,7 +461,10 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
                 return Line::from(vec![
                     Span::raw("      "),
                     Span::styled(format!("#{task_id}"), gray()),
-                    Span::styled("  not started".to_string(), gray()),
+                    // "not running", not "not started": a task whose session
+                    // was killed after it finished is the common case, and
+                    // "not started" would claim it never ran.
+                    Span::styled("  not running".to_string(), gray()),
                 ]);
             };
             let mut line = format_session_row(session, config);

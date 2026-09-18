@@ -404,8 +404,8 @@ fn starting_a_run_twice_does_not_start_a_second_coordinator() {
     press(&mut state, 'R');
     let run_id = state.board.runs[0].id.clone();
 
-    // Stand in for the launch having been recognised.
-    state.board.runs[0].coordinator_session = Some("coord".to_string());
+    // Stand in for the launch having gone out.
+    state.board.runs[0].coordinator_started = true;
 
     board::run_command(
         &mut state,
@@ -416,14 +416,13 @@ fn starting_a_run_twice_does_not_start_a_second_coordinator() {
         },
     );
 
-    assert_eq!(
-        state.board.runs[0].coordinator_session.as_deref(),
-        Some("coord"),
-        "the recognised coordinator was replaced"
-    );
+    // Nothing new was launched: no Launch action reached the queue.
     assert!(
-        state.board.runs[0].coordinator_pending.is_none(),
-        "a second coordinator launch was queued"
+        !state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, crate::ui::state::Action::Launch(_))),
+        "a second coordinator launch went out"
     );
 }
 
@@ -434,10 +433,11 @@ fn a_question_on_a_run_task_wakes_that_runs_coordinator() {
     // interface is a session that watched nothing.
     let (_dir, mut state) = on_a_stage();
     press(&mut state, 'R');
-    state.board.runs[0].coordinator_session = Some("coord".to_string());
+    state.board.runs[0].coordinator_started = true;
+    let run_id = state.board.runs[0].id.clone();
     state.by_project.insert(
         "alpha".to_string(),
-        vec![coordinator_session("coord", "/repo/alpha")],
+        vec![coordinator_session("coord", "/repo/alpha", Some(&run_id))],
     );
 
     state.push_notification(question_for(4101));
@@ -458,10 +458,11 @@ fn a_verdict_checkpoint_never_wakes_the_coordinator() {
     // would then refuse — a wasted turn that teaches it nothing.
     let (_dir, mut state) = on_a_stage();
     press(&mut state, 'R');
-    state.board.runs[0].coordinator_session = Some("coord".to_string());
+    state.board.runs[0].coordinator_started = true;
+    let run_id = state.board.runs[0].id.clone();
     state.by_project.insert(
         "alpha".to_string(),
-        vec![coordinator_session("coord", "/repo/alpha")],
+        vec![coordinator_session("coord", "/repo/alpha", Some(&run_id))],
     );
 
     let mut verdict = question_for(4101);
@@ -511,7 +512,7 @@ fn question_for(task_id: i64) -> crate::types::Notification {
     }
 }
 
-fn coordinator_session(id: &str, cwd: &str) -> crate::types::Session {
+fn coordinator_session(id: &str, cwd: &str, run: Option<&str>) -> crate::types::Session {
     crate::types::Session {
         session_id: id.to_string(),
         pids: vec![1],
@@ -531,5 +532,274 @@ fn coordinator_session(id: &str, cwd: &str) -> crate::types::Session {
         cumulative_usage: None,
         prompts: Vec::new(),
         task_id: None,
+        run_id: run.map(str::to_string),
     }
+}
+
+// --- a run survives quitting the dashboard -----------------------------------
+
+#[test]
+fn a_watched_run_is_still_there_after_a_restart() {
+    // The failure this fixes: a run lived in memory only, so quitting the TUI
+    // ended it. The coordinator and its agents kept running, but the dashboard
+    // no longer knew they belonged together — every one of them fell back to
+    // its project and the Runs section vanished.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::Paths::for_test(dir.path());
+    let config = crate::config::ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
+
+    let watched = {
+        let mut state = crate::ui::state::AppState::new(paths.clone(), config.clone());
+        state.view = View::Board;
+        with_tasks(
+            &mut state,
+            vec![
+                task(4101, "Summary row shows the wrong total"),
+                task(4102, "Description field ignores its length cap"),
+            ],
+        );
+        let snapshot = board::snapshot(&state);
+        if let BoardRow::Project { .. } = snapshot.row {
+            board::handle_board(
+                &mut state,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            );
+            down(&mut state);
+        }
+        press(&mut state, 'R');
+        assert_eq!(state.board.runs.len(), 1, "no run to persist");
+        state.board.runs[0].clone()
+    };
+
+    // A second AppState over the same paths is what reopening the TUI is.
+    let reopened = crate::ui::state::AppState::new(paths, config);
+    assert_eq!(
+        reopened.board.runs,
+        vec![watched],
+        "the run did not survive the restart"
+    );
+}
+
+#[test]
+fn stopping_a_run_stops_it_across_a_restart_too() {
+    // Otherwise a dismissed run comes back the next time you open the app,
+    // which is worse than never having persisted it.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let paths = crate::paths::Paths::for_test(dir.path());
+    let config = crate::config::ConfigHandle::load(&paths, crate::config::EnvOverrides::default());
+
+    {
+        let mut state = crate::ui::state::AppState::new(paths.clone(), config.clone());
+        state.view = View::Board;
+        with_tasks(
+            &mut state,
+            vec![task(4101, "Summary row shows the wrong total")],
+        );
+        let snapshot = board::snapshot(&state);
+        if let BoardRow::Project { .. } = snapshot.row {
+            board::handle_board(
+                &mut state,
+                KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            );
+            down(&mut state);
+        }
+        press(&mut state, 'R');
+        let run_id = state.board.runs[0].id.clone();
+        board::run_command(
+            &mut state,
+            crate::ui::dialogs::RunCommand {
+                run_id,
+                action: crate::ui::dialogs::RunAction::StopWatching,
+                context: String::new(),
+            },
+        );
+        assert!(state.board.runs.is_empty());
+    }
+
+    let reopened = crate::ui::state::AppState::new(paths, config);
+    assert!(
+        reopened.board.runs.is_empty(),
+        "a stopped run came back: {:?}",
+        reopened.board.runs
+    );
+}
+
+// --- the coordinator's prompt actually carries its run -----------------------
+
+/// Render a coordinator prompt the way a launch does.
+fn coordinator_prompt(extras: &[(&str, &str)]) -> String {
+    let (_dir, state) = board_state();
+    let task = task(4101, "Summary row shows the wrong total");
+    let extras: std::collections::BTreeMap<String, String> = extras
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    crate::ui::board::prompt_context(
+        &state.config,
+        &state.paths,
+        &task,
+        String::new(),
+        "",
+        &extras,
+    )
+    .prompt(&crate::ui::board::LaunchKind::QaRun, "/repo", None)
+    .expect("a rendered prompt")
+    .expect("a prompt, not an empty one")
+}
+
+#[test]
+fn the_coordinator_prompt_names_its_run_and_its_tasks() {
+    // The failure this pins was quiet and expensive. `start_coordinator` set
+    // runId, taskIds, qaRoot and triage on the request; `prompt_context` built
+    // its extras from the task alone and never read them. The coordinator then
+    // rendered "this run" and "(none listed)", could not tell which tasks were
+    // its own, guessed from file timestamps, and reported eleven tasks for a
+    // run of seven. Nothing errored — it did the wrong job carefully.
+    let prompt = coordinator_prompt(&[
+        ("runId", "Aurora::Quality Assurance"),
+        ("taskIds", "4101, 4102, 4103"),
+        ("qaRoot", "/qa"),
+    ]);
+
+    assert!(
+        prompt.contains("Aurora::Quality Assurance"),
+        "the prompt does not name the run: {prompt}"
+    );
+    // The placeholder, not the words: "for any task in this run" is ordinary
+    // prose elsewhere in the prompt and must not fail this.
+    assert!(
+        !prompt.contains(r#"QA run "this run""#),
+        "the run id fell back to its placeholder: {prompt}"
+    );
+    assert!(
+        !prompt.contains("(none listed)"),
+        "the task list did not reach the prompt: {prompt}"
+    );
+    for id in ["4101", "4102", "4103"] {
+        assert!(prompt.contains(id), "task {id} is missing: {prompt}");
+    }
+    assert!(
+        prompt.contains("/qa"),
+        "the QA directory did not reach the prompt: {prompt}"
+    );
+}
+
+#[test]
+fn a_triage_run_gives_its_coordinator_the_triage_rules() {
+    // Without the `triage` variable the prompt took its SHADOW branch and told
+    // the coordinator to answer nothing, while the run's own mode said triage.
+    // The two disagreed, and only the prompt was load-bearing.
+    let prompt = coordinator_prompt(&[("runId", "r"), ("taskIds", "4101"), ("triage", "true")]);
+    assert!(
+        prompt.contains("you triage it"),
+        "a triage run got the shadow rules: {prompt}"
+    );
+    assert!(
+        !prompt.contains("you do NOT answer it"),
+        "the shadow branch is still in a triage prompt: {prompt}"
+    );
+}
+
+#[test]
+fn a_shadow_run_still_gets_the_shadow_rules() {
+    // The other half: shadow must not quietly become triage now that the
+    // variable is actually read.
+    let prompt = coordinator_prompt(&[("runId", "r"), ("taskIds", "4101")]);
+    assert!(
+        prompt.contains("you do NOT answer it"),
+        "shadow mode lost its rules: {prompt}"
+    );
+}
+
+// --- a coordinator is never one of the agents --------------------------------
+
+#[test]
+fn the_coordinator_does_not_take_an_agents_row() {
+    // Observed on screen: two rows for task #6661. The coordinator sat in the
+    // run's agent slot for that task and the real reviewer was pushed out into
+    // its project, so one task had two rows and neither was right.
+    //
+    // The coordinator launches against the run's FIRST task only to resolve a
+    // folder, which is how it came to be treated as that task's session.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let run_id = state.board.runs[0].id.clone();
+    let first = state.board.runs[0].task_ids[0];
+
+    let mut coordinator = coordinator_session("coord", "/repo/alpha", Some(&run_id));
+    // The thing that caused it: the coordinator carrying the run's first task.
+    coordinator.task_id = Some(first);
+    let mut agent = coordinator_session("agent", "/repo/alpha", None);
+    agent.task_id = Some(first);
+
+    state
+        .by_project
+        .insert("alpha".to_string(), vec![coordinator, agent]);
+
+    let sections = state.run_sections();
+    let section = sections.iter().find(|s| s.run_id == run_id).expect("run");
+
+    assert_eq!(
+        section.coordinator.map(|s| s.session_id.as_str()),
+        Some("coord"),
+        "the coordinator was not recognised"
+    );
+    let row = section
+        .agents
+        .iter()
+        .find(|agent| agent.task_id == first)
+        .expect("a row for the first task");
+    assert_eq!(
+        row.session.map(|s| s.session_id.as_str()),
+        Some("agent"),
+        "the coordinator took the agent's row"
+    );
+}
+
+#[test]
+fn a_coordinator_launch_claims_no_task() {
+    // The link is what put it in an agent's row. A coordinator works no task,
+    // so the launch queue must not be told it does — otherwise the BOARD points
+    // that task at the watcher too, and acting on the task acts on the wrong
+    // session.
+    assert_eq!(pending_for(Some("Aurora::Quality Assurance")).task_id, None);
+}
+
+#[test]
+fn an_ordinary_launch_still_claims_its_task() {
+    // The other half: this is how every QA session gets linked at all.
+    assert_eq!(pending_for(None).task_id, Some(6661));
+}
+
+/// What `note_launch` would register for a launch with (or without) a run id.
+fn pending_for(run_id: Option<&str>) -> crate::daemon::PendingRequest {
+    #[derive(Default)]
+    struct Recording(std::sync::Mutex<Vec<crate::daemon::PendingRequest>>);
+    impl crate::ui::feed::SessionFeed for Recording {
+        fn drain(&mut self) -> Vec<crate::ui::feed::FeedEvent> {
+            Vec::new()
+        }
+        fn request_refresh(&self) {}
+        fn note_launch(&self) {}
+        fn note_task_launch(&self, request: crate::daemon::PendingRequest) {
+            self.0.lock().unwrap().push(request);
+        }
+        fn set_groups(&self, _group_paths: Vec<String>) {}
+    }
+
+    let spec = crate::ui::board::LaunchSpec {
+        task_id: 6661,
+        cwd: "/repo/alpha".to_string(),
+        flags: String::new(),
+        prompt: Some("x".to_string()),
+        title: "run".to_string(),
+        stage_move: None,
+        known_session_ids: Vec::new(),
+        say: String::new(),
+        run_id: run_id.map(str::to_string),
+    };
+    let feed = Recording::default();
+    crate::ui::board::note_launch(&feed, &crate::ui::state::Action::Launch(Box::new(spec)));
+    let recorded = feed.0.lock().unwrap();
+    recorded.first().cloned().expect("a pending request")
 }

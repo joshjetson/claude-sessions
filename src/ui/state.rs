@@ -190,6 +190,8 @@ pub struct AppState {
     /// The board tab's own state, kept in its own type so neither this file nor
     /// [`crate::ui::board`] becomes the god object Node's `state.js` was.
     pub board: BoardSlice,
+    /// Where watched runs are kept between sessions. See [`Self::save_runs`].
+    runs_db: crate::db::Db,
     /// The same for the Deploy tab.
     pub deploy: DeploySlice,
     pub dialog: Option<Dialog>,
@@ -225,6 +227,11 @@ pub struct AppState {
 impl AppState {
     pub fn new(paths: Paths, config: ConfigHandle) -> Self {
         let view = View::from_default(config.default_view());
+        // Runs are restored before the first frame, so a dashboard reopened
+        // mid-run draws the run rather than drawing it wrong and correcting
+        // itself a tick later.
+        let db = crate::db::Db::open(&paths);
+        let restored = db.qa_runs();
         AppState {
             paths,
             config,
@@ -243,7 +250,12 @@ impl AppState {
             selected_session_id: None,
             selected_session_file: None,
             notifications: VecDeque::new(),
-            board: BoardSlice::default(),
+            board: {
+                let mut board = BoardSlice::default();
+                board.runs = restored;
+                board
+            },
+            runs_db: db,
             deploy: DeploySlice::default(),
             dialog: None,
             flash: None,
@@ -315,43 +327,7 @@ impl AppState {
             total_projects: by_project.len(),
         };
         self.by_project = by_project;
-        self.link_run_coordinators();
         self.dirty = true;
-    }
-
-    /// Match every run still waiting on its coordinator against the sessions
-    /// this tick found.
-    ///
-    /// The daemon does this job for tasks, keyed on a task id. A coordinator
-    /// belongs to the run and holds no task, so the same match runs here, over
-    /// the runs, which are dashboard state and live nowhere else.
-    fn link_run_coordinators(&mut self) {
-        let waiting: Vec<(usize, crate::qarun::CoordinatorPending)> = self
-            .board
-            .runs
-            .iter()
-            .enumerate()
-            .filter(|(_, run)| run.coordinator_session.is_none())
-            .filter_map(|(index, run)| {
-                run.coordinator_pending
-                    .clone()
-                    .map(|pending| (index, pending))
-            })
-            .collect();
-
-        for (index, pending) in waiting {
-            let found = crate::qarun::resolve_coordinator(
-                &pending,
-                self.by_project
-                    .values()
-                    .flat_map(|sessions| sessions.iter()),
-            );
-            if let Some(session_id) = found {
-                let run = &mut self.board.runs[index];
-                run.coordinator_session = Some(session_id);
-                run.coordinator_pending = None;
-            }
-        }
     }
 
     /// Fold a plan-usage reading in.
@@ -430,24 +406,21 @@ impl AppState {
         let Some(task_id) = notification.task_id else {
             return;
         };
-        let Some((run_id, session_id)) = self
+        // Resolved live from the environment, so a run whose coordinator has
+        // died queues nothing rather than typing into a session that is gone.
+        let Some((run_id, session)) = self
             .board
             .runs
             .iter()
             .filter(|run| run.task_ids.contains(&task_id))
             .find_map(|run| {
-                run.coordinator_session
-                    .clone()
+                crate::qarun::coordinator_of(&run.id, self.sessions())
                     .map(|session| (run.id.clone(), session))
             })
         else {
             return;
         };
-        // The coordinator's own session must be resolvable to a terminal, or
-        // there is nothing to type into.
-        let Some(session) = self.find_session(&session_id) else {
-            return;
-        };
+        let session_id = session.session_id.clone();
         let target = crate::term::SessionRef {
             tty: session.tty.clone(),
             session_id: Some(session.session_id.clone()),
@@ -467,6 +440,16 @@ impl AppState {
         )));
     }
 
+    /// Write the watched runs down.
+    ///
+    /// Called after anything that changes the list. A run is a grouping the
+    /// reviewer made — these tasks, watched together — and the sessions it
+    /// groups outlive the TUI easily, so losing it on quit turned a seven-agent
+    /// run back into seven unrelated rows.
+    pub fn save_runs(&self) {
+        self.runs_db.save_qa_runs(&self.board.runs);
+    }
+
     /// The runs, prepared for the sessions tree.
     ///
     /// Built here rather than in the tree module, which knows about sessions
@@ -476,17 +459,23 @@ impl AppState {
             .runs
             .iter()
             .map(|run| {
-                let coordinator = run
-                    .coordinator_session
-                    .as_deref()
-                    .and_then(|id| self.find_session(id));
+                // Resolved live, never cached: a coordinator that has died
+                // stops being reported the moment its process goes.
+                let coordinator = crate::qarun::coordinator_of(&run.id, self.sessions());
+                // A coordinator is never an agent. It is excluded by identity
+                // rather than by hoping nothing links it to a task: it launches
+                // against the run's first task to resolve a folder, and any
+                // path that turns that into a task link would otherwise put the
+                // watcher in a reviewer's row and push the real agent out of
+                // the run entirely.
+                let is_coordinator = |session: &&crate::types::Session| session.run_id.is_some();
                 let agents = run
                     .task_ids
                     .iter()
                     .map(|&task_id| crate::ui::tree::RunAgentRow {
                         task_id,
                         session: crate::ui::board::task_session(
-                            self.sessions(),
+                            self.sessions().filter(|s| !is_coordinator(s)),
                             task_id,
                             self.board.link(task_id),
                         ),
@@ -499,6 +488,7 @@ impl AppState {
                     .collect();
                 crate::ui::tree::RunSection {
                     run_id: &run.id,
+                    project: &run.project_name,
                     stage: &run.stage_name,
                     coordinator,
                     agents,
