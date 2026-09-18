@@ -21,8 +21,20 @@ pub fn watch_or_drop(state: &mut AppState, project: &str, stage: &str, existing:
         return;
     }
 
+    let mode = state.config.qa_coordinator_mode();
     match state.board.watch_stage(project, stage) {
         Some(covered) => {
+            // Read here rather than in the slice, which holds no config. A run
+            // fixes its mode at creation so its agreement number is not mixed
+            // from two of them.
+            if let Some(run) = state
+                .board
+                .runs
+                .iter_mut()
+                .find(|run| run.project_name == project && run.stage_name == stage)
+            {
+                run.mode = mode;
+            }
             // Open the stage, or the run appears under a collapsed header and
             // looks like nothing happened.
             let key = crate::board::stage_key(project, stage);
@@ -40,11 +52,10 @@ pub fn watch_or_drop(state: &mut AppState, project: &str, stage: &str, existing:
 /// Act on a run.
 pub fn run_command(state: &mut AppState, command: RunCommand) {
     match command.action {
-        RunAction::FillLanes => fill_lanes(state, &command.run_id),
-        RunAction::StartCoordinator => start_coordinator(state, &command.run_id, &command.context),
-        // Ask first, then start: the answer comes back as a StartCoordinator
-        // carrying whatever was typed.
-        RunAction::StartCoordinatorWithContext => {
+        RunAction::StartRun => start_run(state, &command.run_id, &command.context),
+        // Ask first, then start: the answer comes back as a StartRun carrying
+        // whatever was typed.
+        RunAction::StartRunWithContext => {
             let stage = state
                 .board
                 .runs
@@ -57,7 +68,6 @@ pub fn run_command(state: &mut AppState, command: RunCommand) {
             ));
             state.dirty = true;
         }
-        RunAction::ToggleMode => toggle_mode(state, &command.run_id),
         RunAction::StopWatching => {
             if state.board.stop_watching(&command.run_id) {
                 state.flash("Stopped watching. The QA sessions are untouched.".to_string());
@@ -66,30 +76,6 @@ pub fn run_command(state: &mut AppState, command: RunCommand) {
         }
         RunAction::Cancel => {}
     }
-}
-
-/// Flip shadow ↔ triage.
-///
-/// Takes effect on the NEXT coordinator, not one already running: its rules are
-/// in a prompt that has already been sent. Saying so is the point — a toggle
-/// that looked instant while the live session carried the old rules would be
-/// worse than no toggle.
-fn toggle_mode(state: &mut AppState, run_id: &str) {
-    let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) else {
-        return;
-    };
-    run.mode = match run.mode {
-        RunMode::Shadow => RunMode::Triage,
-        RunMode::Triage => RunMode::Shadow,
-    };
-    let now = match run.mode {
-        RunMode::Shadow => "shadow — it will record answers and give none",
-        RunMode::Triage => "triage — it will answer questions of fact",
-    };
-    state.flash(format!(
-        "Next coordinator runs in {now}. The one already running keeps the rules it was started with."
-    ));
-    state.dirty = true;
 }
 
 /// Which tasks in a run currently have a live session.
@@ -102,6 +88,30 @@ fn live_task_ids(state: &AppState, run: &QaRun) -> std::collections::HashSet<i64
                 .is_some()
         })
         .collect()
+}
+
+/// Start the run: the coordinator first, then the QA sessions.
+///
+/// The order matters, and the reason it does NOT have to be a wait is worth
+/// writing down. A question is a row in the notifications table, and it stays
+/// unresolved until something answers it. A coordinator that starts a moment
+/// late finds the backlog waiting rather than missing it, so there is nothing
+/// to synchronise on — only a gap to keep short, which starting it first does.
+///
+/// Re-pressing this on a run that already has a coordinator starts no second
+/// one. Two coordinators would both triage the same questions.
+fn start_run(state: &mut AppState, run_id: &str, extra_context: &str) {
+    let already = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .is_some_and(|run| run.coordinator_session.is_some() || run.coordinator_pending.is_some());
+
+    if !already {
+        start_coordinator(state, run_id, extra_context);
+    }
+    fill_lanes(state, run_id);
 }
 
 /// Start the QA sessions the run has lanes for.
@@ -217,6 +227,36 @@ fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
         crate::pipeline::definitions::TRIAGE_VAR.to_string(),
         (run.mode == RunMode::Triage).to_string(),
     );
+
+    // Pin the folder before launching, so the coordinator can be recognised
+    // afterwards by the folder it started in. Without a resolved folder the
+    // launch still goes out — it opens a picker — and the run says plainly
+    // that it could not track the result.
+    let discovered = crate::ui::board::all_discovered_dirs(&state.discovered_dirs);
+    let dir =
+        match crate::ui::board::resolve_task_dir(&state.config, &task.project_name, &discovered) {
+            crate::ui::board::DirChoice::Known(dir) => Some(dir),
+            _ => None,
+        };
+
+    let pending = dir.as_ref().map(|dir| crate::qarun::CoordinatorPending {
+        cwd: dir.clone(),
+        known_session_ids: state.sessions().map(|s| s.session_id.clone()).collect(),
+    });
+    if let Some(dir) = dir.clone() {
+        request = request.in_dir(dir);
+    }
+
+    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
+        run.coordinator_pending = pending;
+    }
+    if dir.is_none() {
+        state.flash(
+            "Starting the coordinator, but its folder is not resolved yet — \
+             the run cannot show its state until you pick one."
+                .to_string(),
+        );
+    }
 
     crate::ui::board::start(state, request);
     state.dirty = true;

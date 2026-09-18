@@ -121,6 +121,20 @@ pub struct SendSpec {
     pub stage_move: Option<StageMoveRequest>,
 }
 
+/// Waking a run's coordinator, so it reads a question a QA session just asked.
+///
+/// Separate from [`SendSpec`] for one reason: it must not focus the terminal.
+/// A question arriving pulls the coordinator's window to the front otherwise,
+/// and in a seven-task run that happens while the reviewer is reading something
+/// else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NudgeSpec {
+    pub run_id: String,
+    pub session: SessionRef,
+    pub session_id: String,
+    pub text: String,
+}
+
 /// Picking an archived conversation back up.
 ///
 /// The archive lookup is file I/O with a self-healing copy in it (it restores

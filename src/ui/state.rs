@@ -315,7 +315,43 @@ impl AppState {
             total_projects: by_project.len(),
         };
         self.by_project = by_project;
+        self.link_run_coordinators();
         self.dirty = true;
+    }
+
+    /// Match every run still waiting on its coordinator against the sessions
+    /// this tick found.
+    ///
+    /// The daemon does this job for tasks, keyed on a task id. A coordinator
+    /// belongs to the run and holds no task, so the same match runs here, over
+    /// the runs, which are dashboard state and live nowhere else.
+    fn link_run_coordinators(&mut self) {
+        let waiting: Vec<(usize, crate::qarun::CoordinatorPending)> = self
+            .board
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.coordinator_session.is_none())
+            .filter_map(|(index, run)| {
+                run.coordinator_pending
+                    .clone()
+                    .map(|pending| (index, pending))
+            })
+            .collect();
+
+        for (index, pending) in waiting {
+            let found = crate::qarun::resolve_coordinator(
+                &pending,
+                self.by_project
+                    .values()
+                    .flat_map(|sessions| sessions.iter()),
+            );
+            if let Some(session_id) = found {
+                let run = &mut self.board.runs[index];
+                run.coordinator_session = Some(session_id);
+                run.coordinator_pending = None;
+            }
+        }
     }
 
     /// Fold a plan-usage reading in.
@@ -369,11 +405,106 @@ impl AppState {
     /// other.
     pub fn push_notification(&mut self, notification: Notification) {
         self.enqueue(Action::Sound(notification.level));
+        self.wake_coordinator_for(&notification);
         self.notifications.push_front(notification);
         while self.notifications.len() > MAX_NOTIFICATIONS {
             self.notifications.pop_back();
         }
         self.dirty = true;
+    }
+
+    /// Wake the coordinator of the run this question belongs to.
+    ///
+    /// A question is a row in the notifications table and it stays unresolved
+    /// until something answers it, so this is a prod and not a delivery — the
+    /// coordinator reads the question itself. Nothing is lost when the prod
+    /// does not land, which is why a missing coordinator is silent here rather
+    /// than an error: the run row already says it has none.
+    ///
+    /// Only `Question` notifications. A verdict checkpoint is never a
+    /// coordinator's to look at, and an info line is not worth a turn.
+    fn wake_coordinator_for(&mut self, notification: &Notification) {
+        if notification.kind != crate::types::NotificationKind::Question {
+            return;
+        }
+        let Some(task_id) = notification.task_id else {
+            return;
+        };
+        let Some((run_id, session_id)) = self
+            .board
+            .runs
+            .iter()
+            .filter(|run| run.task_ids.contains(&task_id))
+            .find_map(|run| {
+                run.coordinator_session
+                    .clone()
+                    .map(|session| (run.id.clone(), session))
+            })
+        else {
+            return;
+        };
+        // The coordinator's own session must be resolvable to a terminal, or
+        // there is nothing to type into.
+        let Some(session) = self.find_session(&session_id) else {
+            return;
+        };
+        let target = crate::term::SessionRef {
+            tty: session.tty.clone(),
+            session_id: Some(session.session_id.clone()),
+            cwd: Some(session.cwd.clone()),
+        };
+        let text = format!(
+            "A QA session in this run just asked something: task #{task_id}. \
+             Read it, then triage it under the rules you were started with."
+        );
+        self.enqueue(Action::NudgeCoordinator(Box::new(
+            crate::ui::board::NudgeSpec {
+                run_id,
+                session: target,
+                session_id,
+                text,
+            },
+        )));
+    }
+
+    /// The runs, prepared for the sessions tree.
+    ///
+    /// Built here rather than in the tree module, which knows about sessions
+    /// and deliberately knows nothing about the board.
+    pub fn run_sections(&self) -> Vec<crate::ui::tree::RunSection<'_>> {
+        self.board
+            .runs
+            .iter()
+            .map(|run| {
+                let coordinator = run
+                    .coordinator_session
+                    .as_deref()
+                    .and_then(|id| self.find_session(id));
+                let agents = run
+                    .task_ids
+                    .iter()
+                    .map(|&task_id| crate::ui::tree::RunAgentRow {
+                        task_id,
+                        session: crate::ui::board::task_session(
+                            self.sessions(),
+                            task_id,
+                            self.board.link(task_id),
+                        ),
+                        asking: self.notifications.iter().any(|n| {
+                            n.task_id == Some(task_id)
+                                && n.kind == crate::types::NotificationKind::Question
+                                && n.status != crate::types::NotificationStatus::Resolved
+                        }),
+                    })
+                    .collect();
+                crate::ui::tree::RunSection {
+                    run_id: &run.id,
+                    stage: &run.stage_name,
+                    coordinator,
+                    agents,
+                }
+            })
+            .collect()
     }
 
     /// Every live session, flattened. Built on demand rather than kept as a

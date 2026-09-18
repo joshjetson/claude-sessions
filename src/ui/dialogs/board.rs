@@ -245,20 +245,19 @@ impl ContextDialog {
 
 /// What can be done with a QA run.
 ///
-/// The labels say what each entry will NOT do as much as what it will. "Start
-/// coordinator" sounds like it will answer things, and in shadow mode it does
-/// not — so the label says so rather than leaving it to be discovered.
+/// One entry starts the whole run. An earlier version offered the coordinator
+/// and the QA sessions as two peer entries, which read as a choice between
+/// them and buried the fact that the coordinator is required.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunAction {
-    /// Start the QA sessions the run has lanes for.
-    FillLanes,
-    /// Start the coordinating session.
-    StartCoordinator,
-    /// Ask for extra context first, then start it.
-    StartCoordinatorWithContext,
-    /// Flip between shadow and triage. Applies to the NEXT coordinator, not one
-    /// already running: its rules are in a prompt that has already been sent.
-    ToggleMode,
+    /// Start the run: the coordinator, then the QA sessions.
+    ///
+    /// One action rather than two, because the coordinator is not an optional
+    /// observer. It is the layer the QA sessions ask their questions through,
+    /// so a run without one sends every question to the reviewer instead.
+    StartRun,
+    /// Same, after asking for extra context to hand the coordinator.
+    StartRunWithContext,
     /// Stop watching. The QA sessions themselves keep running.
     StopWatching,
     Cancel,
@@ -294,34 +293,27 @@ impl RunMenu {
             .agreement(run_id)
             .summary();
 
+        let mode_note = if triage {
+            "🧠  Coordinator answers what it can, and asks you for the rest".to_string()
+        } else {
+            "🧠  Coordinator is in shadow mode — it records answers, gives none".to_string()
+        };
+
         let entries = vec![
             (
                 format!(
-                    "▶  Start QA sessions ({covered} task{}, {cap})",
+                    "▶  Start run ({covered} task{}, {cap})",
                     if covered == 1 { "" } else { "s" }
                 ),
-                RunAction::FillLanes,
+                RunAction::StartRun,
             ),
             (
-                if triage {
-                    "🧠  Start coordinator (triage — answers facts, escalates the rest)".to_string()
-                } else {
-                    "🧠  Start coordinator (shadow — records answers, gives none)".to_string()
-                },
-                RunAction::StartCoordinator,
+                "✎  Start run with extra context…".to_string(),
+                RunAction::StartRunWithContext,
             ),
-            (
-                "✎  Start coordinator with context…".to_string(),
-                RunAction::StartCoordinatorWithContext,
-            ),
-            (
-                if triage {
-                    "↔  Switch to shadow mode (applies to the next coordinator)".to_string()
-                } else {
-                    "↔  Switch to triage mode (applies to the next coordinator)".to_string()
-                },
-                RunAction::ToggleMode,
-            ),
+            // A read-out, not an action. Shadow is set in config: it is a
+            // calibration mode, not a choice to make per run.
+            (mode_note, RunAction::Cancel),
             (
                 format!("📊  Shadow agreement: {agreement}"),
                 RunAction::Cancel,
@@ -411,7 +403,7 @@ impl RunContext {
             PromptOutcome::Cancel => DialogOutcome::Close,
             PromptOutcome::Submit(text) => DialogOutcome::Run(Box::new(RunCommand {
                 run_id: self.run_id.clone(),
-                action: RunAction::StartCoordinator,
+                action: RunAction::StartRun,
                 context: text.trim().to_string(),
             })),
         }

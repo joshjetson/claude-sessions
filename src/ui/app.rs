@@ -78,12 +78,14 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // The block's inner height is the content budget; borders are two rows.
     let content_h = area.height.saturating_sub(2) as usize;
     let groups = state.config.groups();
+    let runs = state.run_sections();
     let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,
         &groups,
         &state.discovered_dirs,
         state.config.show_inactive_folders(),
+        &runs,
     );
 
     if items.is_empty() {
@@ -123,15 +125,18 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let keys: Vec<String> = items.iter().map(TreeItem::key).collect();
     let selected = state.tree_sel.resolve(&keys);
     let top = keep_visible(selected, state.list_scroll, content_h, items.len());
-    state.list_scroll = top;
 
-    // ONLY the window is formatted.
+    // ONLY the window is formatted. The rows are owned `Line<'static>`, so the
+    // borrow of `state` ends here and the scroll position can be written back.
     let rows: Vec<Line<'static>> = items
         .iter()
         .skip(top)
         .take(content_h)
         .map(|item| format_tree_item(item, &state.config))
         .collect();
+    drop(items);
+    drop(runs);
+    state.list_scroll = top;
 
     render_list(
         frame,

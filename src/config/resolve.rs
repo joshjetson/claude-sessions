@@ -186,6 +186,23 @@ impl ConfigHandle {
             .filter(|limit| *limit > 0)
     }
 
+    /// The mode every new coordinator starts in.
+    ///
+    /// Anything other than `"shadow"` — including an absent block and a typo —
+    /// resolves to triage. A misspelled mode silently answering nothing would
+    /// look exactly like a coordinator that is failing.
+    pub fn qa_coordinator_mode(&self) -> crate::qarun::RunMode {
+        match self
+            .config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.coordinator_mode.as_deref())
+        {
+            Some(mode) if mode.eq_ignore_ascii_case("shadow") => crate::qarun::RunMode::Shadow,
+            _ => crate::qarun::RunMode::Triage,
+        }
+    }
+
     /// Whether the sessions tree draws a group's quiet folders. Off unless the
     /// config says otherwise — see [`crate::config::SessionsBlock`].
     pub fn show_inactive_folders(&self) -> bool {

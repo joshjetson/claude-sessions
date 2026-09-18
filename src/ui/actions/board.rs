@@ -24,7 +24,7 @@ use crate::odoo::FetchBoardOptions;
 use crate::paths::Paths;
 use crate::term::{LaunchRequest, SpawnPolicy, TerminalDriver};
 use crate::transcript::TaskRefCache;
-use crate::ui::board::{BoardUpdate, LaunchSpec, ResumeRequest, SendSpec};
+use crate::ui::board::{BoardUpdate, LaunchSpec, NudgeSpec, ResumeRequest, SendSpec};
 
 use super::services::BoardServices;
 use super::{ActionResult, BoardData};
@@ -257,6 +257,34 @@ pub fn send_to_session(
         "Revision sent to session {short}."
     )));
     move_stage(spec.stage_move.as_ref(), services, results);
+}
+
+/// Wake a run's coordinator so it reads a question that was just asked.
+///
+/// Sends and stops. It does NOT focus the terminal, and it does not flash on
+/// success: a run asks many questions, and a toast for each one would bury
+/// everything else the reviewer needs to see. A failure still speaks up,
+/// because a coordinator that is not being woken is a run that has quietly
+/// stopped answering anything.
+pub fn nudge_coordinator(
+    spec: &NudgeSpec,
+    driver: &Arc<dyn TerminalDriver>,
+    policy: SpawnPolicy,
+    results: &Sender<ActionResult>,
+) {
+    let short: String = spec.session_id.chars().take(8).collect();
+    if let Err(refused) = policy.check(&format!("type into session {short}")) {
+        let _ = results.send(ActionResult::Flash(refused.message));
+        return;
+    }
+    let sent = driver.send_text(&spec.session, &spec.text);
+    if !sent.ok {
+        let reason = sent.error.unwrap_or_else(|| "unknown reason".into());
+        let _ = results.send(ActionResult::Flash(format!(
+            "Could not reach the coordinator for {}: {reason}",
+            spec.run_id
+        )));
+    }
 }
 
 /// Find the archived conversation for a task, then launch against it.
