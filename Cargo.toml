@@ -11,7 +11,7 @@ homepage = "https://github.com/joshjetson/claude-sessions"
 readme = "README.md"
 keywords = ["claude-code", "tui", "dashboard", "ratatui", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
-exclude = ["assets/", ".github/"]
+exclude = ["assets/", ".github/", "scripts/"]
 
 [dependencies]
 crossterm = "0.28"
