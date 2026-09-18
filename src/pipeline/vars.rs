@@ -7,27 +7,68 @@
 
 use std::collections::BTreeMap;
 
-/// The binary the spawned agent calls back with.
+/// The name to fall back on when this process cannot say where it lives.
+pub const BIN_NAME: &str = "claude-sessions";
+
+/// The binary the spawned agent calls back with — an ABSOLUTE path.
 ///
-/// The Node app baked absolute paths to seven helper scripts into every prompt
-/// (`node /…/bin/done.js 5944 …`). One binary with subcommands replaces them,
-/// so the prompt names a command that is on the agent's PATH instead of a file
-/// path that only existed on the machine that wrote the prompt.
-pub const BIN: &str = "claude-sessions";
+/// It used to be the bare name `claude-sessions`, resolved against whatever
+/// PATH the spawned session happened to inherit. That is how the QA run's
+/// reporting went silent: a Node build of this tool installs a
+/// `claude-sessions` of its own, and on a machine where it wins PATH the bare
+/// name reaches THAT binary, where `notify` is not a subcommand — it opens the
+/// session-manager TUI. So every `claude-sessions notify` an agent ran took
+/// over its terminal and never returned. Nothing was written, nothing was
+/// escalated, and the agents ended up running `pkill -f "claude-sessions
+/// notify"` to clear the wreckage, which killed each other's in-flight calls
+/// too.
+///
+/// The prompt now names the binary that BUILT it. There is no resolution step
+/// left to get wrong, and an agent cannot be handed a different implementation
+/// of the same name.
+///
+/// Resolved once: `current_exe` is a syscall, and the answer cannot change
+/// while this process lives.
+/// Overrides [`bin`]. Set by the golden-master tests, which cannot depend on
+/// where a test binary happens to live, and available to pin the path by hand.
+pub const BIN_ENV: &str = "CLAUDE_SESSIONS_BIN";
+
+pub fn bin() -> &'static str {
+    static BIN_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BIN_PATH.get_or_init(|| {
+        if let Ok(pinned) = std::env::var(BIN_ENV) {
+            if !pinned.trim().is_empty() {
+                return pinned;
+            }
+        }
+        std::env::current_exe()
+            .ok()
+            // A path with a space in it would break the command line the agent
+            // is told to run, and quoting it here would be quoted again by
+            // whatever composes the prompt. The bare name is wrong less often
+            // than a mangled path.
+            .filter(|path| !path.to_string_lossy().contains(char::is_whitespace))
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|| BIN_NAME.to_string())
+    })
+}
 
 /// `claude-sessions done <id> --summary-file <path>` — the completion signal.
 pub fn done_command(task_id: i64, summary_file: &str) -> String {
-    format!("{BIN} done {task_id} --summary-file {summary_file}")
+    format!("{} done {task_id} --summary-file {summary_file}", bin())
 }
 
 /// `claude-sessions blocked <id> --questions "…"` — the readiness-gate stop.
 pub fn blocked_command(task_id: i64, questions: &str) -> String {
-    format!("{BIN} blocked {task_id} --questions \"{questions}\"")
+    format!("{} blocked {task_id} --questions \"{questions}\"", bin())
 }
 
 /// `claude-sessions notify --title "…" --message "…"` — reaching the dashboard.
 pub fn notify_command(title: &str, message: &str) -> String {
-    format!("{BIN} notify --title \"{title}\" --message \"{message}\"")
+    format!(
+        "{} notify --title \"{title}\" --message \"{message}\"",
+        bin()
+    )
 }
 
 /// `claude-sessions qa-shadow …` — recording what a coordinator WOULD answer.
@@ -36,9 +77,10 @@ pub fn notify_command(title: &str, message: &str) -> String {
 /// overwrite, and that refusal is what makes the record worth keeping.
 pub fn qa_shadow_command(run_id: &str, task_id: i64) -> String {
     format!(
-        "{BIN} qa-shadow --run \"{run_id}\" --task {task_id} \
+        "{} qa-shadow --run \"{run_id}\" --task {task_id} \
          --question \"<their question>\" --would-answer \"<your answer>\" \
-         --confidence high|medium|low"
+         --confidence high|medium|low",
+        bin()
     )
 }
 
@@ -47,14 +89,18 @@ pub fn qa_shadow_command(run_id: &str, task_id: i64) -> String {
 /// The daemon decides whether it may be delivered: a question may be answered,
 /// a verdict checkpoint never may be, whatever this command is told.
 pub fn qa_answer_command(task_id: i64) -> String {
-    format!("{BIN} qa-answer --task {task_id} --answer \"<your answer>\"")
+    format!(
+        "{} qa-answer --task {task_id} --answer \"<your answer>\"",
+        bin()
+    )
 }
 
 /// `claude-sessions notify … --kind <kind>` — an escalation that says what it
 /// is, so a run can count what is blocked rather than what is merely loud.
 pub fn notify_kind_command(title: &str, message: &str, level: &str, kind: &str) -> String {
     format!(
-        "{BIN} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}"
+        "{} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}",
+        bin()
     )
 }
 

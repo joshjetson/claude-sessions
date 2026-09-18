@@ -50,7 +50,7 @@ fn the_starter_is_inert_it_changes_nothing_until_edited() {
     init_project_pipeline(repo.path(), "task").unwrap();
     let resolved = resolve_pipeline("task", Some(repo.path())).unwrap();
     assert_eq!(
-        resolved.build_prompt(&vars()),
+        super::normalise_bin(&resolved.build_prompt(&vars())),
         GOLDEN_TASK.concat(),
         "a freshly written template altered the prompt"
     );

@@ -30,7 +30,7 @@ pub use resolve::{
 pub use skills::{discover_skills, parse_skill_frontmatter, Skill};
 pub use template::{init_project_pipeline, starter_template, step_line_number, InitError};
 pub use vars::{
-    branch_instruction, interpolate, BranchFallback, MergeRequestVars, PromptVars, BIN,
+    bin, branch_instruction, interpolate, BranchFallback, MergeRequestVars, PromptVars, BIN_NAME,
 };
 
 #[cfg(test)]

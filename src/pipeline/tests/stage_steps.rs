@@ -119,7 +119,10 @@ fn dollar_keys_in_vars_are_ignored_too() {
     }));
     let resolved = resolve_pipeline("task", Some(repo.path())).unwrap();
     assert!(resolved.vars.is_empty());
-    assert_eq!(resolved.build_prompt(&vars()), GOLDEN_TASK.concat());
+    assert_eq!(
+        super::normalise_bin(&resolved.build_prompt(&vars())),
+        GOLDEN_TASK.concat()
+    );
 }
 
 #[test]

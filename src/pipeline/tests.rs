@@ -31,6 +31,12 @@ pub(crate) const BRANCH: &str = "the `main` branch (this project targets `main`,
 
 /// The variables every test builds its prompt from — the Node fixture, with the
 /// script paths gone because the prompts now name subcommands.
+/// A built prompt with this build's binary path normalised to the bare name the
+/// pinned prompts are written with. See `golden::prompt` for why.
+pub(crate) fn normalise_bin(prompt: &str) -> String {
+    prompt.replace(crate::pipeline::vars::bin(), "claude-sessions")
+}
+
 pub(crate) fn vars() -> PromptVars {
     PromptVars {
         task_id: TASK_ID,

@@ -2,7 +2,7 @@
 //! first on whether the ticket is understood well enough to code.
 
 use super::{PipelineDef, StepDef};
-use crate::pipeline::vars::{blocked_command, done_command, notify_command, PromptVars, BIN};
+use crate::pipeline::vars::{bin, blocked_command, done_command, notify_command, PromptVars};
 
 pub static TASK_PIPELINE: PipelineDef = PipelineDef {
     id: "task",
@@ -55,11 +55,12 @@ fn readiness_gate(vars: &PromptVars) -> String {
     format!(
         " STEP 0 — READINESS GATE (do this before anything else): run /task-readiness-gate for {url}. \
 If the verdict is BLOCKED_NEEDS_INFO, do NOT modify any code: post the clarifying questions to the task, \
-then run `{blocked}` to flag it on my dashboard, and STOP — do not run /odoo-review, /begin-odoo-task, or {BIN} done. \
+then run `{blocked}` to flag it on my dashboard, and STOP — do not run /odoo-review, /begin-odoo-task, or {bin} done. \
 Only if the verdict is READY_FOR_REPRO, READY_BUT_NO_REPRO, or READY_NO_REPRO_NEEDED do you continue. \
 For READY_FOR_REPRO, confirm/reproduce the problem before fixing; for READY_BUT_NO_REPRO, post your assumptions to the task and proceed carefully.",
         url = vars.url,
         blocked = blocked_command(vars.task_id, "q1 | q2 | q3"),
+        bin = bin(),
     )
 }
 
