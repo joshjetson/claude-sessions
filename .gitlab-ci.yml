@@ -9,7 +9,7 @@
 #                                    variable precisely so the list itself is
 #                                    not in this (mirrored) file.
 
-stages: [check, mirror]
+stages: [check, mirror, release]
 
 default:
   image: rust:1
@@ -91,3 +91,57 @@ mirror:
         # rather than force-pushing over it - reconcile, never clobber.
         git push "$REMOTE" "HEAD:refs/heads/main"
       fi
+
+# Automatic releases. After a successful mirror of a `main` push, this decides
+# whether to publish a new crate — with NO human tagging step:
+#
+#   * If Cargo.toml's version is not yet on crates.io, someone bumped it in an
+#     MR on purpose (a minor/major release): tag it as-is.
+#   * Otherwise the merge shipped code under an already-published version, so
+#     bump the PATCH, commit it back to main (with `[skip ci]` so this job does
+#     not trigger itself), and tag that.
+#
+# Either way a `v<version>` tag lands on `main`, whose own pipeline mirrors the
+# tag to GitHub, where `release.yml` runs the gates and `cargo publish`. A race
+# with a concurrent merge fails the push harmlessly — the next merge's release
+# job bumps from the updated version and recovers.
+#
+# Requires CI/CD variable GITLAB_PUSH_TOKEN (masked): a project access token
+# with `write_repository`.
+release:
+  stage: release
+  needs: [mirror]
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  script:
+    - test -n "$GITLAB_PUSH_TOKEN" || { echo "set GITLAB_PUSH_TOKEN (project token, write_repository)"; exit 1; }
+    - VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+    - |
+      if curl -sf "https://crates.io/api/v1/crates/claude-sessions/$VERSION" >/dev/null; then
+        PUBLISHED=yes
+      else
+        PUBLISHED=no
+      fi
+    - PUSH="https://oauth2:${GITLAB_PUSH_TOKEN}@git.zelif.cam/Zelifcam/internal/rust-claude-sessions.git"
+    - |
+      if [ "$PUBLISHED" = "no" ]; then
+        echo "version $VERSION is new — tagging it as-is"
+        TAG="v$VERSION"
+      else
+        MAJOR=$(echo "$VERSION" | cut -d. -f1)
+        MINOR=$(echo "$VERSION" | cut -d. -f2)
+        PATCH=$(echo "$VERSION" | cut -d. -f3)
+        NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+        echo "version $VERSION already published — auto-bumping to $NEXT"
+        sed -i -E "0,/^version = \"$VERSION\"/s//version = \"$NEXT\"/" Cargo.toml
+        sed -i -E "/name = \"claude-sessions\"/{n;s/^version = \".*\"/version = \"$NEXT\"/}" Cargo.lock
+        git config user.email "ci@git.zelif.cam"
+        git config user.name "release-bot"
+        git add Cargo.toml Cargo.lock
+        git commit -m "Release $NEXT [skip ci]"
+        git push -o ci.skip "$PUSH" "HEAD:main"
+        TAG="v$NEXT"
+      fi
+    - git tag "$TAG"
+    - git push "$PUSH" "$TAG"
+    - echo "released $TAG — its tag pipeline mirrors to GitHub, which publishes to crates.io"
