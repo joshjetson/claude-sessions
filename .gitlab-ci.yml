@@ -98,8 +98,8 @@ mirror:
 #   * If Cargo.toml's version is not yet on crates.io, someone bumped it in an
 #     MR on purpose (a minor/major release): tag it as-is.
 #   * Otherwise the merge shipped code under an already-published version, so
-#     bump the PATCH, commit it back to main (with `[skip ci]` so this job does
-#     not trigger itself), and tag that.
+#     bump the PATCH, commit it back to main (pushed with `-o ci.skip` so the
+#     branch push does not trigger this job again), and tag that.
 #
 # Either way a `v<version>` tag lands on `main`, whose own pipeline mirrors the
 # tag to GitHub, where `release.yml` runs the gates and `cargo publish`. A race
@@ -138,7 +138,7 @@ release:
         git config user.email "release-bot@${CI_SERVER_HOST}"
         git config user.name "release-bot"
         git add Cargo.toml Cargo.lock
-        git commit -m "Release $NEXT [skip ci]"
+        git commit -m "Release $NEXT"
         git push -o ci.skip "$PUSH" "HEAD:main"
         TAG="v$NEXT"
       fi
