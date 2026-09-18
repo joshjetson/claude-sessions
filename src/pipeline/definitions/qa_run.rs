@@ -67,6 +67,30 @@ pub static QA_RUN_PIPELINE: PipelineDef = PipelineDef {
         .detail("A question is a row in the notifications table, unresolved until something answers it, so one asked before this session existed is still waiting rather than lost. That is why the run starts the coordinator first and the QA sessions immediately after, with no handshake between them."),
 
         StepDef::new(
+            "reconcile",
+            "Reconcile before you report",
+            "Checks the directory when run.json disagrees with it.",
+            reconcile,
+        )
+        .detail("`/qa` can rewrite a note without updating run.json, so `note_written` goes stale while the note is sitting on disk. A coordinator that reads only the field reports a gap that is not there — three times in one run, until the reviewer looked themselves."),
+
+        StepDef::new(
+            "chase",
+            "Close the gap, do not just name it",
+            "Prods the session that owes something.",
+            chase,
+        )
+        .detail("Reporting a missing note leaves the work with the reviewer, which is the work this session exists to take on. It can type into a QA session; a malformed note is a prod, not a status line."),
+
+        StepDef::new(
+            "no-bulk-kill",
+            "Never kill by pattern",
+            "One pid you identified, or nothing.",
+            no_bulk_kill,
+        )
+        .detail("`pkill -f` matches every session's processes, not this one's. Agents cleaning up their own stuck commands killed each other's in-flight calls, which is how a run goes quiet with nothing in any log."),
+
+        StepDef::new(
             "triage",
             "Answer, or escalate",
             "Answers what it can from project context and escalates the rest.",
@@ -154,6 +178,57 @@ fn watch(vars: &PromptVars) -> String {
          re-read the run.json files rather than assuming you were told.",
         run_id(vars)
     )
+}
+
+fn reconcile(_vars: &PromptVars) -> String {
+    " `run.json` is the authority on a VERDICT and on nothing else. Its other fields go stale: \
+     /qa can rewrite a note without updating `note_written`, so that field says null while the \
+     note sits finished on disk. Before you report anything missing, LOOK — list the task's QA \
+     directory and read the file's timestamp against the one run.json records. If they disagree, \
+     say which you checked and which you are trusting. Never report a gap you have not looked for \
+     twice."
+        .to_string()
+}
+
+fn chase(vars: &PromptVars) -> String {
+    let owes = " When a task owes something — a note that was never written, a note in the wrong \
+                format, a verdict that never landed — do NOT simply report it and move on. \
+                Reporting it leaves the work with the reviewer, which is the work you exist to \
+                take on.";
+
+    // Shadow answers nothing, and a prod is a message typed into a session like
+    // any other. Letting it chase would be a hole in the one guarantee shadow
+    // mode makes, so in shadow it escalates the gap instead — which still beats
+    // reporting a stale field as a fact.
+    if vars.extras.get(TRIAGE_VAR).map(String::as_str) != Some("true") {
+        return format!(
+            "{owes} You are in shadow mode, so you do not type into the session — escalate the \
+             gap to me with what you would have asked it for: {}.",
+            notify_kind_command(
+                "QA run: #<id> owes a note",
+                "<what is missing, and what you would ask the session for>",
+                "warn",
+                "question",
+            )
+        );
+    }
+
+    format!(
+        "{owes} Ask the session for it: {}. Say exactly what is wrong and what you want instead, \
+         for example that its revision note needs re-running through /rev-req because the \
+         formatting is wrong. Then check that it arrived. Escalate only when the session refuses, \
+         cannot, or has gone.",
+        qa_answer_command(vars.task_id)
+    )
+}
+
+fn no_bulk_kill(_vars: &PromptVars) -> String {
+    " Never kill a process by PATTERN. No `pkill`, no `killall`, no `pkill -f`. Those match every \
+     session's processes and not only the one you meant, and a run where sessions kill each \
+     other's commands goes quiet with nothing in any log to say why. If something must be \
+     stopped, identify the single pid or tmux pane first, say which task it belongs to, and stop \
+     that one. When you cannot tell which is which, ask rather than guess."
+        .to_string()
 }
 
 fn triage(vars: &PromptVars) -> String {
