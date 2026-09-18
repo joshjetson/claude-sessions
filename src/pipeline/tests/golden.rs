@@ -16,10 +16,56 @@ use crate::pipeline::{resolve_pipeline, MergeRequestVars, PromptVars};
 
 use super::vars;
 
+/// The assembled prompt, with this build's binary path normalised back to the
+/// bare name the goldens are written with.
+///
+/// The prompts now name an ABSOLUTE path — see [`crate::pipeline::vars::bin`],
+/// and the QA run that went silent because a bare name resolved to a different
+/// tool of the same name. That path is wherever this binary happens to live, so
+/// it cannot be pinned in a golden. Normalising it here keeps the goldens about
+/// the prompt's SHAPE, which is what they exist to protect.
+///
+/// That the path is absolute at all is asserted separately, in
+/// `the_prompt_names_an_absolute_binary`.
 fn prompt(pipeline_id: &str, vars: &PromptVars) -> String {
-    resolve_pipeline(pipeline_id, None)
+    let built = resolve_pipeline(pipeline_id, None)
         .expect("built-in pipeline")
-        .build_prompt(vars)
+        .build_prompt(vars);
+    built.replace(crate::pipeline::vars::bin(), "claude-sessions")
+}
+
+#[test]
+fn the_prompt_names_an_absolute_binary() {
+    // The failure this guards: a bare `claude-sessions` in the prompt resolves
+    // against whatever PATH the spawned session inherited. A Node build of this
+    // tool installs a binary of the same name where `notify` is not a
+    // subcommand — it opens the TUI — so every notify an agent ran took over
+    // its terminal and never returned. Nothing was reported, and the run went
+    // silent with no error anywhere.
+    let vars = vars();
+    let built = resolve_pipeline("qa", None)
+        .expect("built-in pipeline")
+        .build_prompt(&vars);
+    let bin = crate::pipeline::vars::bin();
+    assert!(
+        bin.starts_with('/'),
+        "the prompt's binary is not an absolute path: {bin}"
+    );
+    assert!(
+        built.contains(&format!("{bin} notify")),
+        "the QA prompt does not call the absolute binary: {built}"
+    );
+}
+
+#[test]
+fn a_pinned_binary_has_no_whitespace_in_it() {
+    // A path with a space would break the command line the agent is told to
+    // run, and quoting it here would be quoted again by whatever composes the
+    // prompt. The bare name is wrong less often than a mangled path.
+    assert!(
+        !crate::pipeline::vars::bin().contains(char::is_whitespace),
+        "the prompt's binary path contains whitespace"
+    );
 }
 
 pub(crate) const GOLDEN_TASK: &[&str] = &[

@@ -103,6 +103,8 @@ pub(super) fn transcript_sessions(
                 cwd,
                 tty: None,
                 lstart: None,
+                // A transcript with no live process has no environment to read.
+                run_id: None,
                 session_file: Some(file.path.clone()),
                 session_mtime: mtime,
                 session_size: Some(size),

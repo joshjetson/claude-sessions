@@ -17,6 +17,7 @@ pub fn watch_or_drop(state: &mut AppState, project: &str, stage: &str, existing:
         if state.board.stop_watching(&run_id) {
             state.flash("Stopped watching that run. The QA sessions are untouched.".to_string());
         }
+        state.save_runs();
         state.dirty = true;
         return;
     }
@@ -46,6 +47,7 @@ pub fn watch_or_drop(state: &mut AppState, project: &str, stage: &str, existing:
         }
         None => state.flash("That stage has no tasks to watch.".to_string()),
     }
+    state.save_runs();
     state.dirty = true;
 }
 
@@ -72,6 +74,7 @@ pub fn run_command(state: &mut AppState, command: RunCommand) {
             if state.board.stop_watching(&command.run_id) {
                 state.flash("Stopped watching. The QA sessions are untouched.".to_string());
             }
+            state.save_runs();
             state.dirty = true;
         }
         RunAction::Cancel => {}
@@ -106,7 +109,7 @@ fn start_run(state: &mut AppState, run_id: &str, extra_context: &str) {
         .runs
         .iter()
         .find(|run| run.id == run_id)
-        .is_some_and(|run| run.coordinator_session.is_some() || run.coordinator_pending.is_some());
+        .is_some_and(|run| run.coordinator_started);
 
     if !already {
         start_coordinator(state, run_id, extra_context);
@@ -153,6 +156,9 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
     if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
         run.spawned.extend(plan.iter().copied());
     }
+    // Recorded before the terminals open, so a crash mid-launch cannot make the
+    // run forget what it already started and start it twice.
+    state.save_runs();
 
     state.flash(format!(
         "Starting {} QA session{}…",
@@ -228,35 +234,13 @@ fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
         (run.mode == RunMode::Triage).to_string(),
     );
 
-    // Pin the folder before launching, so the coordinator can be recognised
-    // afterwards by the folder it started in. Without a resolved folder the
-    // launch still goes out — it opens a picker — and the run says plainly
-    // that it could not track the result.
-    let discovered = crate::ui::board::all_discovered_dirs(&state.discovered_dirs);
-    let dir =
-        match crate::ui::board::resolve_task_dir(&state.config, &task.project_name, &discovered) {
-            crate::ui::board::DirChoice::Known(dir) => Some(dir),
-            _ => None,
-        };
-
-    let pending = dir.as_ref().map(|dir| crate::qarun::CoordinatorPending {
-        cwd: dir.clone(),
-        known_session_ids: state.sessions().map(|s| s.session_id.clone()).collect(),
-    });
-    if let Some(dir) = dir.clone() {
-        request = request.in_dir(dir);
-    }
-
+    // The folder no longer has to be pinned for recognition — the run id in
+    // the environment does that — so this launch resolves its directory the
+    // same way every other one does, picker and all.
     if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
-        run.coordinator_pending = pending;
+        run.coordinator_started = true;
     }
-    if dir.is_none() {
-        state.flash(
-            "Starting the coordinator, but its folder is not resolved yet — \
-             the run cannot show its state until you pick one."
-                .to_string(),
-        );
-    }
+    state.save_runs();
 
     crate::ui::board::start(state, request);
     state.dirty = true;

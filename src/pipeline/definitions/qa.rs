@@ -20,7 +20,7 @@
 //!    real runs, fidelity drops every time a step is handed across a boundary.
 
 use super::{PipelineDef, StepDef};
-use crate::pipeline::vars::{PromptVars, BIN};
+use crate::pipeline::vars::{bin, PromptVars};
 
 /// Shared by both QA pipelines: the task URL plus anything typed at launch.
 const CONTEXT: StepDef = StepDef::new(
@@ -102,8 +102,9 @@ fn park_verdict(vars: &PromptVars) -> String {
     format!(
         " When /qa has produced its note, do NOT post anything to Odoo, do NOT move the task to another stage, and do NOT tag anyone — leave the @PM placeholder exactly as written. \
 Leave the note where write_note.py saved it in the task's QA directory. \
-Then flag it for review by running: {BIN} notify --title \"QA #{task_id}: PASS\" (or \"QA #{task_id}: REVISION REQUIRED\") --message \"<one line on the outcome, then the absolute path to the saved note>\" --level success (use --level warn when revisions are required). \
-Finally, print the note in the terminal exactly as write_note.py emitted it, unfenced, then stop and wait for the user. Do not end the session. A human decides whether it is posted."
+Then flag it for review by running: {} notify --title \"QA #{task_id}: PASS\" (or \"QA #{task_id}: REVISION REQUIRED\") --message \"<one line on the outcome, then the absolute path to the saved note>\" --level success (use --level warn when revisions are required). \
+Finally, print the note in the terminal exactly as write_note.py emitted it, unfenced, then stop and wait for the user. Do not end the session. A human decides whether it is posted.",
+        bin()
     )
 }
 

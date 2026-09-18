@@ -75,6 +75,7 @@ pub fn live_session(session_id: &str, task_id: Option<i64>, mtime_secs: u64) -> 
         cumulative_usage: None,
         prompts: Vec::new(),
         task_id,
+        run_id: None,
     }
 }
 

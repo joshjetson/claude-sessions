@@ -171,6 +171,7 @@ fn resume(state: &mut AppState, request: StartRequest) {
         &task,
         task_url(state, task.id),
         &request.extra_context,
+        &request.extras,
     );
     state.enqueue(Action::Resume(Box::new(ResumeRequest {
         prompt,
@@ -209,6 +210,7 @@ fn send_to_live(
         task,
         task_url(state, task.id),
         &request.extra_context,
+        &request.extras,
     )
     .prompt(&kind, &cwd, None)
     .ok()??;
@@ -230,6 +232,7 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
         task,
         task_url(state, task.id),
         &request.extra_context,
+        &request.extras,
     );
     let prompt = match context.prompt(&request.kind, dir, None) {
         Ok(prompt) => prompt,
@@ -244,6 +247,13 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
         stage_move: working_stage_move(&state.config, task, &request.kind, Some(dir)),
         known_session_ids: state.sessions().map(|s| s.session_id.clone()).collect(),
         say: format!("Started #{} in {dir}.", task.id),
+        // A coordinator launch already carries the run id as a prompt variable.
+        // Reusing it here avoids a second way of saying the same thing that
+        // could drift from the first.
+        run_id: request
+            .extras
+            .get(crate::pipeline::definitions::RUN_ID_VAR)
+            .map(|id| crate::qarun::encode_run_id(id)),
     };
     // A fresh attempt clears any prior needs-info flag; the gate raises it
     // again if it still applies.

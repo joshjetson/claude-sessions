@@ -211,9 +211,14 @@ pub fn launch(
         },
     };
 
-    let request = LaunchRequest::new(spec.cwd.clone(), command)
+    let mut request = LaunchRequest::new(spec.cwd.clone(), command)
         .task_id(spec.task_id)
         .title(spec.title.clone());
+    // Only a coordinator carries this. Every other launch leaves it unset, so
+    // the variable's presence IS the answer to "is this a coordinator".
+    if let Some(run_id) = spec.run_id.as_deref() {
+        request = request.run_id(run_id);
+    }
     let result = driver.launch(&request);
     if !result.ok {
         let reason = result.error.unwrap_or_else(|| "unknown reason".into());

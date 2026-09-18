@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 
 use super::definitions::{built_in, PipelineDef, StepKind};
 use super::project::{project_pipeline_path, PROJECT_DIR};
-use super::vars::BIN;
+// Help text a person reads and types, so the bare name is right here — an
+// absolute path belongs only in a PROMPT, where PATH cannot be trusted.
+use super::vars::BIN_NAME as BIN;
 
 #[derive(Debug)]
 pub enum InitError {

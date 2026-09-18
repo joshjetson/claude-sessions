@@ -17,7 +17,7 @@
 //! duplicate the check.
 
 use super::{PipelineDef, StepDef};
-use crate::pipeline::vars::{PromptVars, BIN};
+use crate::pipeline::vars::{bin, PromptVars};
 
 pub static PRE_OPTICS_PIPELINE: PipelineDef = PipelineDef {
     id: "pre-optics",
@@ -56,7 +56,8 @@ fn hand_over(vars: &PromptVars) -> String {
     let task_id = vars.task_id;
     format!(
         " Do NOT post anything to Odoo, do NOT move the task to another stage, and do NOT tag anyone. \
-Then flag the brief for review by running: {BIN} notify --title \"Pre-work brief #{task_id} ready\" --message \"<one line on what the task actually asks, then the Optics process name and the path to the brief>\" --level info. \
-Finally print the brief in the terminal, unfenced, then stop and wait for the user. Do not end the session."
+Then flag the brief for review by running: {} notify --title \"Pre-work brief #{task_id} ready\" --message \"<one line on what the task actually asks, then the Optics process name and the path to the brief>\" --level info. \
+Finally print the brief in the terminal, unfenced, then stop and wait for the user. Do not end the session.",
+        bin()
     )
 }

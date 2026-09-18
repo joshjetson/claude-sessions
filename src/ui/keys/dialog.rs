@@ -23,7 +23,23 @@ pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome
     match outcome {
         DialogOutcome::Stay => state.dialog = Some(dialog),
         DialogOutcome::Close => {}
-        DialogOutcome::Act(action) => state.enqueue(action),
+        DialogOutcome::Act(action) => {
+            // A confirmed run kill also ENDS the run: the sessions are going,
+            // and a run row with nothing under it is something you can neither
+            // act on nor dismiss.
+            // Read from the dialog the caller handed over, not from
+            // `state.dialog` — it has already been taken by this point.
+            let stops_run = match &dialog {
+                Dialog::Kill(confirm) => confirm.stops_run.clone(),
+                _ => None,
+            };
+            if let Some(run_id) = stops_run {
+                if state.board.stop_watching(&run_id) {
+                    state.save_runs();
+                }
+            }
+            state.enqueue(action)
+        }
         DialogOutcome::Quit(quit) => state.quit = Some(quit),
         DialogOutcome::Flash(message) => state.flash(message),
         DialogOutcome::Keep { action, flash } => {
@@ -160,6 +176,9 @@ fn resolve_conflicts(state: &mut AppState, task: &crate::types::DeployTask) {
         &stub,
         crate::ui::board::task_url(state, task.id),
         "",
+        // The conflict flow has no caller variables of its own; it sets `mr`
+        // just below instead.
+        &std::collections::BTreeMap::new(),
     );
     prompt.mr = Some(crate::pipeline::MergeRequestVars {
         iid: mr.iid,

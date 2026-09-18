@@ -259,9 +259,37 @@ fn handle_sessions(state: &mut AppState, key: KeyEvent) {
 
 /// Raise the terminal of the session under the cursor, or — when the cursor is
 /// somewhere else — of the session the conversation pane is showing.
+/// The confirm dialog for killing a whole run.
+fn kill_run_confirm(state: &AppState, run_id: &str) -> KillConfirm {
+    let label = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .map(|run| run.project_name.clone())
+        .unwrap_or_else(|| run_id.to_string());
+
+    let sections = state.run_sections();
+    let Some(section) = sections.iter().find(|s| s.run_id == run_id) else {
+        return KillConfirm::for_run(run_id, &label, None, &[]);
+    };
+    let agents: Vec<&crate::types::Session> =
+        section.agents.iter().filter_map(|a| a.session).collect();
+    KillConfirm::for_run(run_id, &label, section.coordinator, &agents)
+}
+
+/// The session coordinating a run, if one is running right now.
+fn coordinator_id(state: &AppState, run_id: &str) -> Option<String> {
+    crate::qarun::coordinator_of(run_id, state.sessions()).map(|s| s.session_id.clone())
+}
+
 fn focus_selected_terminal(state: &mut AppState, snapshot: &TreeSnapshot) {
     let id = match &snapshot.row {
         Some(SelectedRow::Session { session_id, .. }) => Some(session_id.clone()),
+        // `o` on a run row opens the coordinator's terminal. Without this it
+        // fell through to whatever was selected last, which is a different
+        // session than the row you pressed it on.
+        Some(SelectedRow::Run { run_id }) => coordinator_id(state, run_id),
         _ => state.selected_session_id.clone(),
     };
     let Some(session) = id.and_then(|id| state.find_session(&id)) else {
@@ -279,11 +307,15 @@ fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
             }
         }
         KeyCode::Char('x') => {
-            state.dialog = Some(Dialog::Kill(KillConfirm::for_row(
-                snapshot.row.as_ref(),
-                &state.by_project,
-                &state.config,
-            )));
+            // A run row kills the whole run — the coordinator and every agent.
+            // Killing them one at a time means the coordinator outlives the
+            // agents it was watching, or the reverse, and both are states
+            // nobody asks for.
+            let dialog = match &snapshot.row {
+                Some(SelectedRow::Run { run_id }) => kill_run_confirm(state, run_id),
+                row => KillConfirm::for_row(row.as_ref(), &state.by_project, &state.config),
+            };
+            state.dialog = Some(Dialog::Kill(dialog));
         }
         // X is the bulk form of x: it closes every session whose task has
         // finished, and nothing else. What "finished" means is
@@ -334,13 +366,25 @@ fn on_select(state: &mut AppState, snapshot: &TreeSnapshot) {
             }
         }
         Some(SelectedRow::Session { session_id, .. }) => select_session(state, session_id),
-        // A run row toggles like a project row. The run MENU is still reached
-        // with Enter on the board — this row shows the run, it does not act on
-        // it, so Enter here cannot start anything by accident.
+        // A run row IS its coordinator, so Enter does what Enter on a session
+        // row does: it opens that conversation. It also expands the run, since
+        // both are the same request — "show me this run".
+        //
+        // It cannot start anything. The run MENU stays on the board, so there
+        // is no key here that launches a session by accident.
         Some(SelectedRow::Run { run_id }) => {
             let key = format!("r:{run_id}");
             if !state.expanded_projects.remove(&key) {
-                state.expanded_projects.insert(key);
+                state.expanded_projects.insert(key.clone());
+            }
+            match coordinator_id(state, run_id) {
+                Some(session_id) => select_session(state, &session_id),
+                // Said out loud. A row that silently does nothing reads as a
+                // broken key rather than as a run without a coordinator.
+                None => state.flash(
+                    "This run has no coordinator running. Start the run again to launch one."
+                        .to_string(),
+                ),
             }
         }
         _ => {}

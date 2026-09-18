@@ -30,6 +30,7 @@ fn session(tty: Option<&str>) -> Session {
         cumulative_usage: None,
         prompts: Vec::new(),
         task_id: Some(4101),
+        run_id: None,
     }
 }
 

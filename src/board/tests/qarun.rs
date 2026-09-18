@@ -70,8 +70,7 @@ fn run(task_ids: Vec<i64>) -> QaRun {
         task_ids,
         started_at: String::new(),
         lane_limit: None,
-        coordinator_session: None,
-        coordinator_pending: None,
+        coordinator_started: false,
         spawned: Vec::new(),
         mode: RunMode::Shadow,
     }

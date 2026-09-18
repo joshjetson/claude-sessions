@@ -12,6 +12,7 @@ use ratatui::text::{Line, Span};
 use ratatui::Frame;
 
 use crate::config::ConfigHandle;
+use crate::types::Session;
 use crate::ui::dialogs::widgets::{dialog_width, hint, render_modal, PromptOutcome, TextPrompt};
 use crate::ui::dialogs::{DialogCtx, DialogOutcome};
 use crate::ui::state::Action;
@@ -25,6 +26,9 @@ use crate::ui::tree::{SelectedRow, SessionsByProject};
 pub struct KillConfirm {
     pub pids: Vec<u32>,
     pub label: String,
+    /// The run this kill ends, when the row was a run. Confirming it removes
+    /// the run as well as the processes.
+    pub stops_run: Option<String>,
 }
 
 impl KillConfirm {
@@ -38,6 +42,7 @@ impl KillConfirm {
     ) -> Self {
         match row {
             Some(SelectedRow::Session { session_id, pids }) => KillConfirm {
+                stops_run: None,
                 pids: pids.clone(),
                 label: match config.session_nickname(session_id) {
                     Some(nickname) => nickname.to_string(),
@@ -47,6 +52,7 @@ impl KillConfirm {
             Some(SelectedRow::Project { name }) => {
                 let sessions = by_project.get(name).map(Vec::as_slice).unwrap_or(&[]);
                 KillConfirm {
+                    stops_run: None,
                     pids: sessions
                         .iter()
                         .flat_map(|s| s.pids.iter().copied())
@@ -55,9 +61,46 @@ impl KillConfirm {
                 }
             }
             _ => KillConfirm {
+                stops_run: None,
                 pids: Vec::new(),
                 label: String::new(),
             },
+        }
+    }
+
+    /// Every process a QA run is holding: the coordinator and each agent.
+    ///
+    /// Built from the sessions that are LIVE right now, not from the run's task
+    /// list. A task the run never started, or whose session has already gone,
+    /// contributes nothing to kill — and counting it would make the dialog
+    /// promise more than it does.
+    pub fn for_run(
+        run_id: &str,
+        label: &str,
+        coordinator: Option<&Session>,
+        agents: &[&Session],
+    ) -> Self {
+        let mut pids: Vec<u32> = Vec::new();
+        let mut live = 0;
+        for session in coordinator.into_iter().chain(agents.iter().copied()) {
+            pids.extend(session.pids.iter().copied());
+            live += 1;
+        }
+        // The coordinator is named separately because killing it is the part
+        // with a consequence the agents do not have: the run stops being
+        // answered, and the agents that survive go back to asking the reviewer.
+        let what = match (coordinator.is_some(), live) {
+            (_, 0) => "nothing — no session in this run is running".to_string(),
+            (true, 1) => "the coordinator".to_string(),
+            (true, n) => format!("the coordinator and {} agent(s)", n - 1),
+            (false, n) => format!("{n} agent(s), with no coordinator running"),
+        };
+        KillConfirm {
+            pids,
+            label: format!("{what} in {label}"),
+            // Killing a run ends it. Leaving the row behind with every session
+            // gone would be a run you cannot act on and cannot get rid of.
+            stops_run: Some(run_id.to_string()),
         }
     }
 

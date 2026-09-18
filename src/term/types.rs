@@ -9,6 +9,13 @@ use crate::types::Session;
 /// Named once here; `bin/done` and the scanner both look for this exact key.
 pub const TASK_ID_ENV: &str = "CLAUDE_SESSIONS_TASK_ID";
 
+/// Environment variable carrying the QA run a coordinator watches.
+///
+/// Exported on a coordinator launch and on nothing else. The scanner reads it
+/// back from `ps -E`, which is how a coordinator is recognised without guessing
+/// from its folder — see `scan::detect::launch_run_id`.
+pub const RUN_ID_ENV: &str = "CLAUDE_SESSIONS_RUN_ID";
+
 /// Everything a driver needs to open a new session.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchRequest {
@@ -41,6 +48,10 @@ impl LaunchRequest {
     /// The one environment variable every pipeline launch sets.
     pub fn task_id(self, task_id: i64) -> Self {
         self.env(TASK_ID_ENV, task_id.to_string())
+    }
+
+    pub fn run_id(self, run_id: impl Into<String>) -> Self {
+        self.env(RUN_ID_ENV, run_id)
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {

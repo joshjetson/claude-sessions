@@ -146,3 +146,70 @@ fn the_coordinator_is_never_told_to_spawn() {
         assert!(!prompt.contains("lane"), "triage={triage}");
     }
 }
+
+// --- what the run taught us --------------------------------------------------
+
+#[test]
+fn the_coordinator_is_told_to_look_before_reporting_a_gap() {
+    // Observed: it reported `note_written: null` for three tasks, three times,
+    // while all three notes sat finished on disk. /qa had rewritten them
+    // without updating run.json. Reading the field and stopping there cost the
+    // reviewer the whole check.
+    let prompt = prompt(true);
+    assert!(
+        prompt.contains("authority on a VERDICT and on nothing else"),
+        "run.json is still treated as authoritative for everything: {prompt}"
+    );
+    assert!(
+        prompt.contains("Never report a gap you have not looked for twice"),
+        "nothing tells it to check the directory: {prompt}"
+    );
+}
+
+#[test]
+fn a_triage_coordinator_is_told_to_chase_what_is_missing() {
+    // Reporting a malformed note leaves the work with the reviewer, which is
+    // the work this session exists to take on.
+    let prompt = prompt(true);
+    assert!(
+        prompt.contains("/rev-req"),
+        "it is not told it can ask for a note to be re-run: {prompt}"
+    );
+    assert!(
+        prompt.contains("Then check that it arrived"),
+        "it is not told to verify the chase landed: {prompt}"
+    );
+}
+
+#[test]
+fn a_shadow_coordinator_chases_by_escalating_not_by_typing() {
+    // Chasing is a message typed into a session. Letting shadow do it would be
+    // a hole in the one guarantee shadow makes.
+    let prompt = prompt(false);
+    assert!(
+        prompt.contains("you do not type into the session"),
+        "shadow mode was told to chase directly: {prompt}"
+    );
+    assert!(
+        !prompt.contains("qa-answer"),
+        "shadow mode was handed the answer command by the chase step: {prompt}"
+    );
+}
+
+#[test]
+fn the_coordinator_is_forbidden_from_killing_by_pattern() {
+    // `pkill -f "claude-sessions notify"` appeared in four agents' sessions in
+    // one run. It matches every session's processes, so each cleanup killed the
+    // others' in-flight calls and the run went quiet with nothing in any log.
+    let prompt = prompt(true);
+    assert!(
+        prompt.contains("Never kill a process by PATTERN"),
+        "nothing forbids a pattern kill: {prompt}"
+    );
+    for forbidden in ["pkill", "killall"] {
+        assert!(
+            prompt.contains(forbidden),
+            "{forbidden} is not named as forbidden: {prompt}"
+        );
+    }
+}

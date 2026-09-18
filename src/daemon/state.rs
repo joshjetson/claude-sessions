@@ -220,12 +220,25 @@ impl SessionIndex {
 /// a row holds its position. The transcript's mtime is the fallback for a
 /// session whose start time could not be read — imperfect, but it at least does
 /// not move every time the agent writes.
+/// When a session's process started, for the ordering above.
+///
+/// `start_time_instant`, NOT `parse_timestamp`. `lstart` is whatever `ps`
+/// printed — `Thu Sep 17 21:29:46 2026` — and `parse_timestamp` reads RFC3339
+/// only, so it returned `None` for every session ever passed to it. The sort
+/// then fell through to the transcript mtime, which is the activity ordering
+/// this function exists to replace: the fix was present and inert, and the
+/// list reordered on every write exactly as it had before.
+///
+/// `start_time_instant` parses the `ps` form and RFC3339 both, so neither
+/// source of a start time is left out.
+///
+/// The mtime fallback stays for the case it was meant for: a transcript with no
+/// live process has no `lstart` at all.
 fn started_at(session: &Session) -> SystemTime {
     session
         .lstart
         .as_deref()
-        .and_then(crate::util::parse_timestamp)
-        .map(SystemTime::from)
+        .and_then(crate::util::start_time_instant)
         .unwrap_or(session.session_mtime)
 }
 

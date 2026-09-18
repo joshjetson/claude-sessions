@@ -249,6 +249,44 @@ pub fn is_helper_flag(argv: &str) -> bool {
     false
 }
 
+/// The QA run a coordinator was launched for, exported into its environment by
+/// the spawn helpers.
+///
+/// `/\bCLAUDE_SESSIONS_RUN_ID=(\S+)/`, read from the same `ps -E` line as
+/// [`launch_task_id`] and for the same reason.
+///
+/// This exists because the alternative was a guess. A coordinator holds no task
+/// id, so it used to be recognised as "a new session, in the launch folder,
+/// holding no task" — which the run's own QA sessions also satisfy for the
+/// moment between writing a transcript and that transcript being read for a
+/// task URL. They all start in the same folder seconds apart, so the match was
+/// a race, and losing it meant typing every question into a QA pass that was
+/// told not to answer questions. A run id the process carries cannot be raced.
+///
+/// Unlike a task id this is not numeric — run ids are `project::stage` — so it
+/// reads to the end of the value rather than to the end of a digit run. A run
+/// id therefore must not contain whitespace, which `id_for` guarantees by
+/// construction only insofar as project and stage names do not; a value that
+/// does contain a space is truncated here rather than mis-parsed.
+pub fn launch_run_id(env_line: &str) -> Option<String> {
+    const KEY: &str = "CLAUDE_SESSIONS_RUN_ID=";
+    let bytes = env_line.as_bytes();
+    for (i, _) in env_line.match_indices(KEY) {
+        if !boundary_before(bytes, i) {
+            continue;
+        }
+        let rest = &env_line[i + KEY.len()..];
+        // `split`, not `split_whitespace`: the latter skips leading separators,
+        // so an EMPTY value (`...RUN_ID= PATH=/usr/bin`) returned the next
+        // variable in the line as though it were the run id.
+        let value = rest.split(char::is_whitespace).next().unwrap_or_default();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
 /// The task a session was launched for, exported into its environment by the
 /// spawn helpers.
 ///

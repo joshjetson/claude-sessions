@@ -25,6 +25,7 @@ mod deploy;
 mod fakes;
 mod linking;
 mod markers;
+mod ordering;
 mod protocol;
 mod refresh;
 mod remote;
@@ -236,6 +237,7 @@ pub(crate) fn a_session(session_id: &str, cwd: &str) -> Session {
         cumulative_usage: None,
         prompts: Vec::new(),
         task_id: None,
+        run_id: None,
     }
 }
 

@@ -9,9 +9,11 @@ use super::golden::{GOLDEN_REVISION, GOLDEN_TASK};
 use super::{vars, Repo};
 
 fn prompt_for(repo: &Repo) -> String {
-    resolve_pipeline("task", Some(repo.path()))
-        .unwrap()
-        .build_prompt(&vars())
+    super::normalise_bin(
+        &resolve_pipeline("task", Some(repo.path()))
+            .unwrap()
+            .build_prompt(&vars()),
+    )
 }
 
 #[test]
@@ -21,7 +23,10 @@ fn no_override_file_means_the_built_in_pipeline() {
     assert_eq!(resolved.source, PipelineSource::BuiltIn);
     assert_eq!(resolved.steps.len(), TASK_PIPELINE.steps.len());
     assert!(resolved.steps.iter().all(|step| !step.customised));
-    assert_eq!(resolved.build_prompt(&vars()), GOLDEN_TASK.concat());
+    assert_eq!(
+        super::normalise_bin(&resolved.build_prompt(&vars())),
+        GOLDEN_TASK.concat()
+    );
 }
 
 #[test]
@@ -208,7 +213,10 @@ fn an_override_for_another_pipeline_does_not_apply() {
     }));
     let resolved = resolve_pipeline("task", Some(repo.path())).unwrap();
     assert_eq!(resolved.source, PipelineSource::BuiltIn);
-    assert_eq!(resolved.build_prompt(&vars()), GOLDEN_TASK.concat());
+    assert_eq!(
+        super::normalise_bin(&resolved.build_prompt(&vars())),
+        GOLDEN_TASK.concat()
+    );
 
     // …and the pipeline it does name still gets it.
     let revision = resolve_pipeline("revision", Some(repo.path())).unwrap();
@@ -262,7 +270,10 @@ fn malformed_json_reports_the_problem_instead_of_crashing_the_dashboard() {
         "a broken override must fall back to the default"
     );
     // And the prompt still builds.
-    assert_eq!(resolved.build_prompt(&vars()), GOLDEN_TASK.concat());
+    assert_eq!(
+        super::normalise_bin(&resolved.build_prompt(&vars())),
+        GOLDEN_TASK.concat()
+    );
     assert_eq!(resolved.override_file.unwrap(), repo.pipeline_file());
 }
 
@@ -270,9 +281,11 @@ fn malformed_json_reports_the_problem_instead_of_crashing_the_dashboard() {
 fn the_revision_pipeline_resolves_the_same_way() {
     let repo = Repo::empty();
     assert_eq!(
-        resolve_pipeline("revision", Some(repo.path()))
-            .unwrap()
-            .build_prompt(&vars()),
+        super::normalise_bin(
+            &resolve_pipeline("revision", Some(repo.path()))
+                .unwrap()
+                .build_prompt(&vars()),
+        ),
         GOLDEN_REVISION.concat()
     );
 }

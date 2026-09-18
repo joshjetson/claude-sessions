@@ -68,7 +68,18 @@ pub fn note_launch(feed: &dyn SessionFeed, action: &Action) {
     };
     feed.note_task_launch(PendingRequest {
         cwd: spec.cwd.clone(),
-        task_id: Some(spec.task_id),
+        // A coordinator carries a task id ONLY because that is how its folder
+        // gets resolved — it works no task and must not be linked to one.
+        //
+        // It was. The launch queue claimed the coordinator as the session for
+        // the run's first task, so the board pointed that task at the watcher
+        // instead of at its reviewer, the run drew the coordinator in the
+        // agent's row, and the real agent fell out of the run and back into its
+        // project. Two rows for one task, neither of them right.
+        task_id: match spec.run_id {
+            Some(_) => None,
+            None => Some(spec.task_id),
+        },
         known_session_ids: spec.known_session_ids.clone(),
     });
 }

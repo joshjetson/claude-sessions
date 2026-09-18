@@ -116,6 +116,7 @@ fn a_dialog_swallows_input_before_the_view_sees_it() {
     // `q` quits the dashboard everywhere else; inside a confirmation it must not.
     let (_dir, mut config) = temp_config();
     let mut dialog = Dialog::Kill(KillConfirm {
+        stops_run: None,
         pids: vec![1],
         label: "one".into(),
     });
@@ -133,6 +134,7 @@ fn kill_enqueues_rather_than_signalling_from_the_draw_thread() {
     // hands back an Action; the worker is what touches `kill`.
     let (_dir, mut config) = temp_config();
     let mut dialog = Dialog::Kill(KillConfirm {
+        stops_run: None,
         pids: vec![4242, 4243],
         label: "session abcd".into(),
     });

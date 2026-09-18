@@ -180,6 +180,15 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         state.note_feed(notice);
     }
     refresh_transcripts_notice(&mut state);
+    // A dashboard that OPENS on the board fetches it now.
+    //
+    // Switching to the board fills an empty one, but starting on it never went
+    // through that path, so the tab sat empty until the 45-second poll or an
+    // `r`. The symptom read as a broken board rather than an unfetched one.
+    if state.view == crate::ui::state::View::Board && state.board.board.is_none() {
+        state.board.loading = true;
+        crate::ui::board::keys::refresh(&mut state);
+    }
 
     let mut screen = CrosstermScreen::new();
     screen.acquire()?;

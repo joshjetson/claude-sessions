@@ -87,6 +87,7 @@ pub fn session(id: &str, cwd: &str, status: SessionStatus) -> Session {
         cumulative_usage: None,
         prompts: Vec::new(),
         task_id: None,
+        run_id: None,
     }
 }
 
