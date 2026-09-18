@@ -45,7 +45,7 @@ fn question() -> Notification {
         cwd: String::new(),
         project: String::new(),
         session_id: None,
-        task_id: Some(6688),
+        task_id: Some(4101),
         level: NotificationLevel::Warn,
         kind: NotificationKind::Question,
         ts: String::new(),
@@ -55,10 +55,10 @@ fn question() -> Notification {
 
 fn tasks() -> Vec<crate::types::Task> {
     vec![
-        task(6688, "Provider portal refund totals show gross not net"),
-        task(6685, "Medication master description length cap"),
-        task(6681, "Money formatting across every category"),
-        task(6670, "Bank payment void and refund"),
+        task(4101, "Summary row shows the wrong total"),
+        task(4102, "Description field ignores its length cap"),
+        task(4103, "Number formatting differs between panels"),
+        task(4104, "Cancelling an entry leaves it locked"),
     ]
 }
 
@@ -91,11 +91,11 @@ fn ctx_at(tree_cols: u16) -> BoardCtx<'static> {
     }
 }
 
-/// A run over 6688 / 6685 / 6681, leaving 6670 loose in the stage.
+/// A run over 4101 / 4102 / 4103, leaving 4104 loose in the stage.
 fn fixture() -> (crate::types::Board, [QaRun; 1], Notification) {
     (
         board(vec![(STAGE, 1, tasks())]),
-        [run(vec![6688, 6685, 6681])],
+        [run(vec![4101, 4102, 4103])],
         question(),
     )
 }
@@ -105,16 +105,16 @@ fn run_ctx<'a>(ask: &'a Notification) -> RunCtx<'a> {
     passed.verdict = Some(QaVerdict::Pass);
     RunCtx {
         run_states: HashMap::from([
-            (6688, {
+            (4101, {
                 let mut s = state(1, 0);
                 s.round = 2;
                 s
             }),
-            (6685, state(6, 3)),
-            (6681, passed),
+            (4102, state(6, 3)),
+            (4103, passed),
         ]),
         sessions: HashMap::new(),
-        asks: HashMap::from([(6688, ask)]),
+        asks: HashMap::from([(4101, ask)]),
         now: Some(now()),
     }
 }
@@ -158,7 +158,7 @@ fn a_task_in_the_run_is_not_also_a_loose_row() {
             _ => None,
         })
         .collect();
-    assert_eq!(loose, vec![6670]);
+    assert_eq!(loose, vec![4104]);
 }
 
 #[test]
@@ -185,7 +185,7 @@ fn a_collapsed_run_still_claims_its_tasks() {
             _ => None,
         })
         .collect();
-    assert_eq!(loose, vec![6670]);
+    assert_eq!(loose, vec![4104]);
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn no_run_leaves_the_board_exactly_as_it_was() {
             _ => None,
         })
         .collect();
-    assert_eq!(ids, vec![6688, 6685, 6681, 6670]);
+    assert_eq!(ids, vec![4101, 4102, 4103, 4104]);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn a_run_row_survives_its_task_leaving_the_board() {
     // A task that fails QA moves out of the stage. The run still owns it, so
     // the row has to render without a task record.
     let (board, _, ask) = fixture();
-    let runs = [run(vec![6688, 999_999])];
+    let runs = [run(vec![4101, 999_999])];
     let mut ctx = run_ctx(&ask);
     ctx.run_states.insert(999_999, state(0, 0));
 
@@ -259,8 +259,8 @@ fn nothing_overflows_at_any_pane_width() {
 
 #[test]
 fn a_very_long_name_is_truncated_rather_than_wrapped() {
-    let long = board(vec![(STAGE, 1, vec![task(6688, &"x".repeat(300))])]);
-    let runs = [run(vec![6688])];
+    let long = board(vec![(STAGE, 1, vec![task(4101, &"x".repeat(300))])]);
+    let runs = [run(vec![4101])];
     let ask = question();
     let ctx = run_ctx(&ask);
     let items = build_board_tree_with_runs(&long, &expanded(), &runs, Some(&ctx));
@@ -280,7 +280,7 @@ fn the_wide_form_appears_above_the_breakpoint_and_not_below() {
     let items = build_board_tree_with_runs(&board, &expanded(), &runs, Some(&ctx));
     let row = items
         .iter()
-        .find(|i| matches!(i, BoardItem::QaRunTask { entry, .. } if entry.task_id == 6685))
+        .find(|i| matches!(i, BoardItem::QaRunTask { entry, .. } if entry.task_id == 4102))
         .unwrap();
 
     assert!(text(&format_board_item(row, &ctx_at(QA_WIDE_MIN_COLS))).contains("⠿ testing 3/9"));
@@ -302,26 +302,26 @@ fn row_for(task_id: i64, tree_cols: u16) -> String {
 
 #[test]
 fn an_asking_task_says_so_and_names_its_round() {
-    let row = row_for(6688, 133);
-    assert!(row.contains("#6688"), "{row}");
+    let row = row_for(4101, 133);
+    assert!(row.contains("#4101"), "{row}");
     assert!(row.contains("⏸ asks you r2"), "{row}");
 }
 
 #[test]
 fn a_testing_task_shows_gap_progress() {
-    assert!(row_for(6685, 133).contains("⠿ testing 3/9"));
+    assert!(row_for(4102, 133).contains("⠿ testing 3/9"));
 }
 
 #[test]
 fn a_passed_task_shows_the_recorded_verdict() {
-    assert!(row_for(6681, 133).contains("✓ PASS"));
+    assert!(row_for(4103, 133).contains("✓ PASS"));
 }
 
 #[test]
 fn a_run_row_carries_no_leading_status_marker() {
     // The row read "○ … ✓ PASS" before this was removed — two markers
     // disagreeing about one task.
-    assert!(!row_for(6681, 133).contains('○'));
+    assert!(!row_for(4103, 133).contains('○'));
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn the_status_cell_carries_its_own_colour() {
     let ctx = run_ctx(&ask);
     let items = build_board_tree_with_runs(&board, &expanded(), &runs, Some(&ctx));
 
-    for (task_id, want) in [(6688, QaStatus::Asks), (6681, QaStatus::Pass)] {
+    for (task_id, want) in [(4101, QaStatus::Asks), (4103, QaStatus::Pass)] {
         let row = items
             .iter()
             .find(|i| matches!(i, BoardItem::QaRunTask { entry, .. } if entry.task_id == task_id))
@@ -371,9 +371,9 @@ fn a_run_row_shows_the_task_name() {
     // screen it rendered as a column of bare ids at ragged indentation, since
     // the "indent" was really the leftover padding and so varied with the
     // length of the name nobody could see.
-    let row = row_for(6685, 133);
+    let row = row_for(4102, 133);
     assert!(
-        row.contains("Medication master description length cap"),
+        row.contains("Description field ignores its length cap"),
         "the task name is missing from the row: {row:?}"
     );
 }

@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use crate::config::Group;
 use crate::types::SessionStatus;
 use crate::ui::tests::{session, temp_config, usage};
-use crate::ui::tree::{build_grouped_tree, format_tree_item, SessionsByProject, TreeItem};
+use crate::ui::tree::{
+    build_grouped_tree, build_grouped_tree_with, format_tree_item, SessionsByProject, TreeItem,
+};
 
 fn by_project(sessions: Vec<crate::types::Session>) -> SessionsByProject {
     crate::ui::feed::group_sessions(sessions)
@@ -497,7 +499,7 @@ fn a_session_row_shows_the_task_it_is_working() {
     // question people actually ask of this list: "which task is that?".
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
-    s.task_id = Some(6688);
+    s.task_id = Some(4101);
     let rendered = line_text(
         &TreeItem::Session {
             project_name: "x/alpha",
@@ -505,7 +507,7 @@ fn a_session_row_shows_the_task_it_is_working() {
         },
         &config,
     );
-    assert!(rendered.contains("#6688"), "{rendered}");
+    assert!(rendered.contains("#4101"), "{rendered}");
 }
 
 #[test]
@@ -530,7 +532,7 @@ fn the_status_is_the_last_thing_on_the_row() {
     // the end, only its own tail moves and the columns you read stay put.
     let (_dir, config) = temp_config();
     let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
-    s.task_id = Some(6688);
+    s.task_id = Some(4101);
     s.last_usage = Some(crate::types::Usage {
         input_tokens: Some(72_000),
         cache_creation_input_tokens: None,
@@ -549,8 +551,8 @@ fn the_status_is_the_last_thing_on_the_row() {
             .find(needle)
             .unwrap_or_else(|| panic!("{needle} missing from {rendered}"))
     };
-    assert!(at("abcd") < at("#6688"), "{rendered}");
-    assert!(at("#6688") < at("72K"), "{rendered}");
+    assert!(at("abcd") < at("#4101"), "{rendered}");
+    assert!(at("#4101") < at("72K"), "{rendered}");
     assert!(at("72K") < at("idle"), "{rendered}");
     assert!(rendered.trim_end().ends_with("idle"), "{rendered}");
 }
@@ -561,10 +563,10 @@ fn print_session_rows() {
     let (_dir, config) = temp_config();
     let mut rows = Vec::new();
     for (id, task, tokens, status) in [
-        ("cbc3", Some(6688_i64), 133_000_u64, SessionStatus::Working),
-        ("9280", Some(6685), 118_000, SessionStatus::Working),
+        ("cbc3", Some(4101_i64), 133_000_u64, SessionStatus::Working),
+        ("9280", Some(4102), 118_000, SessionStatus::Working),
         ("6c92", None, 116_000, SessionStatus::Idle),
-        ("98f4", Some(6673), 532_000, SessionStatus::Awaiting),
+        ("98f4", Some(4105), 532_000, SessionStatus::Awaiting),
     ] {
         let mut s = session(id, "/Users/x/dev/alpha", status);
         s.task_id = task;
@@ -588,4 +590,69 @@ fn print_session_rows() {
             )
         );
     }
+}
+
+#[test]
+fn quiet_folders_are_hidden_by_default() {
+    // A group of eighteen checkouts drew eighteen grey rows and buried the two
+    // projects actually running.
+    let mut sessions: SessionsByProject = BTreeMap::new();
+    sessions.insert(
+        "x/alpha".to_string(),
+        vec![session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle)],
+    );
+    let mut dirs = BTreeMap::new();
+    dirs.insert(
+        "/Users/x/dev".to_string(),
+        vec![
+            "alpha".to_string(),
+            "bravo".to_string(),
+            "charlie".to_string(),
+        ],
+    );
+    let groups = vec![Group::new("Dev", "/Users/x/dev")];
+
+    let hidden = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, false);
+    assert!(
+        !hidden
+            .iter()
+            .any(|item| matches!(item, TreeItem::Inactive { .. })),
+        "quiet folders should be hidden by default"
+    );
+    // …and the project that IS running is still there.
+    assert!(hidden
+        .iter()
+        .any(|item| matches!(item, TreeItem::Project { name, .. } if name == &"x/alpha")));
+}
+
+#[test]
+fn quiet_folders_come_back_when_asked_for() {
+    // They are the only way to launch into a repo that is currently quiet, so
+    // the toggle has to actually restore them.
+    let mut sessions: SessionsByProject = BTreeMap::new();
+    sessions.insert(
+        "x/alpha".to_string(),
+        vec![session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle)],
+    );
+    let mut dirs = BTreeMap::new();
+    dirs.insert(
+        "/Users/x/dev".to_string(),
+        vec![
+            "alpha".to_string(),
+            "bravo".to_string(),
+            "charlie".to_string(),
+        ],
+    );
+    let groups = vec![Group::new("Dev", "/Users/x/dev")];
+
+    let shown = build_grouped_tree_with(&sessions, &HashSet::new(), &groups, &dirs, true);
+    let quiet: Vec<&str> = shown
+        .iter()
+        .filter_map(|item| match item {
+            TreeItem::Inactive { name, .. } => Some(*name),
+            _ => None,
+        })
+        .collect();
+    // `alpha` has a live session, so it is a project row and not a quiet folder.
+    assert_eq!(quiet, ["bravo", "charlie"]);
 }

@@ -95,6 +95,21 @@ pub fn build_grouped_tree<'a>(
     groups: &'a [Group],
     discovered: &'a BTreeMap<String, Vec<String>>,
 ) -> Vec<TreeItem<'a>> {
+    build_grouped_tree_with(by_project, expanded, groups, discovered, true)
+}
+
+/// The same, told whether to draw a group's quiet folders.
+///
+/// They are off by default: a group of eighteen checkouts draws eighteen grey
+/// rows and buries the two projects actually running. They earn their place
+/// only when you want to START something in a quiet repo, which `F` reveals.
+pub fn build_grouped_tree_with<'a>(
+    by_project: &'a SessionsByProject,
+    expanded: &HashSet<String>,
+    groups: &'a [Group],
+    discovered: &'a BTreeMap<String, Vec<String>>,
+    show_inactive: bool,
+) -> Vec<TreeItem<'a>> {
     let mut items = Vec::new();
     if groups.is_empty() {
         for (name, sessions) in by_project {
@@ -160,6 +175,9 @@ pub fn build_grouped_tree<'a>(
             }
         }
 
+        if !show_inactive {
+            continue;
+        }
         for dir in discovered.get(group_path).map(Vec::as_slice).unwrap_or(&[]) {
             if active.contains_key(dir.as_str()) {
                 continue;

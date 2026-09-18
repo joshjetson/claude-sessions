@@ -186,6 +186,16 @@ impl ConfigHandle {
             .filter(|limit| *limit > 0)
     }
 
+    /// Whether the sessions tree draws a group's quiet folders. Off unless the
+    /// config says otherwise — see [`crate::config::SessionsBlock`].
+    pub fn show_inactive_folders(&self) -> bool {
+        self.config
+            .sessions
+            .as_ref()
+            .and_then(|s| s.show_inactive_folders)
+            .unwrap_or(false)
+    }
+
     pub fn target_branch(&self, project: &str) -> Option<&str> {
         lookup_ci(&self.config.target_branches, project).map(|(_, branch)| branch.as_str())
     }

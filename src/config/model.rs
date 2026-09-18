@@ -57,6 +57,10 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "lenient")]
     pub usage: Option<UsageBlock>,
+    /// Sessions-tab settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub sessions: Option<SessionsBlock>,
     /// QA run settings.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "lenient")]
@@ -477,4 +481,21 @@ pub struct QaBlock {
     /// concurrency number would catch that.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane_limit: Option<usize>,
+}
+
+/// How the sessions tree is drawn.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SessionsBlock {
+    /// Show every folder in a group that has no live session, greyed out.
+    ///
+    /// Off by default. A group of eighteen checkouts draws eighteen grey rows
+    /// and buries the two projects actually running — and the rows earn their
+    /// place only when you want to START something in a quiet repo, which is
+    /// the minority of the time you are looking at this tab.
+    ///
+    /// They are not gone: `F` toggles them, and the toggle is written back
+    /// here, so turning them on once makes it stick.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_inactive_folders: Option<bool>,
 }

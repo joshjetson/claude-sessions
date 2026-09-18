@@ -15,7 +15,7 @@ use crate::ui::dialogs::{
     SettingsDialog, ShutdownConfirm,
 };
 use crate::ui::state::{Action, AppState, Pane, Quit, View};
-use crate::ui::tree::{build_grouped_tree, SelectedRow, TreeItem};
+use crate::ui::tree::{build_grouped_tree_with, SelectedRow, TreeItem};
 
 mod dialog;
 
@@ -44,11 +44,12 @@ pub struct TreeSnapshot {
 
 pub fn tree_snapshot(state: &AppState) -> TreeSnapshot {
     let groups = state.config.groups();
-    let items: Vec<TreeItem<'_>> = build_grouped_tree(
+    let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,
         &groups,
         &state.discovered_dirs,
+        state.config.show_inactive_folders(),
     );
     let keys: Vec<String> = items.iter().map(TreeItem::key).collect();
     let selected = state.tree_sel.resolve(&keys);
@@ -305,6 +306,19 @@ fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
                 state.enqueue(Action::Refresh);
             }
         }
+        // The quiet folders in a group. Hidden by default — a group of eighteen
+        // checkouts buries the two projects actually running — and revealed
+        // here when you want to start something in one. The choice is written
+        // back, so it sticks.
+        KeyCode::Char('F') => match state.config.toggle_inactive_folders() {
+            Ok(true) => {
+                state.flash("Showing every folder in each group. F hides them again.".to_string())
+            }
+            Ok(false) => {
+                state.flash("Hiding folders with no live session. F shows them.".to_string())
+            }
+            Err(error) => state.flash(format!("Could not save that: {error}")),
+        },
         KeyCode::Char('s') => state.dialog = Some(Dialog::Settings(SettingsDialog::default())),
         _ => {}
     }

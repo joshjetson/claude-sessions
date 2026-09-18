@@ -17,7 +17,7 @@ use crate::ui::components::{
 use crate::ui::conversation::build_conversation_lines;
 use crate::ui::spans::wrap_line;
 use crate::ui::state::{AppState, Pane, View};
-use crate::ui::tree::{build_grouped_tree, format_tree_item, TreeItem};
+use crate::ui::tree::{build_grouped_tree_with, format_tree_item, TreeItem};
 
 pub const TITLE: &str = "Claude Sessions Dashboard";
 
@@ -78,11 +78,12 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // The block's inner height is the content budget; borders are two rows.
     let content_h = area.height.saturating_sub(2) as usize;
     let groups = state.config.groups();
-    let items: Vec<TreeItem<'_>> = build_grouped_tree(
+    let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,
         &groups,
         &state.discovered_dirs,
+        state.config.show_inactive_folders(),
     );
 
     if items.is_empty() {
@@ -302,6 +303,7 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
                 ("x", "kill"),
                 ("r", "rename"),
                 ("n", "new"),
+                ("F", "folders"),
                 ("a/d", "group"),
             ]);
             if state.focus == Pane::Conversation {

@@ -26,9 +26,9 @@ fn on_a_stage() -> (tempfile::TempDir, crate::ui::state::AppState) {
     with_tasks(
         &mut state,
         vec![
-            task(6688, "Provider portal refund totals"),
-            task(6685, "Medication master description cap"),
-            task(6681, "Money formatting across categories"),
+            task(4101, "Summary row shows the wrong total"),
+            task(4102, "Description field ignores its length cap"),
+            task(4103, "Number formatting differs between panels"),
         ],
     );
     // Open the project so the stage row exists, then land on it.
@@ -91,7 +91,7 @@ fn a_run_keeps_a_task_the_stage_has_lost() {
     // The stage now holds one task; the run still covers all three.
     with_tasks(
         &mut state,
-        vec![task(6688, "Provider portal refund totals")],
+        vec![task(4101, "Summary row shows the wrong total")],
     );
     state.board.watch_stage("Aurora", "Approved to Start");
     assert_eq!(

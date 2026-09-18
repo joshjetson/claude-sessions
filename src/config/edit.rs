@@ -23,6 +23,20 @@ impl ConfigHandle {
         self.save()
     }
 
+    /// Flip whether a group's quiet folders are drawn, and remember it.
+    ///
+    /// Written back so the choice survives a restart: a toggle you have to set
+    /// every launch is one you stop using.
+    pub fn toggle_inactive_folders(&mut self) -> io::Result<bool> {
+        let next = !self.show_inactive_folders();
+        self.config
+            .sessions
+            .get_or_insert_with(Default::default)
+            .show_inactive_folders = Some(next);
+        self.save()?;
+        Ok(next)
+    }
+
     /// `~` is expanded here, on write, so the stored path is absolute but a
     /// hand-written `~/dev` in the file still works.
     pub fn add_group(&mut self, name: &str, path: &str) -> io::Result<()> {
