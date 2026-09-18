@@ -396,3 +396,279 @@ fn a_failed_usage_check_keeps_the_last_numbers_and_marks_them_stale() {
     assert!(!usage.ok);
     assert!(usage.format(80).unwrap().contains("(stale)"));
 }
+
+// --- opening a run's coordinator ---------------------------------------------
+
+/// A state with one run whose coordinator is running.
+fn with_a_run(coordinator: bool) -> AppState {
+    let mut state = temp_state().1;
+    let run_id = "x/alpha::Quality Assurance".to_string();
+
+    // Distinct pids, and the agent carries the task the run covers: that is how
+    // a run finds its agents, and a fixture without it makes the assertions
+    // below pass for the wrong reason.
+    let mut agent = session("agent", "/Users/x/dev/alpha", SessionStatus::Working);
+    agent.task_id = Some(4101);
+    agent.pids = vec![101];
+    let mut sessions = vec![agent];
+    if coordinator {
+        let mut coord = session("coord", "/Users/x/dev/alpha", SessionStatus::Idle);
+        coord.run_id = Some(run_id.clone());
+        coord.pids = vec![202];
+        sessions.push(coord);
+    }
+    with_sessions(&mut state, sessions);
+
+    state.board.runs.push(crate::qarun::QaRun {
+        id: run_id,
+        project_name: "x/alpha".to_string(),
+        stage_name: "Quality Assurance".to_string(),
+        task_ids: vec![4101],
+        started_at: String::new(),
+        lane_limit: None,
+        spawned: Vec::new(),
+        mode: crate::qarun::RunMode::default(),
+        coordinator_started: true,
+    });
+    state.view = View::Sessions;
+    state.focus = Pane::Tree;
+    state.take_actions();
+    state
+}
+
+/// Put the cursor on the run row.
+fn on_the_run_row(state: &mut AppState) {
+    let snapshot = tree_snapshot(state);
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|key| key.starts_with("r:"))
+        .expect("a run row");
+    state.tree_sel.set(&snapshot.keys, index);
+}
+
+#[test]
+fn enter_on_a_run_row_opens_the_coordinators_conversation() {
+    // The row IS the coordinator, so the key that opens a session opens it.
+    // Before this, Enter only expanded the run and the coordinator had no way
+    // in at all — the one row you most want to open did nothing.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Enter);
+
+    assert_eq!(
+        state.selected_session_id.as_deref(),
+        Some("coord"),
+        "Enter did not select the coordinator"
+    );
+    assert!(
+        state.take_actions().iter().any(
+            |action| matches!(action, Action::SelectSession { session_id, .. }
+                if session_id == "coord")
+        ),
+        "no SelectSession action was queued for the coordinator"
+    );
+}
+
+#[test]
+fn enter_on_a_run_row_also_expands_it() {
+    // Opening the conversation and showing the agents are the same request.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Enter);
+
+    assert!(
+        state
+            .expanded_projects
+            .iter()
+            .any(|key| key.starts_with("r:")),
+        "the run did not expand"
+    );
+}
+
+#[test]
+fn o_on_a_run_row_focuses_the_coordinators_terminal() {
+    // It used to fall through to whatever was selected last, which is a
+    // different session than the row the key was pressed on.
+    let mut state = with_a_run(true);
+    state.selected_session_id = Some("agent".to_string());
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('o'));
+
+    let focused = state
+        .take_actions()
+        .into_iter()
+        .find_map(|action| match action {
+            Action::FocusTerminal(reference) => reference.session_id.clone(),
+            _ => None,
+        });
+    assert_eq!(
+        focused.as_deref(),
+        Some("coord"),
+        "'o' focused the wrong session"
+    );
+}
+
+#[test]
+fn a_run_with_no_coordinator_says_so_rather_than_doing_nothing() {
+    // A key that silently does nothing reads as broken. It is not broken — the
+    // run has no coordinator running — and the row should say which.
+    let mut state = with_a_run(false);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Enter);
+
+    assert!(
+        state
+            .flash
+            .as_deref()
+            .is_some_and(|text| text.contains("no coordinator")),
+        "nothing was said: {:?}",
+        state.flash
+    );
+    assert_eq!(state.selected_session_id, None);
+}
+
+// --- killing a whole run ------------------------------------------------------
+
+fn kill_dialog(state: &AppState) -> &crate::ui::dialogs::KillConfirm {
+    match &state.dialog {
+        Some(crate::ui::dialogs::Dialog::Kill(confirm)) => confirm,
+        other => panic!("expected a kill dialog, got {other:?}"),
+    }
+}
+
+#[test]
+fn x_on_a_run_row_collects_the_coordinator_and_every_agent() {
+    // Killing them one at a time leaves the coordinator watching agents that
+    // are gone, or agents asking a coordinator that is gone. Neither is a state
+    // anybody asks for, so the row kills the run as one thing.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+
+    let mut pids = kill_dialog(&state).pids.clone();
+    pids.sort_unstable();
+    assert_eq!(
+        pids,
+        vec![101, 202],
+        "the kill list is not exactly the coordinator and its agent"
+    );
+}
+
+#[test]
+fn the_kill_dialog_names_the_coordinator_separately() {
+    // Killing the coordinator is the part with a consequence the agents do not
+    // have: the run stops being answered. The confirmation should say so
+    // before you press Enter, not after.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+
+    let label = &kill_dialog(&state).label;
+    assert!(
+        label.contains("coordinator"),
+        "the dialog does not mention the coordinator: {label:?}"
+    );
+    assert!(
+        label.contains("x/alpha"),
+        "the dialog does not say which run: {label:?}"
+    );
+}
+
+#[test]
+fn a_run_with_no_coordinator_still_kills_its_agents() {
+    // And says there is no coordinator, so the count is not read as one.
+    let mut state = with_a_run(false);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+
+    let confirm = kill_dialog(&state);
+    assert!(!confirm.pids.is_empty(), "the agents were not collected");
+    assert!(
+        confirm.label.contains("no coordinator"),
+        "the dialog does not say the coordinator is missing: {:?}",
+        confirm.label
+    );
+}
+
+#[test]
+fn killing_a_run_does_not_touch_sessions_outside_it() {
+    // The whole risk of a bulk kill. A session in the same folder that the run
+    // does not own must not be in the list.
+    let mut state = with_a_run(true);
+    let mut bystander = session("other", "/Users/x/dev/alpha", SessionStatus::Working);
+    bystander.pids = vec![9999];
+    let mut all: Vec<crate::types::Session> = state.sessions().cloned().collect();
+    all.push(bystander);
+    with_sessions(&mut state, all);
+    state.take_actions();
+
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+
+    assert!(
+        !kill_dialog(&state).pids.contains(&9999),
+        "a session outside the run was included: {:?}",
+        kill_dialog(&state).pids
+    );
+}
+
+#[test]
+fn confirming_a_run_kill_also_ends_the_run() {
+    // The sessions are going. A run row left behind with nothing under it is
+    // something you can neither act on nor get rid of, and the sessions tab
+    // should go back to looking the way it does with no run open.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+    press(&mut state, KeyCode::Enter);
+
+    assert!(
+        state.board.runs.is_empty(),
+        "the run survived its own kill: {:?}",
+        state.board.runs
+    );
+    assert!(
+        state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, Action::Kill { .. })),
+        "the processes were not killed"
+    );
+}
+
+#[test]
+fn cancelling_a_run_kill_leaves_the_run_alone() {
+    // Esc must not end the run. Confirming is the decision, not opening.
+    let mut state = with_a_run(true);
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+    press(&mut state, KeyCode::Esc);
+
+    assert_eq!(state.board.runs.len(), 1, "Esc ended the run");
+}
+
+#[test]
+fn killing_one_session_does_not_end_its_run() {
+    // `x` on an AGENT row kills that session only. Ending the run there would
+    // take out the coordinator and the six agents you did not name.
+    let mut state = with_a_run(true);
+    // Open the run so its agent rows exist.
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Right);
+    let snapshot = tree_snapshot(&state);
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|key| key.starts_with("ra:"))
+        .expect("an agent row");
+    state.tree_sel.set(&snapshot.keys, index);
+    press(&mut state, KeyCode::Char('x'));
+    press(&mut state, KeyCode::Enter);
+
+    assert_eq!(
+        state.board.runs.len(),
+        1,
+        "killing one agent ended the whole run"
+    );
+}
