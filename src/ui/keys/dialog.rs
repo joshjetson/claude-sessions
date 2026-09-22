@@ -19,10 +19,70 @@ use crate::ui::state::{Action, AppState, Pane, View};
 /// The dispatcher owns every state change so a dialog cannot replace itself
 /// halfway through a key and then be overwritten by the caller putting the old
 /// one back.
+/// Deliver the reviewer's decision to the session that asked for it.
+///
+/// Signed with that session's own token, which a coordinator does not hold, so
+/// the agent can tell this from another session's opinion. Every refusal says
+/// which one it is: an answer that vanishes with no explanation is worse than
+/// no answer, because the reviewer believes they have replied.
+fn answer_as_reviewer(state: &mut AppState, decision: crate::ui::dialogs::ReviewerDecision) {
+    let task_id = decision.task_id;
+
+    let Some(session) =
+        crate::ui::board::task_session(state.sessions(), task_id, state.board.link(task_id))
+    else {
+        state.flash(format!("No live session is working #{task_id}."));
+        return;
+    };
+    let target = crate::term::SessionRef::from_session(session);
+    let session_id = session.session_id.clone();
+
+    let Some(token) = crate::db::Db::open(&state.paths).reviewer_token(task_id) else {
+        state.flash(format!(
+            "#{task_id} has no reviewer token recorded, so an answer cannot be \
+             signed. Sessions started before this dashboard learned to sign \
+             cannot be answered from here — answer it in its own terminal."
+        ));
+        return;
+    };
+
+    // Every open prompt for this task, not just the one selected: answering
+    // clears the blockage, and leaving the others unresolved would keep the
+    // board asking after the reviewer was no longer needed.
+    let resolve: Vec<String> = state
+        .notifications
+        .iter()
+        .filter(|n| {
+            n.task_id == Some(task_id)
+                && n.status != crate::types::NotificationStatus::Resolved
+                && matches!(
+                    n.kind,
+                    crate::types::NotificationKind::Question
+                        | crate::types::NotificationKind::Verdict
+                )
+        })
+        .map(|n| n.id.clone())
+        .collect();
+
+    state.enqueue(Action::Relay(Box::new(crate::ui::board::RelaySpec {
+        task_id,
+        session: target,
+        session_id,
+        decision: decision.decision,
+        token,
+        resolve,
+    })));
+    state.dirty = true;
+}
+
 pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome: DialogOutcome) {
     match outcome {
         DialogOutcome::Stay => state.dialog = Some(dialog),
         DialogOutcome::Close => {}
+        // The dialog knows what the reviewer typed and nothing else. Finding
+        // the session, recalling its token and collecting the prompts this
+        // clears all need state, so they happen here.
+        DialogOutcome::Answer(decision) => answer_as_reviewer(state, *decision),
         DialogOutcome::Act(action) => {
             // A confirmed run kill also ENDS the run: the sessions are going,
             // and a run row with nothing under it is something you can neither

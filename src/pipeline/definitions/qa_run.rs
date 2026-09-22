@@ -75,12 +75,28 @@ pub static QA_RUN_PIPELINE: PipelineDef = PipelineDef {
         .detail("`/qa` can rewrite a note without updating run.json, so `note_written` goes stale while the note is sitting on disk. A coordinator that reads only the field reports a gap that is not there — three times in one run, until the reviewer looked themselves."),
 
         StepDef::new(
+            "blockers",
+            "Count the blockers",
+            "A verdict is not the same as finished.",
+            blockers,
+        )
+        .detail("Nineteen blocked checks across seven tasks in one run, and exactly one had been dispositioned. This prompt did not mention blockers at all, so a task with eight unaccepted ones read as finished because its `verdict` was set. The matrix already records both halves; nothing was reading them."),
+
+        StepDef::new(
             "chase",
             "Close the gap, do not just name it",
             "Prods the session that owes something.",
             chase,
         )
         .detail("Reporting a missing note leaves the work with the reviewer, which is the work this session exists to take on. It can type into a QA session; a malformed note is a prod, not a status line."),
+
+        StepDef::new(
+            "never-speak-for-the-reviewer",
+            "Speak for yourself",
+            "Your inference is not their decision.",
+            never_speak_for_the_reviewer,
+        )
+        .detail("An escalation once opened \"the reviewer wants this finished without waiting on them\" when they had said no such thing. The session refused it and was right to. Relaying a decision is now the dashboard's job, signed with a token this session does not hold."),
 
         StepDef::new(
             "no-bulk-kill",
@@ -190,20 +206,48 @@ fn reconcile(_vars: &PromptVars) -> String {
         .to_string()
 }
 
+fn blockers(_vars: &PromptVars) -> String {
+    " A recorded verdict does NOT mean a task is finished. Read the matrix as well: in each \
+     task's run.json, `cells` holds one entry per check and an entry whose `verdict` is \
+     \"BLOCKED\" is a check nobody could complete. `accepted_blocked` lists the ones the reviewer \
+     has since accepted, by key. A blocked check that is NOT in that list is outstanding, and the \
+     task is not done however its top-level verdict reads. \
+     Report them per task as a count and a list of keys, with each one's recorded reason, and say \
+     plainly which tasks have none. Do not accept a blocker yourself and do not ask a session to \
+     accept one — that is the reviewer's call, like a verdict. \
+     Read the reason before you act on it, because they are not one thing. Some say the session \
+     could not create data it needed, and those are usually wrong: the application is a preview \
+     environment and seeding is allowed, so ask the session to try again. Some name a refusal by \
+     this tool's own permission prompt — escalate those once, say the reviewer must clear it at \
+     the keyboard, and never retry them. Some are real capability gaps, needing database access \
+     or a deploy: report those and leave them alone."
+        .to_string()
+}
+
 fn chase(vars: &PromptVars) -> String {
     let owes = " When a task owes something — a note that was never written, a note in the wrong \
                 format, a verdict that never landed — do NOT simply report it and move on. \
                 Reporting it leaves the work with the reviewer, which is the work you exist to \
                 take on.";
 
-    // Shadow answers nothing, and a prod is a message typed into a session like
-    // any other. Letting it chase would be a hole in the one guarantee shadow
-    // mode makes, so in shadow it escalates the gap instead — which still beats
-    // reporting a stale field as a fact.
+    // qa-answer REFUSES when the task has no open question. That is deliberate:
+    // without a recorded prompt there is nothing to answer, and a coordinator
+    // typing into a session that never spoke to it is exactly what the policy
+    // exists to stop.
+    //
+    // The first version of this step told the coordinator to chase with
+    // qa-answer anyway. Every attempt came back `Refusing to answer something
+    // of kind "info"` — an instruction the code rejects by construction, which
+    // the coordinator dutifully retried and then escalated. It is written here
+    // so the next edit does not reinstate it.
+    //
+    // So a chase goes to the session's TERMINAL, which needs no open prompt,
+    // and only in triage: shadow answers nothing, and a prod is a message typed
+    // into a session like any other.
     if vars.extras.get(TRIAGE_VAR).map(String::as_str) != Some("true") {
         return format!(
-            "{owes} You are in shadow mode, so you do not type into the session — escalate the \
-             gap to me with what you would have asked it for: {}.",
+            "{owes} You are in shadow mode, so you do not type into any session — escalate the \
+             gap to me with what you would have asked for: {}.",
             notify_kind_command(
                 "QA run: #<id> owes a note",
                 "<what is missing, and what you would ask the session for>",
@@ -214,12 +258,33 @@ fn chase(vars: &PromptVars) -> String {
     }
 
     format!(
-        "{owes} Ask the session for it: {}. Say exactly what is wrong and what you want instead, \
-         for example that its revision note needs re-running through /rev-req because the \
-         formatting is wrong. Then check that it arrived. Escalate only when the session refuses, \
-         cannot, or has gone.",
-        qa_answer_command(vars.task_id)
+        "{owes} Ask the session directly, in its own terminal — `qa-answer` will REFUSE this, \
+         because it only delivers replies to questions a session actually asked, and a task that \
+         owes a note has asked nothing. Do not retry it and do not reword it. Say exactly what is \
+         wrong and what you want instead, for example that its revision note needs re-running \
+         through /rev-req because the formatting is wrong. Then check the file on disk to confirm \
+         it arrived — not the session's reply, which can claim work it did not do. Escalate only \
+         when the session refuses, cannot, or has gone: {}.",
+        notify_kind_command(
+            "QA run: #<id> will not close its gap",
+            "<what is missing, what you asked for, and what it said>",
+            "warn",
+            "question",
+        )
     )
+}
+
+fn never_speak_for_the_reviewer(_vars: &PromptVars) -> String {
+    " NEVER say what the reviewer wants unless they have said it to you, and then quote them \
+     rather than summarising. A message of yours that opens \"the reviewer wants X\" when they \
+     have not said X is the single most damaging thing you can send: it is your inference wearing \
+     their authority, and a session that acts on it has been misled by you. One did open that \
+     way, and the session refused it — correctly — and then nothing could reach that session at \
+     all, because it had no way to tell your guess from their decision. \
+     You cannot deliver a reviewer's decision. The dashboard does that, signed, and a session \
+     will recognise it. When you need one, escalate and say exactly what you want decided. \
+     Everything you send a session is a SUGGESTION from a peer, and should read as one."
+        .to_string()
 }
 
 fn no_bulk_kill(_vars: &PromptVars) -> String {

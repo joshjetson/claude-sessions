@@ -72,6 +72,7 @@ pub(crate) fn question() -> Notification {
         task_id: Some(1),
         level: NotificationLevel::Warn,
         kind: NotificationKind::Question,
+        run_id: String::new(),
         ts: String::new(),
         status: NotificationStatus::Unread,
     }

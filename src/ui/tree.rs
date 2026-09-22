@@ -60,6 +60,7 @@ pub enum TreeItem<'a> {
         task_id: i64,
         session: Option<&'a Session>,
         asking: bool,
+        idle_reason: Option<&'a str>,
     },
 }
 
@@ -85,6 +86,15 @@ pub struct RunAgentRow<'a> {
     pub task_id: i64,
     pub session: Option<&'a Session>,
     pub asking: bool,
+    /// Why this task has no session, in the scheduler's own words.
+    ///
+    /// The refusal was always computed — `Refusal::detail()` writes "Task 6569
+    /// already reached a verdict (pass)" — and then thrown away, so every row
+    /// with no session said the same three words whether the task was finished,
+    /// blocked by a stale verdict from eleven days ago, or lost to a launch
+    /// that never opened. Two of those are recoverable and one is not, and the
+    /// row could not tell them apart.
+    pub idle_reason: Option<String>,
 }
 
 impl TreeItem<'_> {
@@ -297,6 +307,7 @@ fn emit_runs<'a>(
                 task_id: agent.task_id,
                 session: agent.session,
                 asking: agent.asking,
+                idle_reason: agent.idle_reason.as_deref(),
             });
         }
     }
@@ -453,6 +464,7 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
             task_id,
             session,
             asking,
+            idle_reason,
             ..
         } => {
             // An indented session row, so a run's agents read as the same kind
@@ -461,10 +473,19 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
                 return Line::from(vec![
                     Span::raw("      "),
                     Span::styled(format!("#{task_id}"), gray()),
-                    // "not running", not "not started": a task whose session
-                    // was killed after it finished is the common case, and
+                    // The scheduler's own words when it has them — it always
+                    // computed them and always discarded them, so every idle
+                    // row read the same whether the task was finished, blocked
+                    // by a stale verdict, or lost to a launch that never
+                    // opened.
+                    //
+                    // "not running", not "not started", for the fallback: a
+                    // session killed after it finished is the common case, and
                     // "not started" would claim it never ran.
-                    Span::styled("  not running".to_string(), gray()),
+                    Span::styled(
+                        format!("  {}", truncate(idle_reason.unwrap_or("not running"), 52)),
+                        gray(),
+                    ),
                 ]);
             };
             let mut line = format_session_row(session, config);

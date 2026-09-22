@@ -186,6 +186,16 @@ impl ConfigHandle {
             .filter(|limit| *limit > 0)
     }
 
+    /// Whether a run starts its next task when a lane frees. Default on: the
+    /// alternative is a reviewer pressing a key every time a session ends.
+    pub fn qa_auto_refill(&self) -> bool {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.auto_refill)
+            .unwrap_or(true)
+    }
+
     /// The mode every new coordinator starts in.
     ///
     /// Anything other than `"shadow"` — including an absent block and a typo —

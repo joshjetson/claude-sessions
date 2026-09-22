@@ -507,6 +507,7 @@ fn question_for(task_id: i64) -> crate::types::Notification {
         task_id: Some(task_id),
         level: crate::types::NotificationLevel::Warn,
         kind: crate::types::NotificationKind::Question,
+        run_id: String::new(),
         ts: String::new(),
         status: crate::types::NotificationStatus::Unread,
     }
@@ -797,9 +798,198 @@ fn pending_for(run_id: Option<&str>) -> crate::daemon::PendingRequest {
         known_session_ids: Vec::new(),
         say: String::new(),
         run_id: run_id.map(str::to_string),
+        reviewer_token: None,
     };
     let feed = Recording::default();
     crate::ui::board::note_launch(&feed, &crate::ui::state::Action::Launch(Box::new(spec)));
     let recorded = feed.0.lock().unwrap();
     recorded.first().cloned().expect("a pending request")
+}
+
+// --- a coordinator must not wake itself --------------------------------------
+
+#[test]
+fn a_coordinators_own_escalation_does_not_wake_it() {
+    // Observed: it escalated with `--kind question` about a task in its own
+    // run, the dashboard could not tell that from an agent asking something, so
+    // it woke the coordinator — which re-read unchanged state and escalated
+    // again. Three cycles in thirty-one minutes on tasks finished that morning.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    state.board.runs[0].coordinator_started = true;
+    let run_id = state.board.runs[0].id.clone();
+    let task = state.board.runs[0].task_ids[0];
+    state.by_project.insert(
+        "alpha".to_string(),
+        vec![coordinator_session("coord", "/repo/alpha", Some(&run_id))],
+    );
+
+    let mut own = question_for(task);
+    own.run_id = run_id.clone();
+    state.push_notification(own);
+
+    assert!(
+        !state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, crate::ui::state::Action::NudgeCoordinator(_))),
+        "the coordinator was woken by its own escalation"
+    );
+}
+
+#[test]
+fn an_agents_question_still_wakes_the_coordinator() {
+    // The other half — the guard must not silence the one path that works.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    state.board.runs[0].coordinator_started = true;
+    let run_id = state.board.runs[0].id.clone();
+    let task = state.board.runs[0].task_ids[0];
+    state.by_project.insert(
+        "alpha".to_string(),
+        vec![coordinator_session("coord", "/repo/alpha", Some(&run_id))],
+    );
+
+    // An agent raises it, so no run id: only a coordinator carries one.
+    state.push_notification(question_for(task));
+
+    assert!(
+        state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, crate::ui::state::Action::NudgeCoordinator(_))),
+        "an agent's question no longer wakes the coordinator"
+    );
+}
+
+// --- a failed launch must stay startable -------------------------------------
+
+#[test]
+fn a_task_whose_launch_did_not_go_out_is_not_marked_spawned() {
+    // `spawned` used to be recorded from the PLAN, before any terminal opened.
+    // `admit` refuses an already-spawned task forever, so a launch that never
+    // happened was unstartable for the life of the run: fourteen marked
+    // started, one terminal, and thirteen rows reading "not running" with no
+    // way back.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let run_id = state.board.runs[0].id.clone();
+
+    // Drop every task from the board, so no launch can be built for any of
+    // them — the same shape as a launch that does not go out.
+    with_tasks(&mut state, Vec::new());
+
+    board::run_command(
+        &mut state,
+        crate::ui::dialogs::RunCommand {
+            run_id: run_id.clone(),
+            action: crate::ui::dialogs::RunAction::StartRun,
+            context: String::new(),
+        },
+    );
+
+    let run = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .expect("the run");
+    assert!(
+        run.spawned.is_empty(),
+        "tasks were marked spawned without a launch: {:?}",
+        run.spawned
+    );
+}
+
+// --- lanes refill themselves --------------------------------------------------
+//
+// These assert what the REFILL decides, not what a launch does. The board
+// fixture maps its project to no folder on purpose, so a start opens a folder
+// picker rather than launching — which is exactly the signal wanted here: a
+// dialog means the refill tried to start something, and no dialog means it
+// declined. What happens after a folder resolves is `fill_lanes`, covered
+// above.
+
+/// A started run whose tasks are all still to do.
+fn a_started_run() -> (tempfile::TempDir, crate::ui::state::AppState) {
+    let (dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    state.board.runs[0].coordinator_started = true;
+    state.take_actions();
+    state.dialog = None;
+    (dir, state)
+}
+
+fn long_ago() -> Option<std::time::SystemTime> {
+    Some(std::time::SystemTime::now() - std::time::Duration::from_secs(120))
+}
+
+#[test]
+fn a_freed_lane_starts_the_next_task_without_a_keypress() {
+    // A lane frees when a session ENDS, and nothing else notices that. Without
+    // this, a limit of four means pressing "Start run" four separate times for
+    // fourteen tasks — which is why the limit was uncapped and thirty-five
+    // agents ended up resident at once, about 405 MB each on a 16 GB machine.
+    let (_dir, mut state) = a_started_run();
+    state.last_run_launch = long_ago();
+
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+
+    assert!(
+        state.dialog.is_some(),
+        "the refill started nothing for a run with free lanes"
+    );
+}
+
+#[test]
+fn the_refill_waits_after_a_launch() {
+    // A launched session is not in the live set until it appears in a scan, so
+    // its lane still reads free. A refill that ran immediately would hand that
+    // same lane to the next task, and the next, until the whole queue was
+    // started at once — the behaviour a limit exists to prevent, reached from
+    // the other direction.
+    let (_dir, mut state) = a_started_run();
+    state.last_run_launch = Some(std::time::SystemTime::now());
+
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+
+    assert!(
+        state.dialog.is_none(),
+        "the refill started something inside its own quiet window"
+    );
+}
+
+#[test]
+fn a_merely_watched_run_is_never_refilled() {
+    // Watching a stage groups its rows and starts nothing. A refill that
+    // launched into one would start work nobody asked for.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    assert!(!state.board.runs[0].coordinator_started);
+    state.take_actions();
+    state.dialog = None;
+    state.last_run_launch = long_ago();
+
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+
+    assert!(
+        state.dialog.is_none(),
+        "a run that was only being watched started sessions on its own"
+    );
+}
+
+#[test]
+fn the_refill_says_nothing_when_there_is_nothing_to_start() {
+    // It runs on every scan. "Nothing to start: every task is finished" is true
+    // and correct once, and noise forever.
+    let (_dir, mut state) = a_started_run();
+    let tasks = state.board.runs[0].task_ids.clone();
+    state.board.runs[0].spawned = tasks;
+    state.flash = None;
+    state.last_run_launch = long_ago();
+
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+
+    assert_eq!(state.flash, None, "the refill flashed on a quiet run");
+    assert!(state.dialog.is_none());
 }

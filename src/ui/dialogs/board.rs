@@ -414,3 +414,76 @@ impl RunContext {
         self.prompt.render(frame, area, &title);
     }
 }
+
+// --- answering as the reviewer ------------------------------------------------
+
+/// The box that answers a blocked session in the reviewer's own name.
+///
+/// The dashboard delivers what is typed here, signed with that session's token.
+/// A coordinator does not hold the token, so the agent can tell this from
+/// another session's opinion — the distinction that failed when a relay opened
+/// "the reviewer wants this finished without waiting on them", an inference
+/// worded as the reviewer's decision, and the agent refused it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerAnswer {
+    pub task_id: i64,
+    /// What is being answered, shown above the box so a decision is never typed
+    /// against a half-remembered question.
+    pub asked: String,
+    pub kind: crate::types::NotificationKind,
+    /// Every open prompt for this task, cleared once the answer lands.
+    pub resolve: Vec<String>,
+    pub prompt: TextPrompt,
+}
+
+impl ReviewerAnswer {
+    pub fn new(task_id: i64, notif: &crate::types::Notification) -> Self {
+        ReviewerAnswer {
+            task_id,
+            asked: if notif.message.trim().is_empty() {
+                notif.title.clone()
+            } else {
+                format!("{}\n{}", notif.title, notif.message)
+            },
+            kind: notif.kind,
+            resolve: vec![notif.id.clone()],
+            prompt: TextPrompt::new("", true),
+        }
+    }
+
+    pub fn handle_key(&mut self, key: KeyEvent, _ctx: &mut DialogCtx<'_>) -> DialogOutcome {
+        match self.prompt.handle_key(key) {
+            PromptOutcome::Stay => DialogOutcome::Stay,
+            PromptOutcome::Cancel => DialogOutcome::Close,
+            // An empty answer is not an answer — the same rule the coordinator's
+            // channel applies, for the same reason.
+            PromptOutcome::Submit(text) if text.trim().is_empty() => DialogOutcome::Close,
+            PromptOutcome::Submit(text) => DialogOutcome::Answer(Box::new(ReviewerDecision {
+                task_id: self.task_id,
+                decision: text.trim().to_string(),
+                resolve: self.resolve.clone(),
+            })),
+        }
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        let what = match self.kind {
+            crate::types::NotificationKind::Verdict => "verdict",
+            _ => "question",
+        };
+        let title = format!(
+            " Answer #{}'s {what} as yourself — {} ",
+            self.task_id,
+            truncate(self.asked.lines().next().unwrap_or_default(), 40)
+        );
+        self.prompt.render(frame, area, &title);
+    }
+}
+
+/// What the reviewer typed, on its way to the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerDecision {
+    pub task_id: i64,
+    pub decision: String,
+    pub resolve: Vec<String>,
+}

@@ -18,7 +18,7 @@ pub const RECENT_LIMIT: i64 = 200;
 pub const PRUNE_KEEP: i64 = 1000;
 
 const NOTIFICATION_COLUMNS: &str =
-    "id, ts, title, message, cwd, project, session_id, task_id, level, status, kind";
+    "id, ts, title, message, cwd, project, session_id, task_id, level, status, kind, run_id";
 
 fn from_row(row: &Row<'_>) -> rusqlite::Result<Notification> {
     Ok(Notification {
@@ -34,6 +34,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Notification> {
         task_id: row.get("task_id")?,
         level: NotificationLevel::from_label(&row.get::<_, String>("level")?),
         kind: NotificationKind::from_label(&row.get::<_, String>("kind")?),
+        run_id: row.get("run_id")?,
         status: NotificationStatus::from_label(&row.get::<_, String>("status")?),
     })
 }
@@ -46,8 +47,8 @@ impl Db {
         self.exec("put_notification", |conn| {
             conn.prepare_cached(
                 "INSERT INTO notifications
-                   (id, ts, title, message, cwd, project, session_id, task_id, level, status, kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                   (id, ts, title, message, cwd, project, session_id, task_id, level, status, kind, run_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET status = excluded.status",
             )?
             .execute((
@@ -62,6 +63,7 @@ impl Db {
                 n.level.as_str(),
                 n.status.as_str(),
                 n.kind.as_str(),
+                &n.run_id,
             ))?;
             Ok(())
         });

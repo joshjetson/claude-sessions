@@ -384,3 +384,100 @@ fn the_settings_grid_lists_every_row_and_its_separators() {
     assert!(painted.contains("Layout"));
     assert_eq!(crate::ui::dialogs::settings::editable().len(), 15);
 }
+
+// --- answering as the reviewer ------------------------------------------------
+
+fn asked(kind: crate::types::NotificationKind) -> crate::types::Notification {
+    crate::types::Notification {
+        id: "q1".to_string(),
+        title: "which environment?".to_string(),
+        message: "labs or local".to_string(),
+        cwd: String::new(),
+        project: String::new(),
+        session_id: None,
+        task_id: Some(6660),
+        level: crate::types::NotificationLevel::Warn,
+        kind,
+        run_id: String::new(),
+        ts: String::new(),
+        status: crate::types::NotificationStatus::Unread,
+    }
+}
+
+fn typed(dialog: &mut crate::ui::dialogs::ReviewerAnswer, text: &str) -> DialogOutcome {
+    let mut config = temp_config().1;
+    let mut ctx = DialogCtx {
+        config: &mut config,
+    };
+    for ch in text.chars() {
+        dialog.handle_key(
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE),
+            &mut ctx,
+        );
+    }
+    dialog.handle_key(
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        &mut ctx,
+    )
+}
+
+#[test]
+fn the_reviewers_answer_carries_their_words_verbatim() {
+    // A paraphrase is the coordinator's sentence wearing the reviewer's name,
+    // which is the fault this whole path exists to remove.
+    let mut dialog = crate::ui::dialogs::ReviewerAnswer::new(
+        6660,
+        &asked(crate::types::NotificationKind::Question),
+    );
+    match typed(&mut dialog, "use labs") {
+        DialogOutcome::Answer(decision) => {
+            assert_eq!(decision.task_id, 6660);
+            assert_eq!(decision.decision, "use labs");
+        }
+        other => panic!("expected an answer, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_verdict_can_be_answered_this_way() {
+    // The coordinator is refused a verdict, and rightly. But the reviewer's own
+    // decision was refused too, which sent three of them back to be typed by
+    // hand. Signed by the dashboard, this IS the reviewer answering.
+    let mut dialog = crate::ui::dialogs::ReviewerAnswer::new(
+        6660,
+        &asked(crate::types::NotificationKind::Verdict),
+    );
+    assert!(matches!(
+        typed(&mut dialog, "accept the blocked gap"),
+        DialogOutcome::Answer(_)
+    ));
+}
+
+#[test]
+fn an_empty_answer_is_not_sent() {
+    // The same rule the coordinator's channel applies, for the same reason.
+    let mut dialog = crate::ui::dialogs::ReviewerAnswer::new(
+        6660,
+        &asked(crate::types::NotificationKind::Question),
+    );
+    assert_eq!(typed(&mut dialog, "   "), DialogOutcome::Close);
+}
+
+#[test]
+fn a_signed_message_leads_with_the_token() {
+    // An agent scanning the head of a message must be able to decide whether to
+    // trust it before reading what it is being asked to do.
+    let spec = crate::ui::board::RelaySpec {
+        task_id: 6660,
+        session: crate::term::SessionRef {
+            tty: None,
+            session_id: Some("s".to_string()),
+            cwd: None,
+        },
+        session_id: "s".to_string(),
+        decision: "use labs".to_string(),
+        token: "rv-0123456789abcdef".to_string(),
+        resolve: Vec::new(),
+    };
+    assert_eq!(spec.message(), "[reviewer rv-0123456789abcdef] use labs");
+}

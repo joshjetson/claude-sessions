@@ -24,7 +24,7 @@ use crate::odoo::FetchBoardOptions;
 use crate::paths::Paths;
 use crate::term::{LaunchRequest, SpawnPolicy, TerminalDriver};
 use crate::transcript::TaskRefCache;
-use crate::ui::board::{BoardUpdate, LaunchSpec, NudgeSpec, ResumeRequest, SendSpec};
+use crate::ui::board::{BoardUpdate, LaunchSpec, NudgeSpec, RelaySpec, ResumeRequest, SendSpec};
 
 use super::services::BoardServices;
 use super::{ActionResult, BoardData};
@@ -211,13 +211,39 @@ pub fn launch(
         },
     };
 
-    let mut request = LaunchRequest::new(spec.cwd.clone(), command)
-        .task_id(spec.task_id)
-        .title(spec.title.clone());
-    // Only a coordinator carries this. Every other launch leaves it unset, so
-    // the variable's presence IS the answer to "is this a coordinator".
-    if let Some(run_id) = spec.run_id.as_deref() {
-        request = request.run_id(run_id);
+    let mut request = LaunchRequest::new(spec.cwd.clone(), command).title(spec.title.clone());
+
+    // A COORDINATOR EXPORTS NO TASK ID. It works no task; it borrows one only to
+    // resolve which folder to start in, and that is settled before this point.
+    //
+    // Exporting it anyway cost four separate faults, all from the same line:
+    //
+    //  * the launch queue claimed the coordinator as that task's session, so the
+    //    board pointed the task at the watcher instead of its reviewer;
+    //  * pid->transcript pairing matches a process's launch task id against the
+    //    transcript carrying that task's URL, so the coordinator claimed the
+    //    AGENT's transcript and the run's first task read "not running" while
+    //    its session was fine;
+    //  * `notify` falls back to this variable, so every escalation the
+    //    coordinator sent was filed under the run's first task — "#6277 needs
+    //    you" stored against 6660;
+    //  * and because those escalations then looked like questions about a task
+    //    IN the run, they woke the coordinator, which escalated again.
+    //
+    // Only a coordinator carries a run id, so its presence is the answer to "is
+    // this a coordinator".
+    match spec.run_id.as_deref() {
+        Some(run_id) => request = request.run_id(run_id),
+        None => request = request.task_id(spec.task_id),
+    }
+
+    // Exported to the session AND remembered here, so the dashboard can still
+    // sign an instruction to it after a restart. Written before the terminal
+    // opens: a session that starts without its token recorded can never be
+    // answered, and nothing would say why.
+    if let Some(token) = spec.reviewer_token.as_deref() {
+        Db::open(&services.paths).put_reviewer_token(spec.task_id, token);
+        request = request.reviewer_token(token);
     }
     let result = driver.launch(&request);
     if !result.ok {
@@ -290,6 +316,48 @@ pub fn nudge_coordinator(
             spec.run_id
         )));
     }
+}
+
+/// Hand the reviewer's decision to the session that asked for it.
+///
+/// Focuses afterwards, unlike the coordinator nudge: a relay is the answer to
+/// something a session is BLOCKED on, and the reviewer has just chosen to send
+/// it — so bringing that terminal forward is what they asked for, not an
+/// interruption.
+pub fn relay(
+    spec: &RelaySpec,
+    services: &BoardServices,
+    driver: &Arc<dyn TerminalDriver>,
+    policy: SpawnPolicy,
+    results: &Sender<ActionResult>,
+) {
+    let short: String = spec.session_id.chars().take(8).collect();
+    if let Err(refused) = policy.check(&format!("answer session {short}")) {
+        let _ = results.send(ActionResult::Flash(refused.message));
+        return;
+    }
+
+    let sent = driver.send_text(&spec.session, &spec.message());
+    if !sent.ok {
+        let reason = sent.error.unwrap_or_else(|| "unknown reason".into());
+        let _ = results.send(ActionResult::Flash(format!(
+            "Could not answer #{}: {reason}",
+            spec.task_id
+        )));
+        return;
+    }
+    let _ = driver.focus(&spec.session);
+
+    // Resolved only AFTER the send. Clearing first would take the row off the
+    // board for an answer that never arrived.
+    if !spec.resolve.is_empty() {
+        Db::open(&services.paths)
+            .set_notification_status(&spec.resolve, crate::types::NotificationStatus::Resolved);
+    }
+    let _ = results.send(ActionResult::Flash(format!(
+        "Answered #{} as you.",
+        spec.task_id
+    )));
 }
 
 /// Find the archived conversation for a task, then launch against it.

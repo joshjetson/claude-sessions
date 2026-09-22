@@ -124,6 +124,35 @@ impl Db {
         });
     }
 
+    /// Remember the token that proves an instruction to this task came from the
+    /// reviewer.
+    ///
+    /// Its own statement rather than a field on [`TaskSession`]: the daemon
+    /// rewrites that row whenever it re-links a session, and it does not know
+    /// the token — so carrying it there would wipe it on the next tick.
+    pub fn put_reviewer_token(&self, task_id: i64, token: &str) {
+        self.exec("put_reviewer_token", |conn| {
+            conn.prepare_cached(
+                "INSERT INTO task_session_index (task_id, updated_at, reviewer_token)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(task_id) DO UPDATE SET reviewer_token = excluded.reviewer_token",
+            )?
+            .execute((task_id, crate::util::iso_now(), token))?;
+            Ok(())
+        });
+    }
+
+    /// The token for a task, when one was recorded.
+    pub fn reviewer_token(&self, task_id: i64) -> Option<String> {
+        self.one(
+            "reviewer_token",
+            "SELECT reviewer_token FROM task_session_index WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, String>(0),
+        )
+        .filter(|token| !token.is_empty())
+    }
+
     /// The indexed answer to "where is this task's transcript" — one keyed
     /// lookup in place of reading every project directory on disk.
     pub fn task_session(&self, task_id: i64) -> Option<TaskSession> {

@@ -48,6 +48,7 @@ fn question() -> Notification {
         task_id: Some(4101),
         level: NotificationLevel::Warn,
         kind: NotificationKind::Question,
+        run_id: String::new(),
         ts: String::new(),
         status: NotificationStatus::Unread,
     }

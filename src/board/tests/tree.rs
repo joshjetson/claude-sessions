@@ -144,6 +144,7 @@ fn keys_identify_a_row_across_refreshes() {
         task_id: None,
         level: crate::types::NotificationLevel::Info,
         kind: crate::types::NotificationKind::Info,
+        run_id: String::new(),
         ts: String::new(),
         status: crate::types::NotificationStatus::Unread,
     };

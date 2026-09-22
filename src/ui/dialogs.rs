@@ -40,7 +40,10 @@ use crate::config::ConfigHandle;
 use crate::ui::board::{SessionTarget, StartRequest};
 use crate::ui::state::{Action, Quit};
 
-pub use board::{ContextDialog, RunAction, RunCommand, RunContext, RunMenu, TaskAction, TaskMenu};
+pub use board::{
+    ContextDialog, ReviewerAnswer, ReviewerDecision, RunAction, RunCommand, RunContext, RunMenu,
+    TaskAction, TaskMenu,
+};
 pub use deploy::{DeployAction, DeployMenu, DeployTaskAction, DeployTaskMenu};
 pub use deploy_config::{DeployConfig, DeployField};
 pub use deploy_confirm::{DeployConfirm, ResolveConflictConfirm};
@@ -102,6 +105,10 @@ pub enum DialogOutcome {
     Close,
     /// Close, and hand this to the action queue.
     Act(Action),
+    /// The reviewer answered a blocked session in their own name. Resolved by
+    /// the dispatcher, which has the state needed to find the session and its
+    /// token; the dialog has neither.
+    Answer(Box<ReviewerDecision>),
     /// Close the dashboard.
     Quit(Quit),
     /// Close and say something in the detail pane.
@@ -172,6 +179,7 @@ pub enum Dialog {
     TaskMenu(TaskMenu),
     RunMenu(RunMenu),
     RunContext(RunContext),
+    ReviewerAnswer(ReviewerAnswer),
     Context(ContextDialog),
     BlockedBy(BlockedBy),
     AlreadyRunning(AlreadyRunning),
@@ -224,6 +232,7 @@ impl Dialog {
             Dialog::TaskMenu(dialog) => dialog.handle_key(key, ctx),
             Dialog::RunMenu(dialog) => dialog.handle_key(key, ctx),
             Dialog::RunContext(dialog) => dialog.handle_key(key, ctx),
+            Dialog::ReviewerAnswer(dialog) => dialog.handle_key(key, ctx),
             Dialog::Context(dialog) => dialog.handle_key(key, ctx),
             Dialog::BlockedBy(dialog) => dialog.handle_key(key, ctx),
             Dialog::AlreadyRunning(dialog) => dialog.handle_key(key, ctx),
@@ -280,6 +289,7 @@ impl Dialog {
             Dialog::TaskMenu(dialog) => dialog.render(frame, area),
             Dialog::RunMenu(dialog) => dialog.render(frame, area),
             Dialog::RunContext(dialog) => dialog.render(frame, area),
+            Dialog::ReviewerAnswer(dialog) => dialog.render(frame, area),
             Dialog::Context(dialog) => dialog.render(frame, area),
             Dialog::BlockedBy(dialog) => dialog.render(frame, area),
             Dialog::AlreadyRunning(dialog) => dialog.render(frame, area),
@@ -319,6 +329,7 @@ impl Dialog {
             Dialog::TaskMenu(_) => "taskMenu",
             Dialog::RunMenu(_) => "runMenu",
             Dialog::RunContext(_) => "runContext",
+            Dialog::ReviewerAnswer(_) => "reviewerAnswer",
             Dialog::Context(_) => "contextDialog",
             Dialog::BlockedBy(_) => "blockedBy",
             Dialog::AlreadyRunning(_) => "alreadyRunning",

@@ -705,11 +705,13 @@ fn a_collapsed_run_shows_the_coordinator_and_nothing_else() {
             task_id: 4101,
             session: None,
             asking: false,
+            idle_reason: None,
         },
         crate::ui::tree::RunAgentRow {
             task_id: 4102,
             session: None,
             asking: true,
+            idle_reason: None,
         },
     ];
     let runs = vec![run_section(
@@ -739,11 +741,13 @@ fn opening_a_run_shows_its_agents() {
             task_id: 4101,
             session: None,
             asking: false,
+            idle_reason: None,
         },
         crate::ui::tree::RunAgentRow {
             task_id: 4102,
             session: None,
             asking: true,
+            idle_reason: None,
         },
     ];
     let runs = vec![run_section(
@@ -806,16 +810,19 @@ fn a_run_row_counts_the_agents_that_are_asking() {
             task_id: 4101,
             session: None,
             asking: true,
+            idle_reason: None,
         },
         crate::ui::tree::RunAgentRow {
             task_id: 4102,
             session: None,
             asking: true,
+            idle_reason: None,
         },
         crate::ui::tree::RunAgentRow {
             task_id: 4103,
             session: None,
             asking: false,
+            idle_reason: None,
         },
     ];
     let runs = vec![run_section(
@@ -856,6 +863,7 @@ fn a_runs_agents_do_not_also_appear_under_their_project() {
         task_id: 4101,
         session: sessions.values().flatten().find(|s| s.session_id == "aaa"),
         asking: false,
+        idle_reason: None,
     }];
     let runs = vec![run_section(
         "p::QA",
@@ -903,6 +911,7 @@ fn a_project_whose_every_session_is_in_a_run_disappears() {
         task_id: 4101,
         session: sessions.values().flatten().next(),
         asking: false,
+        idle_reason: None,
     }];
     let runs = vec![run_section(
         "p::QA",
@@ -960,6 +969,7 @@ fn a_grouped_project_drops_its_run_sessions_too() {
         task_id: 4101,
         session: sessions.values().flatten().find(|s| s.session_id == "aaa"),
         asking: false,
+        idle_reason: None,
     }];
     let runs = vec![run_section(
         "p::QA",
@@ -1008,4 +1018,69 @@ fn a_run_row_is_titled_by_its_project_not_its_stage() {
         !text.contains("Quality Assurance"),
         "the stage is still the title: {text:?}"
     );
+}
+
+#[test]
+fn a_row_with_no_session_says_why() {
+    // "not running" alone cost an afternoon: a task finished, a task blocked by
+    // an eleven-day-old verdict, and a task whose launch never opened all read
+    // identically. Two of those are recoverable and one is not.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let agents = vec![crate::ui::tree::RunAgentRow {
+        task_id: 4101,
+        session: None,
+        asking: false,
+        idle_reason: Some("Task 4101 already reached a verdict (pass).".to_string()),
+    }];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        agents,
+    )];
+    let mut expanded = HashSet::new();
+    expanded.insert("r:p::QA".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &[], &dirs, false, &runs);
+
+    let row = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::RunAgent { .. }))
+        .expect("an agent row");
+    let (_cfg, config) = temp_config();
+    let text = line_text(row, &config);
+    assert!(
+        text.contains("already reached a verdict"),
+        "the reason was thrown away again: {text:?}"
+    );
+}
+
+#[test]
+fn a_row_with_no_reason_falls_back_to_not_running() {
+    // A task the scheduler never had to rule on still needs a label.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let agents = vec![crate::ui::tree::RunAgentRow {
+        task_id: 4101,
+        session: None,
+        asking: false,
+        idle_reason: None,
+    }];
+    let runs = vec![run_section(
+        "p::QA",
+        "Quality Assurance",
+        "x/alpha",
+        None,
+        agents,
+    )];
+    let mut expanded = HashSet::new();
+    expanded.insert("r:p::QA".to_string());
+    let items = build_grouped_tree_with(&sessions, &expanded, &[], &dirs, false, &runs);
+    let row = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::RunAgent { .. }))
+        .expect("an agent row");
+    let (_cfg, config) = temp_config();
+    assert!(line_text(row, &config).contains("not running"));
 }

@@ -159,6 +159,22 @@ impl<S: ProcessSource> Scanner<S> {
     /// cwd could not be read are already gone.
     pub fn processes(&mut self) -> Vec<ClaudeProcess> {
         let listing = self.source.list();
+
+        // AN EMPTY LISTING IS A FAILED READ, NOT AN EMPTY MACHINE.
+        //
+        // `list()` cannot fail — `exec` returns an empty string for a spawn
+        // failure or a timeout — so `ps` falling over is indistinguishable from
+        // "no processes are running". Treated as truth it wiped every cache
+        // below, which forced the next tick to re-read every cwd with `lsof`:
+        // the slowest call there is, at the moment the machine is least able to
+        // serve it.
+        //
+        // This process is itself in that listing, so a genuinely empty result
+        // is impossible. Keep everything and let the next tick try again.
+        if listing.is_empty() {
+            return Vec::new();
+        }
+
         let alive: HashSet<u32> = listing.iter().map(|row| row.pid).collect();
         self.cwds.retain(|pid, _| alive.contains(pid));
         self.argv.retain(|pid, _| alive.contains(pid));
@@ -223,6 +239,14 @@ impl<S: ProcessSource> Scanner<S> {
 
         rows.into_iter()
             .filter_map(|row| {
+                // A process whose cwd could not be read is DROPPED — which is
+                // right for one that has none, and wrong for one whose `lsof`
+                // merely timed out. On a machine deep in swap those calls took
+                // 1.6-4.1s against a 5s limit, so a slow moment silently
+                // removed live sessions from the scan and the dashboard blanked.
+                //
+                // Failures are not cached (see above), so the retry happens on
+                // the next tick; this only decides what to report meanwhile.
                 let cwd = self.cwds.get(&row.pid)?.clone();
                 let argv = self.argv.get(&row.pid).cloned().unwrap_or_default();
                 if argv.helper || is_daemon_scratch_cwd(&cwd) {

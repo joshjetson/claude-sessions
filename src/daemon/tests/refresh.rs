@@ -252,6 +252,7 @@ fn start_seeds_from_the_store_and_stop_joins_the_loop() {
             task_id: None,
             level: crate::types::NotificationLevel::Info,
             kind: crate::types::NotificationKind::Info,
+            run_id: String::new(),
             ts: "2026-09-16T10:00:00.000Z".to_string(),
             status: crate::types::NotificationStatus::Unread,
         });

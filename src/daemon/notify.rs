@@ -42,6 +42,10 @@ pub struct NewNotification {
     pub project: Option<String>,
     pub session_id: Option<String>,
     pub task_id: Option<i64>,
+    /// Set only when a run's COORDINATOR raised this, so the dashboard can tell
+    /// its escalation apart from an agent's question and not wake it with its
+    /// own message.
+    pub run_id: String,
     pub level: NotificationLevel,
 }
 
@@ -54,6 +58,7 @@ impl NewNotification {
             message: message.into(),
             cwd: String::new(),
             project: None,
+            run_id: String::new(),
             session_id: None,
             task_id: None,
             level: NotificationLevel::Info,
@@ -105,6 +110,7 @@ impl<S: ProcessSource> EngineInner<S> {
             task_id: new.task_id,
             level: new.level,
             kind: new.kind,
+            run_id: new.run_id,
             ts: iso_now(),
             status: NotificationStatus::Unread,
         };

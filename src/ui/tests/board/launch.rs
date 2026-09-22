@@ -33,6 +33,7 @@ fn spec_for(dir: &tempfile::TempDir, prompt: Option<&str>) -> LaunchSpec {
         known_session_ids: vec!["already-here".to_string()],
         say: String::new(),
         run_id: None,
+        reviewer_token: None,
     }
 }
 
@@ -391,5 +392,53 @@ fn an_ordinary_launch_exports_no_run_id() {
             .any(|(key, _)| key == crate::term::RUN_ID_ENV),
         "an ordinary launch exported a run id: {:?}",
         launches[0].env
+    );
+}
+
+#[test]
+fn a_coordinator_launch_exports_no_task_id() {
+    // It works no task. It borrows one only to resolve a folder, and that is
+    // settled before the launch goes out.
+    //
+    // Exporting it anyway produced four faults from one line: the launch queue
+    // claimed the coordinator as that task's session; pid->transcript pairing
+    // gave it the AGENT's transcript, so the run's first task read "not
+    // running"; `notify` filed every escalation under that task; and those
+    // escalations then looked like questions about a task in the run, which
+    // woke the coordinator into a loop.
+    let harness = harness();
+    let repo = tempfile::tempdir().expect("repo");
+    let spec = LaunchSpec {
+        run_id: Some("Aurora::Quality Assurance".to_string()),
+        ..spec_for(&repo, Some("x"))
+    };
+    run(&harness, &spec, SpawnPolicy::Allow);
+
+    let env = &harness.driver.launched()[0].env;
+    assert!(
+        !env.iter().any(|(key, _)| key == TASK_ID_ENV),
+        "the coordinator exported a task id: {env:?}"
+    );
+    assert!(
+        env.contains(&(
+            crate::term::RUN_ID_ENV.to_string(),
+            "Aurora::Quality Assurance".to_string()
+        )),
+        "the coordinator did not export its run id: {env:?}"
+    );
+}
+
+#[test]
+fn an_ordinary_launch_still_exports_its_task_id() {
+    // The other half. This variable is how `done`, `blocked` and `notify` know
+    // what they are reporting on, so a QA session must keep it.
+    let harness = harness();
+    let repo = tempfile::tempdir().expect("repo");
+    run(&harness, &spec_for(&repo, Some("x")), SpawnPolicy::Allow);
+
+    let env = &harness.driver.launched()[0].env;
+    assert!(
+        env.contains(&(TASK_ID_ENV.to_string(), "5238".to_string())),
+        "an ordinary launch lost its task id: {env:?}"
     );
 }

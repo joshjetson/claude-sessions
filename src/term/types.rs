@@ -16,6 +16,22 @@ pub const TASK_ID_ENV: &str = "CLAUDE_SESSIONS_TASK_ID";
 /// from its folder — see `scan::detect::launch_run_id`.
 pub const RUN_ID_ENV: &str = "CLAUDE_SESSIONS_RUN_ID";
 
+/// Proof that an instruction came from the REVIEWER rather than from another
+/// agent.
+///
+/// Exported to a QA session and to nothing else — never to a coordinator. The
+/// dashboard keeps a copy, and only the dashboard attaches it to a message, so
+/// a session can tell "the reviewer decided this" from "another session thinks
+/// this". That distinction is the whole point: a coordinator once opened a
+/// relay with "the reviewer wants this finished without waiting on them" — an
+/// inference, stated as the reviewer's words — and the receiving agent refused
+/// it, correctly, because it had no way to tell the two apart.
+///
+/// NOT a security boundary. Any process running as the same user can read
+/// another's environment, so a determined session could copy this. It prevents
+/// CONFABULATION, which is the failure that actually happened.
+pub const REVIEWER_TOKEN_ENV: &str = "CLAUDE_SESSIONS_REVIEWER_TOKEN";
+
 /// Everything a driver needs to open a new session.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LaunchRequest {
@@ -52,6 +68,10 @@ impl LaunchRequest {
 
     pub fn run_id(self, run_id: impl Into<String>) -> Self {
         self.env(RUN_ID_ENV, run_id)
+    }
+
+    pub fn reviewer_token(self, token: impl Into<String>) -> Self {
+        self.env(REVIEWER_TOKEN_ENV, token)
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {

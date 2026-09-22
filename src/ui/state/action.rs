@@ -102,6 +102,9 @@ pub enum Action {
     SendToSession(Box<SendSpec>),
     /// Wake a run's coordinator so it reads a question. Never focuses.
     NudgeCoordinator(Box<crate::ui::board::NudgeSpec>),
+    /// Deliver the reviewer's own decision to the session that asked, signed
+    /// with that session's token. Only the dashboard sends one.
+    Relay(Box<crate::ui::board::RelaySpec>),
     /// Find a task's archived conversation and open it. The lookup restores the
     /// transcript into Claude Code's own project directory, so it is file I/O
     /// and belongs off the draw thread.

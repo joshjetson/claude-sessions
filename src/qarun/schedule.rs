@@ -81,8 +81,26 @@ pub fn admit(run: &QaRun, task_id: i64, ctx: &AdmitCtx<'_>) -> Result<(), Refusa
     if run.spawned.contains(&task_id) {
         return Err(Refusal::AlreadySpawned(task_id));
     }
-    if let Some(verdict) = (ctx.state_of)(task_id).verdict {
-        return Err(Refusal::AlreadyFinished(task_id, verdict));
+    // A verdict refuses a fresh pass only while it still describes the work in
+    // front of you.
+    //
+    // `run.json` is not cleared between QA cycles, so a task that passed, went
+    // out, came back revised and returned to the stage still carries its old
+    // verdict. One such file was eleven days old and blocked its task from ever
+    // starting in a run — refused silently, with the row reading "not running".
+    //
+    // `stale` is already computed: both commits known and different means the
+    // developer pushed since, so the verdict is about code that no longer
+    // exists. When it cannot be computed — no worktree, no recorded head, which
+    // is the case for every older file — we do not know, and the safer default
+    // is to let the pass run. A redundant pass costs a session; a refused one
+    // costs a task nobody notices is missing.
+    let state = (ctx.state_of)(task_id);
+    if let Some(verdict) = state.verdict {
+        let judgeable = state.head.is_some() && state.current_head.is_some();
+        if judgeable && !state.stale {
+            return Err(Refusal::AlreadyFinished(task_id, verdict));
+        }
     }
     if let Some(limit) = ctx.limit(run) {
         let running = run

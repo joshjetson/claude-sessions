@@ -60,7 +60,7 @@ use crate::paths::Paths;
 /// So: append only, never renumber, and add the same SQL at the same index in
 /// the Node app's `src/db.ts`. Migrations 1 and 2 are the Node app's original
 /// schema verbatim, which is why a database it wrote is already at version 2.
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 7] = [
     // 1 — initial schema.
     "
     CREATE TABLE IF NOT EXISTS task_archive (
@@ -159,6 +159,31 @@ const MIGRATIONS: [&str; 5] = [
       mode                TEXT NOT NULL DEFAULT 'triage',
       coordinator_started INTEGER NOT NULL DEFAULT 0
     );
+    ",
+    // 6 — who sent a notification, when it was a run's coordinator.
+    //
+    // A coordinator escalates with `--kind question`, about a task in its own
+    // run. That is indistinguishable from an agent asking something, so the
+    // dashboard woke the coordinator with its own escalation; it re-read
+    // unchanged state and escalated again. Three cycles in thirty-one minutes,
+    // on tasks that had finished that morning.
+    //
+    // Existing rows default to '', which is what they were: not from a
+    // coordinator.
+    "
+    ALTER TABLE notifications ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
+    ",
+    // 7 — the token that proves an instruction came from the reviewer.
+    //
+    // Generated per QA session, exported to that session, and kept here so the
+    // dashboard can still attach it after a restart. Without somewhere durable
+    // it would be lost with the dashboard, and every session started before the
+    // restart would stop being answerable.
+    //
+    // Beside the task link because that is already the row that says "this task
+    // is being worked by this session", and the token belongs to exactly that.
+    "
+    ALTER TABLE task_session_index ADD COLUMN reviewer_token TEXT NOT NULL DEFAULT '';
     ",
 ];
 

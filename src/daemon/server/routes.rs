@@ -237,6 +237,10 @@ fn notification(body: &Value) -> NewNotification {
             .filter(|id| !id.is_empty())
             .map(str::to_string),
         task_id: number(body, "taskId"),
+        // The sender states this from its own environment; only a coordinator
+        // has one. Clamped like everything else here, since it reaches a shell
+        // command inside an agent's transcript.
+        run_id: clamp(&text(body, "runId", ""), 200),
         level: NotificationLevel::from_label(&text(body, "level", "info")),
     }
 }

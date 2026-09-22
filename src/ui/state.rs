@@ -192,6 +192,16 @@ pub struct AppState {
     pub board: BoardSlice,
     /// Where watched runs are kept between sessions. See [`Self::save_runs`].
     runs_db: crate::db::Db,
+    /// When this dashboard last started QA sessions for a run.
+    ///
+    /// The automatic refill waits a little after one, because a launched
+    /// session is not in the live set until it appears in a scan — and until
+    /// then its lane still reads free.
+    pub last_run_launch: Option<std::time::SystemTime>,
+    /// The last scan returned nothing and the tree kept its previous list. Shown
+    /// on screen, because a list that is quietly out of date is worse than one
+    /// that says so.
+    pub feed_went_quiet: bool,
     /// The same for the Deploy tab.
     pub deploy: DeploySlice,
     pub dialog: Option<Dialog>,
@@ -256,6 +266,8 @@ impl AppState {
                 board
             },
             runs_db: db,
+            feed_went_quiet: false,
+            last_run_launch: None,
             deploy: DeploySlice::default(),
             dialog: None,
             flash: None,
@@ -273,6 +285,16 @@ impl AppState {
 
     pub fn enqueue(&mut self, action: Action) {
         self.pending.push_back(action);
+    }
+
+    /// How many launches are queued. Used to tell a start that actually went
+    /// out from one that opened a folder picker or a confirmation instead —
+    /// only the first may be recorded as spawned.
+    pub fn queued_launches(&self) -> usize {
+        self.pending
+            .iter()
+            .filter(|action| matches!(action, Action::Launch(_)))
+            .count()
     }
 
     pub fn take_actions(&mut self) -> Vec<Action> {
@@ -310,6 +332,29 @@ impl AppState {
     /// so a launch into a quiet folder is visible without pressing anything —
     /// but a project the user has since collapsed stays collapsed.
     pub fn apply_sessions(&mut self, by_project: SessionsByProject) {
+        // An EMPTY list never replaces a populated one.
+        //
+        // A scan that reads nothing is not evidence that nothing is running. On
+        // a machine deep in swap, `lsof` took 1.6-4.1s against a 5s timeout,
+        // and a process whose cwd could not be read is dropped from the scan
+        // entirely — so a slow moment silently produced "no sessions". The tree
+        // then blanked: 0 projects, every run agent reading "not running",
+        // group headers drawn over nothing, while every agent was fine.
+        //
+        // The board already refuses to blank for the same reason, skipping its
+        // `loading` edge "rather than blanking for the seconds an Odoo round
+        // trip takes". Sessions had no such guard.
+        //
+        // Keeping the last list is right even when the machine really is empty:
+        // that state corrects itself on the next tick that reads one session,
+        // and a stale row costs far less than a dashboard that erases itself.
+        if by_project.is_empty() && !self.by_project.is_empty() {
+            self.feed_went_quiet = true;
+            self.dirty = true;
+            return;
+        }
+        self.feed_went_quiet = false;
+
         let names: Vec<String> = by_project.keys().cloned().collect();
         if !self.initialised {
             self.expanded_projects.extend(names.iter().cloned());
@@ -327,6 +372,10 @@ impl AppState {
             total_projects: by_project.len(),
         };
         self.by_project = by_project;
+
+        // A lane frees when a session ENDS, and nothing else notices that.
+        crate::ui::board::auto_refill(self, std::time::SystemTime::now());
+
         self.dirty = true;
     }
 
@@ -421,6 +470,22 @@ impl AppState {
             return;
         };
         let session_id = session.session_id.clone();
+
+        // NEVER wake a coordinator with its own escalation.
+        //
+        // A coordinator escalates with `notify --kind question` about a task in
+        // its own run, which from here is indistinguishable from an agent
+        // asking something. So it woke itself, re-read unchanged state, and
+        // escalated again: three cycles in thirty-one minutes on tasks that had
+        // finished that morning.
+        //
+        // `run_id` is set by the SENDER from its own environment, and only a
+        // coordinator has one — so this holds however the escalation is worded,
+        // and keeps holding once escalations carry a correct `--task`.
+        if !notification.run_id.is_empty() {
+            return;
+        }
+
         let target = crate::term::SessionRef {
             tty: session.tty.clone(),
             session_id: Some(session.session_id.clone()),
@@ -469,6 +534,33 @@ impl AppState {
                 // watcher in a reviewer's row and push the real agent out of
                 // the run entirely.
                 let is_coordinator = |session: &&crate::types::Session| session.run_id.is_some();
+                // Ask the scheduler why each task has no session, once per
+                // run, against the same live set the rows are drawn from.
+                // The tasks this run has a live session for, computed the same
+                // way the agent rows below resolve one — a coordinator is never
+                // an agent, so it is excluded from both.
+                let live: std::collections::HashSet<i64> = run
+                    .task_ids
+                    .iter()
+                    .copied()
+                    .filter(|&task_id| {
+                        crate::ui::board::task_session(
+                            self.sessions().filter(|s| !is_coordinator(s)),
+                            task_id,
+                            self.board.link(task_id),
+                        )
+                        .is_some()
+                    })
+                    .collect();
+                let paths = self.paths.clone();
+                let state_of =
+                    move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
+                let ctx = crate::qarun::AdmitCtx {
+                    live_task_ids: &live,
+                    state_of: &state_of,
+                    lane_limit: self.config.qa_lane_limit(),
+                };
+
                 let agents = run
                     .task_ids
                     .iter()
@@ -484,6 +576,15 @@ impl AppState {
                                 && n.kind == crate::types::NotificationKind::Question
                                 && n.status != crate::types::NotificationStatus::Resolved
                         }),
+                        // Only when there is nothing running: a live session
+                        // needs no explanation.
+                        idle_reason: if live.contains(&task_id) {
+                            None
+                        } else {
+                            crate::qarun::admit(run, task_id, &ctx)
+                                .err()
+                                .map(|refusal| refusal.detail())
+                        },
                     })
                     .collect();
                 crate::ui::tree::RunSection {

@@ -99,7 +99,8 @@ pub fn qa_answer_command(task_id: i64) -> String {
 /// is, so a run can count what is blocked rather than what is merely loud.
 pub fn notify_kind_command(title: &str, message: &str, level: &str, kind: &str) -> String {
     format!(
-        "{} notify --title \"{title}\" --message \"{message}\" --level {level} --kind {kind}",
+        "{} notify --task <id> --title \"{title}\" --message \"{message}\" \
+         --level {level} --kind {kind}",
         bin()
     )
 }

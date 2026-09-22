@@ -147,6 +147,7 @@ pub fn notification(id: &str, task_id: Option<i64>) -> Notification {
         task_id,
         level: NotificationLevel::Warn,
         kind: NotificationKind::Info,
+        run_id: String::new(),
         ts: "2026-09-16T14:05:06.000Z".to_string(),
         status: NotificationStatus::Unread,
     }
