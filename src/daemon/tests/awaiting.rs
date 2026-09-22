@@ -171,3 +171,40 @@ fn a_permission_prompt_is_announced_as_a_maybe_rather_than_a_question() {
     );
     assert!(state.notifications[0].message.contains("permission prompt"));
 }
+
+// --- a numbered prompt is an answerable question -----------------------------
+
+#[test]
+fn a_question_the_agent_asked_names_its_task_and_is_answerable() {
+    // AskUserQuestion is a deliberate hand-back: the agent stopped and wants an
+    // answer. Raised as `info` with no task id — which it was — the dashboard
+    // could not answer it in the reviewer's name and a run could not count it
+    // as blocked, so every numbered prompt meant finding the pane by hand.
+    let session = Session {
+        task_id: Some(6660),
+        last_entry: Some(crate::daemon::tests::tool_entry("AskUserQuestion")),
+        ..a_session("s", "/repo")
+    };
+    let notification = crate::daemon::watchers::awaiting_notification(&session, true);
+
+    assert_eq!(notification.kind, crate::types::NotificationKind::Question);
+    assert_eq!(notification.task_id, Some(6660));
+}
+
+#[test]
+fn a_stalled_tool_call_stays_unanswerable() {
+    // Most likely a permission prompt: a modal in this tool's own UI, absent
+    // from the transcript, clearable only by the person at the keyboard.
+    // Marking it answerable would invite the coordinator to try and be refused
+    // — which is how one blocker reached a third attempt.
+    let session = Session {
+        task_id: Some(6660),
+        ..a_session("s", "/repo")
+    };
+    let notification = crate::daemon::watchers::awaiting_notification(&session, false);
+
+    assert_eq!(notification.kind, crate::types::NotificationKind::Info);
+    assert!(notification
+        .message
+        .contains("Nothing can answer one of those remotely"));
+}

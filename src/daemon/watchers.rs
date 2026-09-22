@@ -239,17 +239,47 @@ impl<S: ProcessSource> EngineInner<S> {
     }
 }
 
-fn awaiting_notification(session: &Session, asked: bool) -> NewNotification {
+/// The notification for a session that has stopped and is waiting on a person.
+///
+/// `asked` separates two states that look alike on the board and are not alike
+/// at all:
+///
+///  * TRUE — the agent called AskUserQuestion or ExitPlanMode. It handed control
+///    back deliberately, and what it wants is an answer. That is a `Question`,
+///    and it names its task, so the dashboard can answer it in the reviewer's
+///    name and a run can count it as blocked. Until this, those numbered
+///    prompts were raised as `info` with no task id, which made them
+///    unanswerable by the coordinator and invisible to the reviewer's own relay
+///    — the reviewer had to find the pane and type into it.
+///
+///  * FALSE — a tool call has been pending for two minutes, most likely a
+///    permission prompt. That is a modal inside this tool's own UI: it is not
+///    in the transcript, nothing can answer it remotely, and only the person at
+///    the keyboard can clear it. It stays `info`, because marking it answerable
+///    would invite the coordinator to try and be refused.
+pub(crate) fn awaiting_notification(session: &Session, asked: bool) -> NewNotification {
     let project = project_name(&session.cwd);
-    let (title, message) = if asked {
-        (
-            format!("🔔 {project}: Claude needs your decision"),
-            "Claude is waiting for you to choose an option. Open its terminal (press o on the session) to answer.",
-        )
-    } else {
+    if asked {
+        let title = format!("🔔 {project}: Claude needs your decision");
+        return NewNotification {
+            cwd: session.cwd.clone(),
+            project: Some(project),
+            session_id: Some(session.session_id.clone()),
+            task_id: session.task_id,
+            kind: crate::types::NotificationKind::Question,
+            level: NotificationLevel::Warn,
+            ..NewNotification::new(
+                "await",
+                title,
+                "Claude is waiting for you to choose an option. Press a to answer it from here, \
+                 or o to open its terminal.",
+            )
+        };
+    }
+    let (title, message) = {
         (
             format!("🔔 {project}: Claude may be waiting on a prompt"),
-            "A tool call has been pending for two minutes — most likely a permission prompt. Open its terminal (press o on the session) to look.",
+            "A tool call has been pending for two minutes — most likely a permission prompt. Nothing can answer one of those remotely; open its terminal (press o on the session) to clear it.",
         )
     };
     NewNotification {
