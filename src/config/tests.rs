@@ -377,3 +377,20 @@ fn the_mode_is_case_insensitive() {
     let (_dir, config) = handle(json!({ "qa": { "coordinatorMode": "Shadow" } }));
     assert_eq!(config.qa_coordinator_mode(), crate::qarun::RunMode::Shadow);
 }
+
+// --- the automatic lane refill ------------------------------------------------
+
+#[test]
+fn lanes_refill_themselves_unless_turned_off() {
+    // On by default: the alternative is a reviewer pressing a key every time a
+    // session ends, which is why the lane limit was set to uncapped and
+    // thirty-five agents ended up resident at once.
+    let (_dir, config) = handle(json!({}));
+    assert!(config.qa_auto_refill());
+
+    let (_dir, off) = handle(json!({ "qa": { "autoRefill": false } }));
+    assert!(!off.qa_auto_refill());
+
+    let (_dir, on) = handle(json!({ "qa": { "autoRefill": true } }));
+    assert!(on.qa_auto_refill());
+}

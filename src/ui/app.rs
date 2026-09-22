@@ -138,10 +138,19 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     drop(runs);
     state.list_scroll = top;
 
+    // Said in the title, not as a flash: a flash clears, and this state can
+    // persist for several ticks while the machine is paging. A list that is
+    // quietly out of date is worse than one that says so.
+    let title = if state.feed_went_quiet {
+        " Sessions — last scan read nothing, showing the previous list "
+    } else {
+        " Sessions "
+    };
+
     render_list(
         frame,
         area,
-        " Sessions ",
+        title,
         rows,
         Some(selected.saturating_sub(top)),
         state.focus == Pane::Tree,
@@ -327,6 +336,7 @@ pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
             ("s", "start"),
             ("R", "QA run"),
             ("]", "next ask"),
+            ("a", "answer"),
             ("v", "revise"),
             ("C", "chat"),
             ("P", "pipeline"),

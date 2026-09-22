@@ -103,7 +103,14 @@ fn a_node_era_database_migrates_forward_in_place() {
             // the error — so a wrong order here leaves the file at version 4
             // with migration 3's table already dropped, and the test fails
             // somewhere else entirely.
-            "DROP INDEX IF EXISTS notifications_kind_idx;
+            // Every column added since version 2 comes off, newest first. A
+            // column left behind makes its own migration fail on re-run —
+            // ADD COLUMN on one that already exists is an error, `Db::exec`
+            // swallows it, and the file never opens at all (version 0).
+            "ALTER TABLE task_session_index DROP COLUMN reviewer_token;
+             ALTER TABLE notifications DROP COLUMN run_id;
+             DROP TABLE IF EXISTS qa_runs;
+             DROP INDEX IF EXISTS notifications_kind_idx;
              ALTER TABLE notifications DROP COLUMN kind;
              DROP TABLE task_session_index;
              PRAGMA user_version = 2",
@@ -144,7 +151,7 @@ fn the_shared_migration_sequence_is_pinned() {
 
     assert_eq!(
         db.schema_version(),
-        5,
+        7,
         "the schema version moved — is the Node app's src/db.ts at the same number?"
     );
 
@@ -175,6 +182,19 @@ fn the_shared_migration_sequence_is_pinned() {
     assert!(
         table_exists(&db, "qa_runs"),
         "migration 5 is missing — a watched run will not survive a restart"
+    );
+
+    // 6 — who raised a notification, when it was a coordinator. Also not in the
+    // Node app, for the reason given above migration 5.
+    assert!(
+        notification_columns(&db).contains(&"run_id".to_string()),
+        "migration 6 is missing — a coordinator will wake itself with its own escalation"
+    );
+
+    // 7 — the reviewer's token. Also not in the Node app, same reasoning.
+    assert!(
+        task_session_columns(&db).contains(&"reviewer_token".to_string()),
+        "migration 7 is missing — the dashboard cannot sign an instruction"
     );
 }
 
@@ -221,6 +241,12 @@ fn table_exists(db: &Db, name: &str) -> bool {
         |row| row.get::<_, String>(0),
     )
     .is_some()
+}
+
+fn task_session_columns(db: &Db) -> Vec<String> {
+    db.rows("cols", "PRAGMA table_info(task_session_index)", [], |row| {
+        row.get::<_, String>(1)
+    })
 }
 
 fn notification_columns(db: &Db) -> Vec<String> {

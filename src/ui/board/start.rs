@@ -254,12 +254,41 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
             .extras
             .get(crate::pipeline::definitions::RUN_ID_VAR)
             .map(|id| crate::qarun::encode_run_id(id)),
+        // A QA session gets one; a coordinator never does. A coordinator
+        // holding a token could sign in the reviewer's name, which is the one
+        // thing this is meant to prevent.
+        reviewer_token: match request.kind {
+            crate::ui::board::LaunchKind::Qa => Some(reviewer_token(task.id)),
+            _ => None,
+        },
     };
     // A fresh attempt clears any prior needs-info flag; the gate raises it
     // again if it still applies.
     state.board.blocked_tasks.remove(&task.id);
     state.enqueue(Action::Launch(Box::new(spec)));
     state.dirty = true;
+}
+
+/// A token for one QA session, proving later that an instruction came from the
+/// reviewer rather than from another agent.
+///
+/// Not a secret in the cryptographic sense — any process running as this user
+/// can read another's environment. It exists to stop CONFABULATION: a
+/// coordinator once opened a relay with "the reviewer wants this finished
+/// without waiting on them", an inference stated as the reviewer's words, and
+/// the receiving agent refused it because it could not tell the two apart. A
+/// token it has no reason to go and copy makes them tellable apart.
+fn reviewer_token(task_id: i64) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    task_id.hash(&mut hasher);
+    std::process::id().hash(&mut hasher);
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .hash(&mut hasher);
+    format!("rv-{:016x}", hasher.finish())
 }
 
 /// The Odoo task URL.

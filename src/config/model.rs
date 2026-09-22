@@ -493,6 +493,13 @@ pub struct QaBlock {
     /// run would produce an agreement number mixed from both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator_mode: Option<String>,
+    /// Start the next task in a run when a lane frees. On unless set to false.
+    ///
+    /// Without it a lane limit means pressing "Start run" once per freed lane,
+    /// which is why the limit was set to uncapped — and thirty-five agents
+    /// ended up resident at once, about 405 MB each, on a 16 GB machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_refill: Option<bool>,
 }
 
 /// How the sessions tree is drawn.

@@ -235,6 +235,11 @@ pub struct BlockedArgs {
 
 #[derive(Args)]
 pub struct NotifyArgs {
+    /// The task this is ABOUT. A coordinator watches several and must say
+    /// which, because it no longer carries a task id of its own — without this
+    /// every escalation it raised was filed under the run's first task.
+    #[arg(long)]
+    pub task: Option<i64>,
     #[arg(long)]
     pub title: Option<String>,
     #[arg(long, alias = "msg")]

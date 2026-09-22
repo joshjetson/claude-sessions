@@ -68,6 +68,7 @@ fn log_entry(day: &str, ts: &str, task_id: i64, title: &str) -> DailyLogEntry {
 fn notification(id: &str, ts: &str, title: &str) -> Notification {
     Notification {
         id: id.to_string(),
+        run_id: String::new(),
         ts: ts.to_string(),
         title: title.to_string(),
         message: String::new(),

@@ -39,7 +39,10 @@ pub(super) fn notify(paths: &Paths, config: &ConfigHandle, args: NotifyArgs) -> 
         "level": args.level,
         "kind": args.kind,
         "cwd": cwd(),
-        "taskId": task_id_from_env(),
+        "taskId": args.task.or_else(task_id_from_env),
+        // Only a coordinator has this. It is what lets the dashboard avoid
+        // waking one with its own escalation.
+        "runId": std::env::var(crate::term::RUN_ID_ENV).unwrap_or_default(),
         "sessionId": args.session.unwrap_or_default(),
     });
     match DaemonClient::new(port).notify(body) {

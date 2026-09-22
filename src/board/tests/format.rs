@@ -271,6 +271,7 @@ fn notification(status: NotificationStatus, level: NotificationLevel) -> Notific
         kind: NotificationKind::Info,
         // Half a minute before the fixed `now`, whatever timezone the suite
         // runs in.
+        run_id: String::new(),
         ts: (now().with_timezone(&chrono::Utc) - chrono::Duration::seconds(30))
             .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         status,

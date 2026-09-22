@@ -115,6 +115,11 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             Dialog::ProjectFilter(ProjectFilter::new(&state.config)),
         ),
         'x' => dismiss(state, snapshot),
+        // `a` answers the selected question or verdict AS YOU. The dashboard
+        // delivers it, signed with the session's own token — a coordinator
+        // cannot produce one, so the agent can tell your decision from another
+        // session's opinion. See `RelaySpec`.
+        'a' => answer_as_reviewer(state, snapshot),
         // Not a picker: Enter opens one in a browser and the dialog stays
         // open, so a morning's worth of review links can be opened in a row.
         'M' => {
@@ -135,6 +140,37 @@ fn daemon_logs(state: &mut AppState, task: Task) {
     let dialog =
         crate::ui::dialogs::DaemonLogs::open(&state.paths.auto_dev_runs_dir, task.id, &task.tags);
     open(state, Dialog::DaemonLogs(dialog));
+}
+
+/// Open the box that answers a question in the reviewer's own name.
+///
+/// Only on a notification a session is BLOCKED on — a question or a verdict.
+/// An `info` line is something an agent said on its way past, and answering one
+/// would type into a session that is not waiting.
+fn answer_as_reviewer(state: &mut AppState, snapshot: &BoardSnapshot) {
+    let BoardRow::Notification { id } = &snapshot.row else {
+        return;
+    };
+    let id = id.clone();
+    let Some(notif) = state.notification(&id).cloned() else {
+        return;
+    };
+    if !matches!(
+        notif.kind,
+        crate::types::NotificationKind::Question | crate::types::NotificationKind::Verdict
+    ) {
+        state.flash("Only a question or a verdict can be answered.".to_string());
+        return;
+    }
+    let Some(task_id) = notif.task_id else {
+        state.flash("That notification does not say which task it is about.".to_string());
+        return;
+    };
+
+    open(
+        state,
+        Dialog::ReviewerAnswer(crate::ui::dialogs::ReviewerAnswer::new(task_id, &notif)),
+    );
 }
 
 fn with_task(state: &mut AppState, task: Option<Task>, run: impl FnOnce(&mut AppState, Task)) {

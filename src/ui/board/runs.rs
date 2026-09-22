@@ -123,6 +123,17 @@ fn start_run(state: &mut AppState, run_id: &str, extra_context: &str) {
 /// surfaced: a run that quietly starts nothing looks exactly like a run that is
 /// merely slow.
 fn fill_lanes(state: &mut AppState, run_id: &str) {
+    fill_lanes_inner(state, run_id, true)
+}
+
+/// Start whatever lanes are free, without saying anything when there is nothing
+/// to start. Used by the automatic refill, which runs on a timer: "Nothing to
+/// start: every task is finished" is true and correct once, and noise forever.
+fn fill_lanes_quiet(state: &mut AppState, run_id: &str) {
+    fill_lanes_inner(state, run_id, false)
+}
+
+fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     let Some(run) = state
         .board
         .runs
@@ -143,36 +154,87 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
 
     let plan = plan_spawns(&run, &ctx);
     if plan.is_empty() {
-        let why = first_refusal(&run, &ctx)
-            .map(|refusal| refusal.detail())
-            .unwrap_or_else(|| "Every task is finished or already running.".to_string());
-        state.flash(format!("Nothing to start: {why}"));
-        state.dirty = true;
+        if announce {
+            let why = first_refusal(&run, &ctx)
+                .map(|refusal| refusal.detail())
+                .unwrap_or_else(|| "Every task is finished or already running.".to_string());
+            state.flash(format!("Nothing to start: {why}"));
+            state.dirty = true;
+        }
         return;
     }
 
-    // Recorded here rather than inside the loop, so a second press cannot plan
-    // the same tasks again while the first batch is still opening terminals.
-    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
-        run.spawned.extend(plan.iter().copied());
+    if announce {
+        state.flash(format!(
+            "Starting {} QA session{}…",
+            plan.len(),
+            if plan.len() == 1 { "" } else { "s" }
+        ));
     }
-    // Recorded before the terminals open, so a crash mid-launch cannot make the
-    // run forget what it already started and start it twice.
-    state.save_runs();
 
-    state.flash(format!(
-        "Starting {} QA session{}…",
-        plan.len(),
-        if plan.len() == 1 { "" } else { "s" }
-    ));
+    // A task counts as SPAWNED once its launch actually goes out, never when it
+    // is merely planned.
+    //
+    // It used to be recorded up front, to stop a second press planning the same
+    // tasks while the first batch was still opening terminals. But `admit`
+    // refuses an already-spawned task forever, so a launch that never opened
+    // was unstartable for the life of the run: fourteen tasks were marked
+    // started, one terminal appeared, and the other thirteen could not be
+    // retried by any means short of rebuilding the run. The rows read "not
+    // running" and there was no way back.
+    //
+    // The double-start it was guarding against is covered anyway —
+    // `Refusal::AlreadyRunning` refuses any task that has a live session, which
+    // is what a task whose terminal did open will have.
+    let mut started = Vec::new();
+    let mut failed = Vec::new();
     for task_id in plan {
-        if let Some(task) = state.board.task(task_id).cloned() {
-            crate::ui::board::start(
-                state,
-                crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::Qa),
-            );
+        let Some(task) = state.board.task(task_id).cloned() else {
+            // The board no longer knows this task, so nothing was launched.
+            failed.push(task_id);
+            continue;
+        };
+
+        // A start does not always launch: it can open a folder picker or a
+        // confirmation instead, and both can be cancelled. Only a launch that
+        // actually reached the queue may be recorded as spawned — recording the
+        // others would make a cancelled picker permanently unstartable, which
+        // is the fault this whole change exists to remove.
+        let before = state.queued_launches();
+        crate::ui::board::start(
+            state,
+            crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::Qa),
+        );
+        if state.queued_launches() > before {
+            started.push(task_id);
+        } else {
+            failed.push(task_id);
         }
     }
+
+    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
+        run.spawned.extend(started.iter().copied());
+    }
+    if !started.is_empty() {
+        state.last_run_launch = Some(std::time::SystemTime::now());
+    }
+    state.save_runs();
+
+    // Said out loud. A run that starts eleven of fourteen and reports "Starting
+    // 14…" is how thirteen tasks went missing without a line anywhere.
+    if !failed.is_empty() {
+        state.flash(format!(
+            "Started {}, but {} could not be launched and stay startable: {}",
+            started.len(),
+            failed.len(),
+            failed
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
     state.dirty = true;
 }
 
@@ -244,6 +306,55 @@ fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
 
     crate::ui::board::start(state, request);
     state.dirty = true;
+}
+
+/// How long a run stays quiet after a launch before the refill looks again.
+///
+/// A launched session takes a second or two to appear in a scan. Until it does
+/// it is not in the live set, so its lane still reads free — and a refill that
+/// ran immediately would hand that same lane to the next task, and the next,
+/// until the whole queue was started at once. That is the behaviour the lane
+/// limit exists to prevent, arrived at from the other direction.
+///
+/// `spawned` stops a task being started twice, so the worst this window
+/// prevents is overshooting the LIMIT, not double-starting a task.
+const REFILL_QUIET: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Start the next task in every started run that has a free lane.
+///
+/// Called on each scan, because a lane frees when a session ENDS and nothing
+/// else notices that. Without it a limit of four means pressing "Start run"
+/// four separate times for fourteen tasks, which is why the limit was set to
+/// uncapped and thirty-five agents ended up resident at once — about 405 MB
+/// each, on a machine with sixteen gigabytes.
+///
+/// The point is not to cap the work. It is to hold the number of SIMULTANEOUS
+/// agents flat while the queue drains, which is the difference between fitting
+/// in memory and paging.
+pub fn auto_refill(state: &mut AppState, now: std::time::SystemTime) {
+    if !state.config.qa_auto_refill() {
+        return;
+    }
+    if let Some(last) = state.last_run_launch {
+        if now.duration_since(last).unwrap_or_default() < REFILL_QUIET {
+            return;
+        }
+    }
+
+    // Only runs the reviewer actually STARTED. Watching a stage groups its rows
+    // and starts nothing, and a refill that launched into a merely-watched run
+    // would start work nobody asked for.
+    let started: Vec<String> = state
+        .board
+        .runs
+        .iter()
+        .filter(|run| run.coordinator_started)
+        .map(|run| run.id.clone())
+        .collect();
+
+    for run_id in started {
+        fill_lanes_quiet(state, &run_id);
+    }
 }
 
 /// Move the cursor to the next task waiting on the reviewer, wrapping.

@@ -24,6 +24,7 @@ fn notif(id: &str, ts: &str, kind: NotificationKind, status: NotificationStatus)
         task_id: Some(4101),
         level: NotificationLevel::Warn,
         kind,
+        run_id: String::new(),
         ts: ts.to_string(),
         status,
     }

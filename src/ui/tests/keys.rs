@@ -672,3 +672,46 @@ fn killing_one_session_does_not_end_its_run() {
         "killing one agent ended the whole run"
     );
 }
+
+// --- an empty scan must not erase the tree -----------------------------------
+
+#[test]
+fn an_empty_scan_keeps_the_previous_sessions() {
+    // A scan that reads nothing is not evidence that nothing is running. Deep
+    // in swap, `lsof` took seconds against a 5s timeout and processes whose cwd
+    // could not be read were dropped, so a slow moment produced "no sessions"
+    // and the tree blanked while every agent was fine.
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.take_actions();
+    let before = state.by_project.clone();
+
+    state.apply_sessions(group_sessions(Vec::new()));
+
+    assert_eq!(state.by_project, before, "an empty scan erased the tree");
+    assert!(state.feed_went_quiet, "nothing says the list is stale");
+}
+
+#[test]
+fn a_real_session_list_clears_the_quiet_flag() {
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.apply_sessions(group_sessions(Vec::new()));
+    assert!(state.feed_went_quiet);
+
+    with_sessions(&mut state, three_sessions());
+    assert!(
+        !state.feed_went_quiet,
+        "the stale notice outlived the outage"
+    );
+}
+
+#[test]
+fn an_empty_scan_on_an_empty_tree_is_accepted() {
+    // Starting with nothing running is a real state, and must not be reported
+    // as a failed read.
+    let mut state = temp_state().1;
+    state.apply_sessions(group_sessions(Vec::new()));
+    assert!(state.by_project.is_empty());
+    assert!(!state.feed_went_quiet);
+}

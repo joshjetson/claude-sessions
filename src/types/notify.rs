@@ -135,6 +135,15 @@ pub struct Notification {
     /// sender that predates the field, or omits it, is unchanged.
     #[serde(default)]
     pub kind: NotificationKind,
+    /// The QA run whose COORDINATOR sent this, when one did.
+    ///
+    /// Empty for everything an agent or the dashboard raises. It exists so a
+    /// coordinator's own escalation can be told apart from an agent's question:
+    /// they are both `Question` notifications about a task in the same run, and
+    /// without this the dashboard woke the coordinator with its own message —
+    /// which it answered by escalating again, three times in half an hour.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub run_id: String,
     pub ts: String,
     pub status: NotificationStatus,
 }

@@ -112,6 +112,12 @@ pub struct LaunchSpec {
     /// Set only when this launch is a QA run's coordinator. Exported into the
     /// session's environment so the scanner can recognise it later.
     pub run_id: Option<String>,
+    /// Proof, for this session, that an instruction came from the reviewer.
+    ///
+    /// Set for a QA session and never for a coordinator — a coordinator that
+    /// held one could sign in the reviewer's name, which is exactly what this
+    /// exists to stop.
+    pub reviewer_token: Option<String>,
 }
 
 /// Handing a revision to a session that is already open.
@@ -136,6 +142,36 @@ pub struct NudgeSpec {
     pub session: SessionRef,
     pub session_id: String,
     pub text: String,
+}
+
+/// The reviewer's own decision, on its way to the session that asked.
+///
+/// Delivered by the DASHBOARD, never by a coordinator. It carries the session's
+/// token, which the coordinator does not hold, so the receiving agent can tell
+/// "the reviewer decided this" from "another session thinks this" — the
+/// distinction that a relay opening "the reviewer wants this finished without
+/// waiting on them" destroyed, and the reason that relay was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelaySpec {
+    pub task_id: i64,
+    pub session: SessionRef,
+    pub session_id: String,
+    /// The reviewer's words, verbatim. Never a summary: a paraphrase is the
+    /// coordinator's sentence wearing the reviewer's name.
+    pub decision: String,
+    pub token: String,
+    /// Notifications this answers, cleared once it lands.
+    pub resolve: Vec<String>,
+}
+
+impl RelaySpec {
+    /// What the session actually receives.
+    ///
+    /// The token goes FIRST, so an agent scanning the head of the message can
+    /// decide whether to trust it before reading what it is being asked to do.
+    pub fn message(&self) -> String {
+        format!("[reviewer {}] {}", self.token, self.decision.trim())
+    }
 }
 
 /// Picking an archived conversation back up.
@@ -213,6 +249,8 @@ impl ResumeRequest {
             known_session_ids: self.known_session_ids.clone(),
             // A resume is never a coordinator launch.
             run_id: None,
+            // A resume rejoins a session that already has its token.
+            reviewer_token: None,
             say: match self.purpose {
                 ResumePurpose::Revision => format!(
                     "Resumed #{task_id} ({}) with revision notes.",
