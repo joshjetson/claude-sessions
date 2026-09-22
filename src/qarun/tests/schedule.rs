@@ -61,12 +61,18 @@ fn a_task_this_run_already_started_is_refused() {
 }
 
 #[test]
-fn a_task_that_reached_a_verdict_is_refused() {
+fn a_verdict_on_the_current_code_still_refuses() {
     // Starting again archives a completed round.
+    //
+    // Both commits recorded and equal: the verdict is about the code that is
+    // checked out right now, so it still stands.
     let live = HashSet::new();
     let finished = |_id: i64| QaRunState {
         exists: true,
         verdict: Some(QaVerdict::Pass),
+        head: Some("abc1234".to_string()),
+        current_head: Some("abc1234".to_string()),
+        stale: false,
         ..QaRunState::default()
     };
     let ctx = AdmitCtx {
@@ -160,6 +166,11 @@ fn a_finished_task_is_skipped_without_spending_a_lane() {
             QaRunState {
                 exists: true,
                 verdict: Some(QaVerdict::Pass),
+                // Judged against the code that is checked out, so the verdict
+                // stands and the task is skipped.
+                head: Some("abc1234".to_string()),
+                current_head: Some("abc1234".to_string()),
+                stale: false,
                 ..QaRunState::default()
             }
         } else {
@@ -209,4 +220,54 @@ fn the_first_refusal_is_what_a_caller_reports() {
         first_refusal(&run(vec![1, 2]), &ctx(&live, Some(2))),
         Some(Refusal::AlreadyRunning(1))
     );
+}
+
+// --- a verdict only refuses while it describes the current code --------------
+
+#[test]
+fn a_stale_verdict_does_not_refuse_a_fresh_pass() {
+    // The developer pushed since the verdict was formed, so it is about code
+    // that no longer exists. A task that passed, went out, came back revised
+    // and returned to the stage must be reviewable again.
+    let live = HashSet::new();
+    let moved_on = |_id: i64| QaRunState {
+        exists: true,
+        verdict: Some(QaVerdict::Pass),
+        head: Some("abc1234".to_string()),
+        current_head: Some("def5678".to_string()),
+        stale: true,
+        ..QaRunState::default()
+    };
+    let ctx = AdmitCtx {
+        live_task_ids: &live,
+        state_of: &moved_on,
+        lane_limit: None,
+    };
+    assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
+}
+
+#[test]
+fn a_verdict_that_cannot_be_judged_does_not_refuse_either() {
+    // No worktree and no recorded head, which is every older run.json: we
+    // cannot tell whether it describes this code. The task that exposed this
+    // carried a `pass` from eleven days earlier and could never start again —
+    // refused silently, its row reading "not running".
+    //
+    // A redundant pass costs one session. A refused one costs a task nobody
+    // notices is missing.
+    let live = HashSet::new();
+    let unjudgeable = |_id: i64| QaRunState {
+        exists: true,
+        verdict: Some(QaVerdict::Pass),
+        head: None,
+        current_head: None,
+        stale: false,
+        ..QaRunState::default()
+    };
+    let ctx = AdmitCtx {
+        live_task_ids: &live,
+        state_of: &unjudgeable,
+        lane_limit: None,
+    };
+    assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
 }
