@@ -176,7 +176,7 @@ fn a_triage_coordinator_is_told_to_chase_what_is_missing() {
         "it is not told it can ask for a note to be re-run: {prompt}"
     );
     assert!(
-        prompt.contains("Then check that it arrived"),
+        prompt.contains("check the file on disk to confirm it arrived"),
         "it is not told to verify the chase landed: {prompt}"
     );
 }
@@ -187,7 +187,7 @@ fn a_shadow_coordinator_chases_by_escalating_not_by_typing() {
     // a hole in the one guarantee shadow makes.
     let prompt = prompt(false);
     assert!(
-        prompt.contains("you do not type into the session"),
+        prompt.contains("you do not type into any session"),
         "shadow mode was told to chase directly: {prompt}"
     );
     assert!(
@@ -210,6 +210,96 @@ fn the_coordinator_is_forbidden_from_killing_by_pattern() {
         assert!(
             prompt.contains(forbidden),
             "{forbidden} is not named as forbidden: {prompt}"
+        );
+    }
+}
+
+#[test]
+fn the_chase_step_does_not_reach_for_a_command_that_refuses_it() {
+    // The first version told the coordinator to chase with `qa-answer`. That
+    // command refuses whenever the task has no open question — deliberately —
+    // so every chase came back `Refusing to answer something of kind "info"`.
+    // An instruction the code rejects by construction.
+    let prompt = prompt(true);
+    let chase_start = prompt
+        .find("When a task owes something")
+        .expect("the chase step");
+    let chase_end = prompt[chase_start..]
+        .find("Never kill a process")
+        .map(|i| chase_start + i)
+        .unwrap_or(prompt.len());
+    let chase = &prompt[chase_start..chase_end];
+
+    assert!(
+        chase.contains("will REFUSE this"),
+        "the chase step does not warn that qa-answer refuses: {chase}"
+    );
+    assert!(
+        chase.contains("Do not retry it and do not reword it"),
+        "nothing stops it retrying the refusal: {chase}"
+    );
+}
+
+#[test]
+fn the_coordinator_is_told_to_count_blockers() {
+    // Nineteen blocked checks across seven tasks in one run, exactly one
+    // dispositioned. The prompt did not mention blockers at all, so a task with
+    // eight unaccepted ones read as finished because its `verdict` was set.
+    for triage in [false, true] {
+        let prompt = prompt(triage);
+        assert!(
+            prompt.contains("A recorded verdict does NOT mean a task is finished"),
+            "a verdict is still treated as done (triage={triage}): {prompt}"
+        );
+        assert!(
+            prompt.contains("accepted_blocked"),
+            "it is not told where acceptance is recorded (triage={triage})"
+        );
+    }
+}
+
+#[test]
+fn accepting_a_blocker_stays_with_the_reviewer() {
+    // Same class of decision as a verdict: it closes a gap nobody proved.
+    let prompt = prompt(true);
+    assert!(
+        prompt.contains("Do not accept a blocker yourself"),
+        "nothing stops it dispositioning a blocker: {prompt}"
+    );
+}
+
+#[test]
+fn a_permission_refusal_blocker_is_escalated_once_and_never_retried() {
+    // "Third attempt, after the reviewer's permission was relayed by a peer.
+    // Still blocked." A permission prompt is a modal in this tool's own UI —
+    // invisible to the coordinator and unanswerable by it, so retrying it
+    // burns turns and changes nothing.
+    let prompt = prompt(true);
+    assert!(
+        prompt.contains("never retry them"),
+        "it is still free to retry a permission block: {prompt}"
+    );
+    assert!(
+        prompt.contains("preview environment and seeding is allowed"),
+        "it is not told that 'I could not create the data' is usually recoverable: {prompt}"
+    );
+}
+
+#[test]
+fn the_coordinator_may_not_speak_for_the_reviewer() {
+    // One escalation opened "the reviewer wants this finished without waiting
+    // on them" when they had said no such thing. The session refused it and was
+    // right to — and then nothing could reach that session at all, because it
+    // could not tell an inference from a decision.
+    for triage in [false, true] {
+        let prompt = prompt(triage);
+        assert!(
+            prompt.contains("NEVER say what the reviewer wants unless they have said it to you"),
+            "it may still speak for the reviewer (triage={triage})"
+        );
+        assert!(
+            prompt.contains("You cannot deliver a reviewer's decision"),
+            "it is not told the dashboard carries decisions (triage={triage})"
         );
     }
 }
