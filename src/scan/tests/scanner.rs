@@ -252,9 +252,14 @@ fn the_pid_caches_are_pruned_to_the_processes_that_are_still_alive() {
     env.transcript(CWD, UUID);
     let procs = FakeProcesses::new();
     procs.add(1, "claude", Some(CWD), 0);
+    // A second process that never exits, so the listing is never EMPTY. A real
+    // `ps` always returns at least the scanner's own process, and an empty
+    // listing now means the read failed rather than the machine being idle —
+    // so pruning on one would throw away every cached answer at the moment the
+    // machine is least able to recompute them.
+    procs.add(2, "claude", Some(CWD), 0);
     let mut scanner = env.scanner(procs.clone());
     scanner.scan_sessions(SystemTime::now());
-    assert_eq!(procs.calls().cwd, 1);
 
     // The process exits and a new one reuses the number, as pids do.
     procs.remove(1);
@@ -263,7 +268,11 @@ fn the_pid_caches_are_pruned_to_the_processes_that_are_still_alive() {
     let sessions = scanner.scan_sessions(SystemTime::now());
 
     assert_eq!(procs.calls().cwd, 2, "a recycled pid kept the old answer");
-    assert_eq!(sessions[0].cwd, OTHER_CWD);
+    assert!(
+        sessions.iter().any(|session| session.cwd == OTHER_CWD),
+        "the recycled pid still reports its old directory: {:?}",
+        sessions.iter().map(|s| &s.cwd).collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -399,4 +408,38 @@ fn a_launch_task_is_still_read_for_a_session_found_through_its_command_line() {
 
     let mut scanner = env.scanner(procs);
     assert_eq!(scanner.processes()[0].launch_task_id, Some(6501));
+}
+
+#[test]
+fn an_empty_process_listing_is_treated_as_a_failed_read() {
+    // `list()` cannot fail — `exec` returns an empty string for a spawn failure
+    // or a timeout — so `ps` falling over looks exactly like "nothing is
+    // running". Treated as truth it wiped every pid cache, which forced the
+    // next tick to re-read every cwd with `lsof`: the slowest call there is, at
+    // the moment the machine is least able to serve it. The dashboard blanked.
+    let env = Env::new();
+    env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(1, "claude", Some(CWD), 0);
+    let mut scanner = env.scanner(procs.clone());
+    assert_eq!(scanner.scan_sessions(SystemTime::now()).len(), 1);
+    let after_first = procs.calls().cwd;
+
+    // `ps` returns nothing at all.
+    procs.remove(1);
+    assert!(
+        scanner.scan_sessions(SystemTime::now()).is_empty(),
+        "a failed read must report no sessions, not invent them"
+    );
+
+    // The process was there all along. Nothing was re-read, because nothing was
+    // thrown away.
+    procs.add(1, "claude", Some(CWD), 0);
+    let sessions = scanner.scan_sessions(SystemTime::now());
+    assert_eq!(sessions.len(), 1, "the session did not come back");
+    assert_eq!(
+        procs.calls().cwd,
+        after_first,
+        "the cache was discarded on a failed read and had to be rebuilt"
+    );
 }
