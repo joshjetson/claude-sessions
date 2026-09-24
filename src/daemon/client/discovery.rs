@@ -143,14 +143,31 @@ pub fn spawn_daemon(paths: &Paths, port: u16) -> Result<Health, String> {
     // A daemon that dies on startup must not be invisible: this file is the
     // only place a detached process can say why, and `daemon status` and
     // `doctor` both read it back.
+    //
+    // When the log cannot be opened the daemon gets no output at all rather
+    // than this terminal's. A detached process that inherits the TTY keeps
+    // writing to it long after the dashboard has taken the alternate screen,
+    // and every line it prints lands on top of the frame.
     let _ = std::fs::create_dir_all(&paths.runtime_dir);
-    if let Ok(log) = std::fs::OpenOptions::new()
+    let log = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(protocol::daemon_log_path(paths))
-    {
-        if let Ok(errors) = log.try_clone() {
+        .open(protocol::daemon_log_path(paths));
+    match log.and_then(|log| log.try_clone().map(|errors| (log, errors))) {
+        Ok((log, errors)) => {
             command.stdout(log).stderr(errors);
+        }
+        Err(error) => {
+            crate::errorlog::record(
+                "daemon",
+                &format!(
+                    "Could not open {} for the daemon's output: {error}",
+                    protocol::daemon_log_path(paths).display()
+                ),
+            );
+            command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
         }
     }
     #[cfg(unix)]

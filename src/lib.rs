@@ -16,6 +16,7 @@ pub mod dailylog;
 pub mod db;
 pub mod deploy;
 pub mod diagnostics;
+pub mod errorlog;
 pub mod gitlab;
 pub mod http;
 pub mod journal;

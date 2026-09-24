@@ -157,6 +157,10 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         );
     }
 
+    // First, so an error raised while the feed is still being opened — a
+    // daemon log that cannot be written, say — already has a file to go to.
+    crate::errorlog::install(&paths, "dashboard");
+
     let services = BoardServices::new(
         paths.clone(),
         &config,
@@ -190,6 +194,13 @@ pub fn run_dashboard(paths: Paths, config: ConfigHandle, policy: SpawnPolicy) ->
         crate::ui::board::keys::refresh(&mut state);
     }
 
+    // Declared BEFORE the screen on purpose. Locals drop in reverse order, so
+    // on a panic the screen is released first and only then does this print
+    // its one line about the crash — onto the user's shell, not onto an
+    // alternate screen that is about to disappear. See [`TuiErrors`].
+    //
+    // [`TuiErrors`]: crate::errorlog::TuiErrors
+    let _errors = crate::errorlog::TuiErrors::install();
     let mut screen = CrosstermScreen::new();
     screen.acquire()?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
@@ -290,6 +301,13 @@ fn event_loop(
                 }
                 FeedEvent::Flash(message) => state.flash(message),
             }
+        }
+
+        // Errors from any thread — a failed `kill`, a panicked worker — reach
+        // the screen only through here, as red rows in the Notifications feed.
+        // Nothing else may write to the terminal while this loop owns it.
+        for report in crate::errorlog::drain() {
+            state.push_error(report);
         }
 
         for result in worker.drain() {

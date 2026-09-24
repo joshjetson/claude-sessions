@@ -11,12 +11,17 @@
 //! [`Action`] and run elsewhere (brief §10 mandate #9), which is also what makes
 //! the key handlers testable without a machine to act on.
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::config::ConfigHandle;
+use crate::errorlog::ErrorReport;
 use crate::paths::Paths;
-use crate::types::{ConversationMessage, DefaultView, Notification, NotificationStatus};
+use crate::types::{
+    ConversationMessage, DefaultView, Notification, NotificationKind, NotificationLevel,
+    NotificationStatus,
+};
 use crate::ui::board::slice::{BoardSlice, BoardUpdate};
 use crate::ui::conversation::ConversationMeta;
 use crate::ui::deploy::slice::{DeploySlice, DeployUpdate};
@@ -30,6 +35,26 @@ pub use action::{Action, MergeTarget};
 /// How many notifications the feed keeps. A `VecDeque` rather than Node's
 /// `unshift` + `length = 200` (brief §10 mandate #12).
 pub const MAX_NOTIFICATIONS: usize = 200;
+
+/// How long a repeat of the same error folds into the row already showing it.
+///
+/// An error that repeats — a `kill` that keeps failing, a thread that keeps
+/// panicking — would otherwise push one red row per occurrence and ring once
+/// per row, burying the feed under copies of one line. Inside this window a
+/// repeat bumps the count and the time on the existing row instead, silently.
+pub const ERROR_COALESCE_WINDOW: Duration = Duration::from_secs(60);
+
+/// The id prefix of an error row. These rows exist only in this dashboard:
+/// the engine never saw them, so they are not in its database either.
+pub const LOCAL_ERROR_PREFIX: &str = "local-error-";
+
+/// The error row a repeat folds into, and how many times it has been seen.
+#[derive(Debug, Clone)]
+struct RecentError {
+    id: String,
+    count: u32,
+    last: Instant,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -232,6 +257,11 @@ pub struct AppState {
     /// signature hashing, without hashing anything (brief §10 mandate #7).
     pub dirty: bool,
     pending: VecDeque<Action>,
+    /// Error rows still inside [`ERROR_COALESCE_WINDOW`], keyed by source and
+    /// message. See [`Self::push_error`].
+    recent_errors: HashMap<(String, String), RecentError>,
+    /// Numbers the local error rows, so each one has an id of its own.
+    error_seq: u64,
 }
 
 impl AppState {
@@ -280,6 +310,8 @@ impl AppState {
             quit: None,
             dirty: true,
             pending: VecDeque::new(),
+            recent_errors: HashMap::new(),
+            error_seq: 0,
         }
     }
 
@@ -436,6 +468,62 @@ impl AppState {
             self.notifications.pop_back();
         }
         self.dirty = true;
+    }
+
+    /// An error, as a red row in the Notifications feed.
+    pub fn push_error(&mut self, report: ErrorReport) {
+        self.push_error_at(report, Instant::now());
+    }
+
+    /// The same, at a given moment, so the coalescing window is testable.
+    ///
+    /// A repeat of the same source and message inside
+    /// [`ERROR_COALESCE_WINDOW`] does not add a row and does not ring. It moves
+    /// the existing row to the top, marks it unread again, and bumps the count
+    /// and the time on it. A repeat after the window, or after the row was
+    /// dismissed, is a new row with a new sound.
+    pub fn push_error_at(&mut self, report: ErrorReport, now: Instant) {
+        self.recent_errors
+            .retain(|_, seen| now.saturating_duration_since(seen.last) <= ERROR_COALESCE_WINDOW);
+        let key = (report.source.clone(), report.message.clone());
+        if let Some(seen) = self.recent_errors.get_mut(&key) {
+            if let Some(at) = self.notifications.iter().position(|n| n.id == seen.id) {
+                if let Some(mut row) = self.notifications.remove(at) {
+                    seen.count = seen.count.saturating_add(1);
+                    seen.last = now;
+                    row.title = error_title(&report.source, seen.count);
+                    row.ts = crate::util::iso_now();
+                    row.status = NotificationStatus::Unread;
+                    self.notifications.push_front(row);
+                    self.dirty = true;
+                    return;
+                }
+            }
+        }
+        self.error_seq += 1;
+        let id = format!("{LOCAL_ERROR_PREFIX}{}", self.error_seq);
+        self.recent_errors.insert(
+            key,
+            RecentError {
+                id: id.clone(),
+                count: 1,
+                last: now,
+            },
+        );
+        self.push_notification(Notification {
+            id,
+            title: error_title(&report.source, 1),
+            message: report.message,
+            cwd: String::new(),
+            project: String::new(),
+            session_id: None,
+            task_id: None,
+            level: NotificationLevel::Error,
+            kind: NotificationKind::Info,
+            run_id: String::new(),
+            ts: crate::util::iso_now(),
+            status: NotificationStatus::Unread,
+        });
     }
 
     /// Wake the coordinator of the run this question belongs to.
@@ -618,5 +706,17 @@ impl AppState {
 
     pub fn conv_max_scroll(&self) -> usize {
         self.conv.total_lines.saturating_sub(self.conv.page_height)
+    }
+}
+
+/// An error row's title: what failed, and how often once it has repeated.
+///
+/// The count goes in the title because the title is the part of the row that
+/// is never cut short by a long message.
+fn error_title(source: &str, count: u32) -> String {
+    if count > 1 {
+        format!("Error: {source} (×{count})")
+    } else {
+        format!("Error: {source}")
     }
 }

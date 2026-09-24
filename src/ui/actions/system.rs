@@ -6,7 +6,7 @@
 //! anything — that gate is the reason a test run cannot kill the developer's
 //! own agents.
 
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::thread;
@@ -48,9 +48,14 @@ pub(super) fn purge(
     for entry in entries {
         // An empty pid list is not a failure: the agent is already gone and the
         // tab it left behind is exactly what a purge is for. Node closed it.
-        if !entry.target.pids.is_empty() && kill_pids(&entry.target.pids, policy).is_err() {
-            failed += 1;
-            continue;
+        if !entry.target.pids.is_empty() {
+            if let Err(error) = kill_pids(&entry.target.pids, policy) {
+                if let KillError::Failed(message) = &error {
+                    crate::errorlog::report("kill", message);
+                }
+                failed += 1;
+                continue;
+            }
         }
         thread::sleep(PURGE_GRACE);
         let reference = crate::term::SessionRef {
@@ -100,7 +105,52 @@ pub(super) fn play(file: &str, policy: SpawnPolicy) {
     if policy.check("play a sound").is_err() {
         return;
     }
-    let _ = Command::new("afplay").arg(file).spawn();
+    // No inherited stdio. `afplay` prints its complaint about a missing file
+    // straight to the terminal, and on the alternate screen that text sits on
+    // top of the dashboard until a restart.
+    let child = Command::new("afplay")
+        .arg(file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn();
+    let child = match child {
+        Ok(child) => child,
+        Err(err) => {
+            // The log only. A failed sound raised as a notification would ring
+            // again, and fail again.
+            crate::errorlog::record("sound", &format!("Could not play {file}: {err}"));
+            return;
+        }
+    };
+    // Waited on off the worker thread, so a sound never delays the next
+    // action. The wait also reaps the child, which a dropped `Child` never
+    // does: every notification used to leave a zombie behind until exit.
+    let file = file.to_string();
+    let _ = thread::Builder::new()
+        .name("claude-sessions-sound".into())
+        .spawn(move || {
+            if let Ok(output) = child.wait_with_output() {
+                if !output.status.success() {
+                    crate::errorlog::record(
+                        "sound",
+                        &failure("afplay", &file, &output.status, &output.stderr),
+                    );
+                }
+            }
+        });
+}
+
+/// One sentence for a child that exited non-zero: what it was asked to do,
+/// how it exited, and whatever it said on stderr.
+fn failure(program: &str, target: &str, status: &ExitStatus, stderr: &[u8]) -> String {
+    let said = String::from_utf8_lossy(stderr);
+    let said = said.trim();
+    if said.is_empty() {
+        format!("{program} {target} exited with {status}")
+    } else {
+        format!("{program} {target} exited with {status}: {said}")
+    }
 }
 
 /// Open a terminal on the server a project runs on.
@@ -159,29 +209,68 @@ pub(super) fn ssh(
     }
 }
 
+/// Why a SIGTERM did not go out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum KillError {
+    /// Nothing was attempted: no pids, no signals on this platform, or the
+    /// spawn gate said no. A sentence for the status line, not an error.
+    Refused(String),
+    /// `kill` ran and failed, or could not start. A real error, for the log
+    /// and the Notifications feed.
+    Failed(String),
+}
+
 /// SIGTERM, through the same gate every other child process goes through.
 ///
 /// `/bin/kill` rather than a raw syscall on purpose: [`SpawnPolicy`] guards
 /// process *starts*, so routing the signal through one means a test run cannot
 /// kill anything even by accident — which is exactly the failure the policy was
 /// written for.
-pub(super) fn kill_pids(pids: &[u32], policy: SpawnPolicy) -> Result<(), String> {
+///
+/// The child's stdout and stderr are captured, never inherited. `kill: 4242:
+/// No such process` used to print straight onto the dashboard, and the exit
+/// code was ignored, so the same keypress also flashed "Sent SIGTERM". A
+/// non-zero exit is now a [`KillError::Failed`] that carries what `kill` said.
+pub(super) fn kill_pids(pids: &[u32], policy: SpawnPolicy) -> Result<(), KillError> {
     if pids.is_empty() {
-        return Err("Nothing to kill.".to_string());
+        return Err(KillError::Refused("Nothing to kill.".to_string()));
     }
     if !crate::platform::PROCESS_SIGNALS {
-        return Err(crate::platform::unsupported("Signalling a session"));
+        return Err(KillError::Refused(crate::platform::unsupported(
+            "Signalling a session",
+        )));
     }
     policy
         .check("kill a session")
-        .map_err(|refused| refused.message)?;
+        .map_err(|refused| KillError::Refused(refused.message))?;
     let mut command = Command::new("kill");
     command.arg("-TERM");
     for pid in pids {
         command.arg(pid.to_string());
     }
-    match command.status() {
-        Ok(_) => Ok(()),
-        Err(err) => Err(format!("Could not signal the session: {err}")),
+    let listed = pids
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(KillError::Failed(failure(
+            "kill -TERM",
+            &listed,
+            &output.status,
+            &output.stderr,
+        ))),
+        Err(err) => Err(KillError::Failed(format!(
+            "Could not signal the session: {err}"
+        ))),
     }
 }
+
+#[cfg(test)]
+mod tests;
