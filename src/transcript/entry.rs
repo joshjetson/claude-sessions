@@ -221,6 +221,32 @@ fn is_truthy(value: &Value) -> bool {
     }
 }
 
+/// The sentence Claude Code puts in a rejected tool call's result when the
+/// person declined without saying how to go on. The agent stops, and the
+/// interrupt marker follows it. A rejection that carries the person's
+/// instructions says "the user said:" instead, and the agent carries on, so
+/// that one is deliberately not matched.
+const DENIAL_STOP: &str = "STOP what you are doing and wait for the user";
+
+/// Text that means the turn ended with nothing more coming from the agent.
+///
+/// - `[Request interrupted by user]` and `[Request interrupted by user for
+///   tool use]`: the person pressed Escape, or denied a permission prompt.
+/// - [`DENIAL_STOP`]: the rejected tool call's own result.
+/// - `<local-command-stdout>` and `<local-command-stderr>`: a local slash
+///   command such as `/model` printed its output. The agent does not answer
+///   these.
+/// - `<bash-stdout>` and `<bash-stderr>`: the person ran a `!` shell command.
+fn is_turn_ender(text: &str) -> bool {
+    let head = text.trim_start();
+    head.starts_with("[Request interrupted by user")
+        || head.starts_with("<local-command-stdout>")
+        || head.starts_with("<local-command-stderr>")
+        || head.starts_with("<bash-stdout>")
+        || head.starts_with("<bash-stderr>")
+        || text.contains(DENIAL_STOP)
+}
+
 fn non_empty(value: &Option<String>) -> Option<&str> {
     value.as_deref().filter(|s| !s.is_empty())
 }
@@ -327,6 +353,56 @@ impl Entry {
             .any(|block| matches!(block, ContentBlock::ToolResult(_)))
     }
 
+    /// Whether this line is part of the conversation, and so may drive the
+    /// session's status.
+    ///
+    /// An allowlist, not a denylist. Current Claude Code ends almost every
+    /// transcript on bookkeeping — `attachment` (hook results, token
+    /// reminders), `last-prompt`, `ai-title`, `mode`, `permission-mode`,
+    /// `cost-state`, `file-history-snapshot`, `queue-operation`, and system
+    /// lines such as `stop_hook_summary` and `away_summary` — and it adds new
+    /// kinds between releases. When the status machine read whichever line was
+    /// last, every one of those reported "idle", including the hook results
+    /// written after each tool call and each tool result. A new bookkeeping
+    /// kind now defaults to "ignored", which leaves the status alone, rather
+    /// than to "idle", which is wrong while the agent works.
+    ///
+    /// The `system` subtypes kept are the ones that change whose turn it is:
+    /// `turn_duration` (the turn finished), `compact_boundary` (a compaction
+    /// finished) and `local_command` (a local slash command printed its
+    /// output, and the agent does not reply to those).
+    pub fn drives_status(&self) -> bool {
+        match &self.kind {
+            Some(EntryKind::User | EntryKind::Assistant | EntryKind::Progress) => true,
+            Some(EntryKind::System) => matches!(
+                self.subtype.as_deref(),
+                Some("turn_duration" | "compact_boundary" | "local_command")
+            ),
+            _ => false,
+        }
+    }
+
+    /// A `user` line that ends the turn with no reply to come. See
+    /// [`LastEntry::ends_turn`] for the shapes, and [`is_turn_ender`] for the
+    /// exact markers.
+    fn ends_turn(&self) -> bool {
+        if !self.is(EntryKind::User) {
+            return false;
+        }
+        let Some(message) = self.message.as_ref() else {
+            return false;
+        };
+        match &message.content {
+            Content::Text(text) => is_turn_ender(text),
+            Content::Blocks(blocks) => blocks.iter().any(|block| match block {
+                ContentBlock::Raw(text) | ContentBlock::Text(text) => is_turn_ender(text),
+                ContentBlock::ToolResult(Some(text)) => is_turn_ender(text),
+                _ => false,
+            }),
+            Content::Absent => false,
+        }
+    }
+
     /// The projection the status machine and the activity label consume. Keeping
     /// only this much means the daemon can hold one per session without pinning
     /// whole message bodies in memory.
@@ -339,6 +415,10 @@ impl Entry {
             tool_uses: self.tool_use_names(),
             has_tool_result: self.has_tool_result(),
             progress: self.data.clone(),
+            ends_turn: self.ends_turn(),
+            // The accumulator fills this in: it is a property of every line
+            // folded so far, not of this one alone.
+            activity_at: None,
         }
     }
 }

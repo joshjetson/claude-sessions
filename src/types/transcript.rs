@@ -45,7 +45,8 @@ pub struct CumulativeUsage {
 
 /// `entry.type` of a transcript line. Claude Code adds new values between
 /// releases, so unrecognised ones are carried through as [`EntryKind::Other`]
-/// rather than dropped — the status machine's fall-through depends on it.
+/// rather than dropped. The status machine ignores them: see
+/// `Entry::drives_status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum EntryKind {
@@ -142,6 +143,26 @@ pub struct LastEntry {
     pub has_tool_result: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<ProgressData>,
+    /// The person ended the turn, so nothing is running and nothing is asked.
+    ///
+    /// Set on the `user` lines Claude Code writes when a turn stops without a
+    /// reply: the "[Request interrupted by user…]" marker, a rejected tool call
+    /// that tells the agent to stop and wait, and the output of a local slash
+    /// command or a `!` shell command. Without this flag those lines read as
+    /// fresh input, and the row said "awaiting" long after the person had
+    /// answered, denied or interrupted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ends_turn: bool,
+    /// The newest timestamp of any conversational entry folded so far, as the
+    /// transcript wrote it.
+    ///
+    /// The newest, not the last: Claude Code writes some lines out of order (a
+    /// tool result can carry a later stamp than the meta line after it), so the
+    /// last stamp seen can be older than the activity it follows. Bookkeeping
+    /// lines never move it, because they are written at moments unrelated to
+    /// the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_at: Option<String>,
 }
 
 impl Default for EntryKind {
@@ -178,6 +199,15 @@ impl LastEntry {
     /// A `user` entry that is a tool's output, not a person's input.
     pub fn is_tool_result(&self) -> bool {
         matches!(self.kind, EntryKind::User) && self.has_tool_result
+    }
+
+    /// [`Self::activity_at`] as an instant, or `None` when no conversational
+    /// entry carried a readable timestamp.
+    pub fn activity_instant(&self) -> Option<std::time::SystemTime> {
+        self.activity_at
+            .as_deref()
+            .and_then(crate::util::parse_timestamp)
+            .map(std::time::SystemTime::from)
     }
 }
 

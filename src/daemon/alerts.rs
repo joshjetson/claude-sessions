@@ -130,10 +130,12 @@ pub fn detect_stalls<'a>(
             session_id: link.session_id.clone(),
             cwd: session.cwd.clone(),
             silent,
-            awaiting: matches!(
-                session.status,
-                SessionStatus::Awaiting | SessionStatus::AwaitingInput
-            ),
+            // Only a real hand-back: a question, a plan, or a permission
+            // prompt. `AwaitingInput` meant "the person typed and nothing came
+            // back", which is the agent thinking or dead, not waiting on you.
+            // Nothing produces it any more, and it must not word a stall as
+            // "waiting on you" if an older daemon's state still carries it.
+            awaiting: session.status == SessionStatus::Awaiting,
         });
     }
     out

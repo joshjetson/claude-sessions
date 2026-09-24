@@ -14,9 +14,13 @@ pub enum SessionStatus {
     Working,
     #[default]
     Idle,
-    /// A tool call that has been in flight long enough to be waiting on
-    /// something outside the session — most often a permission prompt.
+    /// The agent waits on the person: an unanswered `AskUserQuestion`, a plan
+    /// up for approval, or (when the hooks are installed) a permission prompt.
     Awaiting,
+    /// No longer produced. It meant "the person typed and nothing came back",
+    /// which is the agent thinking, not the agent waiting, and it stuck on
+    /// "awaiting" after every interrupt and denial. The variant stays so a
+    /// dashboard can still read the wire format of an older daemon.
     AwaitingInput,
     Compacting,
     Starting,

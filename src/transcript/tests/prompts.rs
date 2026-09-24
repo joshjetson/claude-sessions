@@ -44,7 +44,7 @@ fn an_empty_file_yields_an_empty_result() {
 }
 
 #[test]
-fn a_file_of_only_ignored_entry_types_yields_nothing_but_a_last_entry() {
+fn a_file_of_only_ignored_entry_types_yields_nothing_at_all() {
     let body = format!(
         "{}{}{}",
         line(json!({ "type": "mode", "mode": "default", "sessionId": "s" })),
@@ -55,12 +55,80 @@ fn a_file_of_only_ignored_entry_types_yields_nothing_but_a_last_entry() {
     assert!(parse_conversation(&t.path).expect("parse").is_empty());
     let parsed = parse_session_file(&t.path).expect("parse");
     assert!(parsed.prompts.is_empty());
-    // The trailing entry is still recorded: an unknown type reaching the status
-    // machine is what makes it fall through to idle rather than guess.
-    assert_eq!(
-        parsed.last_entry.expect("last entry").kind.as_str(),
-        "pr-link"
+    // Bookkeeping never drives the status, so there is no trailing entry for
+    // the status machine to read, and it reports idle for having none.
+    assert!(parsed.last_entry.is_none());
+}
+
+#[test]
+fn bookkeeping_after_the_conversation_leaves_the_trailing_entry_alone() {
+    // The shape every tool call leaves when PreToolUse / PostToolUse hooks are
+    // installed: the tool call, then a hook result, a token reminder and the
+    // mode lines. The tool call must stay the entry the status machine reads.
+    let body = format!(
+        "{}{}{}{}",
+        line(json!({
+            "type": "assistant",
+            "timestamp": "2026-08-01T10:00:00.000Z",
+            "message": { "role": "assistant", "content": [
+                { "type": "tool_use", "name": "Bash", "input": {} }
+            ]}
+        })),
+        line(json!({
+            "type": "attachment",
+            "timestamp": "2026-08-01T10:00:00.300Z",
+            "attachment": { "type": "hook_success" }
+        })),
+        line(json!({ "type": "last-prompt" })),
+        line(json!({ "type": "permission-mode", "permissionMode": "default" })),
     );
+    let t = Transcript::new(&body);
+    let parsed = parse_session_file(&t.path).expect("parse");
+    let last = parsed.last_entry.expect("last entry");
+    assert_eq!(last.kind.as_str(), "assistant");
+    assert_eq!(last.tool_uses, vec!["Bash".to_string()]);
+    // The attachment's later stamp is not conversational activity.
+    assert_eq!(
+        last.activity_at.as_deref(),
+        Some("2026-08-01T10:00:00.000Z")
+    );
+    // The session's own "last active" stamp does include it.
+    assert_eq!(parsed.last_timestamp, "2026-08-01T10:00:00.300Z");
+}
+
+#[test]
+fn activity_is_the_newest_stamp_not_the_last_one_read() {
+    // Real transcripts write a tool result, then a meta line stamped earlier.
+    let body = format!(
+        "{}{}",
+        line(json!({
+            "type": "user",
+            "timestamp": "2026-08-01T10:00:57.609Z",
+            "toolUseResult": { "ok": true },
+            "message": { "role": "user", "content": [
+                { "type": "tool_result", "content": "ok" }
+            ]}
+        })),
+        line(json!({
+            "type": "user",
+            "isMeta": true,
+            "timestamp": "2026-08-01T10:00:57.395Z",
+            "message": { "role": "user", "content": [
+                { "type": "text", "text": "Base directory for this skill: /x" }
+            ]}
+        })),
+    );
+    let t = Transcript::new(&body);
+    let parsed = parse_session_file(&t.path).expect("parse");
+    let last = parsed.last_entry.expect("last entry");
+    // The meta line is the newest conversational entry by position ...
+    assert!(!last.has_tool_result);
+    // ... and the activity clock keeps the newer stamp.
+    assert_eq!(
+        last.activity_at.as_deref(),
+        Some("2026-08-01T10:00:57.609Z")
+    );
+    assert_eq!(parsed.last_timestamp, "2026-08-01T10:00:57.609Z");
 }
 
 #[test]

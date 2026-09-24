@@ -19,14 +19,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::hook_state::{session_status, HookStateCache};
 use crate::paths::Paths;
 use crate::scan::{discover_projects, is_compacting, Scanner};
 use crate::transcript::{Collect, TranscriptCursor};
 use crate::types::{Notification, RawSession, Session, SessionStatus};
 use crate::ui::tree::SessionsByProject;
-use crate::util::{
-    activity_label, detect_session_status, parse_timestamp, project_name, trim_trailing_separators,
-};
+use crate::util::{activity_label, parse_timestamp, project_name, trim_trailing_separators};
 
 /// Steady-state scan cadence.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(1000);
@@ -183,8 +182,9 @@ fn scan_loop(
     events: Sender<FeedEvent>,
     commands: Receiver<Command>,
 ) {
-    let mut scanner = Scanner::system(paths);
+    let mut scanner = Scanner::system(paths.clone());
     let mut cursors: HashMap<PathBuf, TranscriptCursor> = HashMap::new();
+    let mut hooks = HookStateCache::new();
     let mut discovered: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut discovered_at: Option<Instant> = None;
     let mut fast_until: Option<Instant> = None;
@@ -237,8 +237,18 @@ fn scan_loop(
 
         let sessions: Vec<Session> = raw
             .into_iter()
-            .map(|session| enrich(session, &mut cursors, &mut scanner, wall))
+            .map(|session| {
+                enrich(
+                    session,
+                    &mut cursors,
+                    &mut scanner,
+                    &mut hooks,
+                    &paths,
+                    wall,
+                )
+            })
             .collect();
+        hooks.sweep();
 
         // A bad tick must never kill the loop; a dead channel means the
         // dashboard has gone, which does.
@@ -262,6 +272,8 @@ fn enrich(
     raw: RawSession,
     cursors: &mut HashMap<PathBuf, TranscriptCursor>,
     scanner: &mut Scanner,
+    hooks: &mut HookStateCache,
+    paths: &Paths,
     now: SystemTime,
 ) -> Session {
     let Some(path) = raw.session_file.clone() else {
@@ -285,7 +297,21 @@ fn enrich(
     let status = if compacting {
         SessionStatus::Compacting
     } else {
-        detect_session_status(parsed.last_entry.as_ref(), raw.session_mtime, now)
+        // The same function the daemon calls: aged from the conversation's
+        // newest timestamp (the mtime only when there is none), and combined
+        // with the hook state. This path used to age from the mtime alone, so
+        // the embedded dashboard and the daemon disagreed about one session.
+        let stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_default();
+        let hook = hooks.lookup(paths, &[stem, &parsed.session_id]);
+        session_status(
+            parsed.last_entry.as_ref(),
+            raw.session_mtime,
+            hook.as_ref(),
+            now,
+        )
     };
     let activity_detail = if compacting {
         "compacting".to_string()

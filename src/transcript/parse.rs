@@ -13,12 +13,15 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+
 use super::entry::{Content, ContentBlock, Entry};
 use super::tool_use::format_tool_use;
 use crate::types::{
     ConversationMessage, CumulativeUsage, LastEntry, MessageRole, ParsedSession, Prompt,
     SessionMetaLite, Usage,
 };
+use crate::util::parse_timestamp;
 
 /// First window read back from the end of a transcript.
 pub const INITIAL_TAIL_SIZE: u64 = 512 * 1024;
@@ -50,6 +53,9 @@ pub(crate) struct Accumulator {
     last_timestamp: String,
     last_usage: Option<Usage>,
     last_entry: Option<LastEntry>,
+    /// The newest conversational timestamp so far, parsed for comparison and
+    /// kept raw for the projection. See [`LastEntry::activity_at`].
+    activity_at: Option<(DateTime<Utc>, String)>,
     cumulative: CumulativeUsage,
     /// Capped as it grows; Node pushed every prompt and sliced at the end.
     prompts: VecDeque<Prompt>,
@@ -65,6 +71,7 @@ impl Accumulator {
             last_timestamp: String::new(),
             last_usage: None,
             last_entry: None,
+            activity_at: None,
             cumulative: CumulativeUsage::default(),
             prompts: VecDeque::with_capacity(MAX_PROMPTS),
             messages: Vec::new(),
@@ -85,10 +92,25 @@ impl Accumulator {
     }
 
     fn push_entry(&mut self, entry: &Entry) {
-        // Every entry updates the trailing projection, including the bookkeeping
-        // types the rest of this function ignores: the status machine reads the
-        // *last* line of the file, whatever it happens to be.
-        self.last_entry = Some(entry.last_entry());
+        // Only the conversation moves the trailing projection. Bookkeeping lines
+        // (hook results, titles, modes, cost snapshots) land after nearly every
+        // tool call and at the end of nearly every turn, and when they drove
+        // the status machine a session read "idle" in the middle of its work.
+        // See `Entry::drives_status` for the allowlist.
+        if entry.drives_status() {
+            if let Some(stamp) = parse_timestamp(entry.timestamp()) {
+                if self
+                    .activity_at
+                    .as_ref()
+                    .is_none_or(|(newest, _)| stamp >= *newest)
+                {
+                    self.activity_at = Some((stamp, entry.timestamp().to_string()));
+                }
+            }
+            let mut projection = entry.last_entry();
+            projection.activity_at = self.activity_at.as_ref().map(|(_, raw)| raw.clone());
+            self.last_entry = Some(projection);
+        }
 
         // The first id wins (a transcript names itself once); the newest branch
         // and timestamp win (both move mid-session).
@@ -100,8 +122,21 @@ impl Accumulator {
         if let Some(branch) = entry.git_branch() {
             self.git_branch = branch.to_string();
         }
+        // The newest stamp, not the last one read: lines arrive slightly out of
+        // order, and "last active" must never move backwards. A stamp that does
+        // not parse still counts when there is nothing better to compare with.
         if !entry.timestamp().is_empty() {
-            self.last_timestamp = entry.timestamp().to_string();
+            let newer = match (
+                parse_timestamp(entry.timestamp()),
+                parse_timestamp(&self.last_timestamp),
+            ) {
+                (Some(stamp), Some(held)) => stamp >= held,
+                (None, Some(_)) => false,
+                (_, None) => true,
+            };
+            if newer {
+                self.last_timestamp = entry.timestamp().to_string();
+            }
         }
 
         if entry.message.is_none() {

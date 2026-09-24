@@ -4,7 +4,7 @@
 //! (Node's `test/tools/make-fixtures.js` did the scrubbing; structure, entry
 //! types, tool names, usage numbers and timestamps all survive verbatim). They
 //! are the only place the parser meets the real format, so both this module's
-//! tests and the status machine's known-gap canaries in `util::tests::status`
+//! tests and the status machine's fixture checks in `util::tests::status`
 //! read them through here.
 
 use std::path::PathBuf;

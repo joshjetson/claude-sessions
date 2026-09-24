@@ -28,14 +28,17 @@ pub const CONTEXT_WINDOW: u64 = 200_000;
 /// The long-context window the 1M-token models run with.
 pub const LARGE_CONTEXT_WINDOW: u64 = 1_000_000;
 
-/// A transcript younger than this is working, whatever its last entry says —
-/// the file is being appended to right now.
-const FRESH_WRITE: Duration = Duration::from_secs(10);
-/// How long a pending tool call stays "working" before it is assumed to be
-/// waiting on something outside the session (usually a permission prompt).
-const TOOL_CALL_GRACE: Duration = Duration::from_secs(30);
-/// How long a prose reply reads as "your turn" before the session goes idle.
-const REPLY_GRACE: Duration = Duration::from_secs(60);
+/// How long the agent may stay silent after the conversation last moved, with
+/// no tool call in flight, before the session reads as idle.
+///
+/// That silence is the agent generating: thinking after a tool result, writing
+/// a long reply, or streaming a large tool call whose line lands only when it
+/// is complete. Each of those routinely passes a minute. Nothing in that state
+/// waits on the person, so the old rule that turned it into "awaiting" after
+/// thirty seconds was wrong every time a turn thought hard. The cap exists for
+/// a session that hung or lost its connection: it stops a dead turn from
+/// reading "working" forever.
+pub const GENERATION_STALL: Duration = Duration::from_secs(10 * 60);
 
 /// Reduce a human-written name to the part worth comparing: lowercase, letters
 /// and digits only.
@@ -201,9 +204,9 @@ pub fn format_context_usage(usage: Option<&Usage>) -> String {
 }
 
 impl SessionStatus {
-    /// The word shown in the session row. Note `Awaiting` and `AwaitingInput`
-    /// deliberately render the same: the distinction drives alerting, not the
-    /// reader's attention.
+    /// The word shown in the session row. `AwaitingInput` renders the same
+    /// as `Awaiting`. Nothing in this build produces it any more, but a daemon
+    /// from an older release can still send it.
     pub fn label(self) -> &'static str {
         match self {
             SessionStatus::Working => "working",
@@ -283,84 +286,92 @@ pub fn activity_label(last_entry: Option<&LastEntry>) -> String {
     }
 }
 
-/// The status machine, driven by the transcript's trailing entry and the file's
-/// mtime. `now` is a parameter so a whole refresh judges every session against
-/// one instant.
+/// When the conversation last moved: the newest conversational timestamp the
+/// transcript carries, or `fallback` (the file's mtime) when it carries none.
+///
+/// The daemon and the embedded scan both age a session through this, so the
+/// two can never disagree about how old the same transcript is. The mtime is
+/// only a fallback because bookkeeping lines touch it at moments unrelated to
+/// the conversation.
+pub fn activity_time(last_entry: Option<&LastEntry>, fallback: SystemTime) -> SystemTime {
+    last_entry
+        .and_then(LastEntry::activity_instant)
+        .unwrap_or(fallback)
+}
+
+/// The status machine, driven by the transcript's newest conversational entry
+/// and the time the conversation last moved (see [`activity_time`]). `now` is a
+/// parameter so a whole refresh judges every session against one instant.
+///
+/// The rules, in order:
+///
+/// | Newest conversational entry                          | Status                                   |
+/// |------------------------------------------------------|------------------------------------------|
+/// | none                                                 | idle                                     |
+/// | assistant `AskUserQuestion` / `ExitPlanMode` call    | awaiting                                 |
+/// | a line that ends the turn (interrupt, stop-denial, local command output) | idle             |
+/// | `system` (`turn_duration`, `compact_boundary`, `local_command`) | idle                          |
+/// | `progress`                                           | working                                  |
+/// | assistant with any other tool call                   | working, with no time limit              |
+/// | user line (prompt, tool result, meta), or assistant prose / thinking | working for [`GENERATION_STALL`], then idle |
+///
+/// Only the transcript is read here. A permission prompt looks exactly like a
+/// slow tool call in the transcript, so this function reports both as working.
+/// The hook state in [`crate::hook_state`] tells them apart when it is
+/// installed.
 pub fn detect_session_status(
     last_entry: Option<&LastEntry>,
-    session_mtime: SystemTime,
+    activity_at: SystemTime,
     now: SystemTime,
 ) -> SessionStatus {
     let Some(entry) = last_entry else {
         return SessionStatus::Idle;
     };
-    // A future mtime (clock skew, a copied transcript) reads as age zero, which
-    // is what Node's negative `ageSec < 10` comparison did too.
-    let age = now.duration_since(session_mtime).unwrap_or(Duration::ZERO);
+    // A future stamp (clock skew, a copied transcript) reads as age zero.
+    let age = now.duration_since(activity_at).unwrap_or(Duration::ZERO);
 
-    // A question or a plan awaiting approval is checked FIRST, ahead of the
-    // freshness rule below. It is unambiguous — the agent has handed control
-    // back — so there is nothing for recency to add, and without this the row
-    // read "working" for the first ten seconds of every question asked.
+    // A question or a plan awaiting approval. It is unambiguous: the agent has
+    // handed control back, so recency has nothing to add. With bookkeeping
+    // lines ignored, the unanswered call itself is the newest conversational
+    // entry until the answer lands as its tool result.
     if entry.awaits_user_decision() {
         return SessionStatus::Awaiting;
     }
 
-    if age < FRESH_WRITE {
-        return SessionStatus::Working;
-    }
-
-    // A tool's output came back and the agent has not spoken yet: it is
-    // thinking, or running the next tool. Nobody is waiting on the person,
-    // however long it takes — a long reasoning block routinely passes thirty
-    // seconds.
-    if entry.is_tool_result() {
-        return SessionStatus::Working;
+    // The person ended the turn: an interrupt, a denial that told the agent to
+    // stop, or the output of a local command. Nothing runs and nothing is
+    // asked. This used to fall into the "user typed something" branch and read
+    // "awaiting" forever.
+    if entry.ends_turn {
+        return SessionStatus::Idle;
     }
 
     match &entry.kind {
-        // The turn finished and Claude Code wrote its duration line.
-        EntryKind::System if entry.subtype.as_deref() == Some("turn_duration") => {
-            SessionStatus::Idle
-        }
+        // Only the subtypes that change whose turn it is reach this point (see
+        // `Entry::drives_status`): a finished turn, a finished compaction, and
+        // a local command's output. The agent owes nothing after any of them.
+        EntryKind::System => SessionStatus::Idle,
         EntryKind::Progress => SessionStatus::Working,
-        // A user entry is either a tool result mid-turn or fresh input.
-        EntryKind::User => {
-            if age < TOOL_CALL_GRACE {
+        // A pending tool call is the agent working, with no time limit. A
+        // build, a test suite, a browser step and a sleep loop all run for
+        // minutes. A permission prompt looks the same here, and the hook state
+        // is what tells the two apart.
+        EntryKind::Assistant if entry.has_tool_use() => SessionStatus::Working,
+        // Everything else means the agent owes the next line: it is thinking
+        // after a prompt or a tool result, or it is still writing after prose
+        // or a thinking block. A finished reply is followed by `turn_duration`
+        // within a second, so prose that stays newest is mid-turn. Only a
+        // silence past the stall cap reads as idle.
+        EntryKind::User | EntryKind::Assistant => {
+            if age < GENERATION_STALL {
                 SessionStatus::Working
-            } else {
-                SessionStatus::AwaitingInput
-            }
-        }
-        EntryKind::Assistant => {
-            // A pending tool call is the agent WORKING, with no time limit.
-            // Duration says nothing: a build, a test suite, a browser step and a
-            // sleep loop all run for minutes. Calling those "awaiting" told you a
-            // session wanted you when it was busy — one task sat four minutes
-            // into a shell script reading "awaiting" while its own activity
-            // label said "running command".
-            //
-            // A permission prompt also looks like this and cannot be told apart
-            // from a slow tool in the transcript. That case is handled where it
-            // belongs: the daemon still raises a "may be blocked" NOTIFICATION
-            // after a couple of minutes of silence. An advisory nudge costs
-            // little; a status line that misreports every long-running session
-            // costs attention all day.
-            if entry.has_tool_use() {
-                SessionStatus::Working
-            } else if age < REPLY_GRACE {
-                SessionStatus::AwaitingInput
             } else {
                 SessionStatus::Idle
             }
         }
-        // KNOWN GAP (pinned by the Node suite, preserved deliberately): current
-        // Claude Code ends transcripts on bookkeeping entries — `last-prompt`,
-        // `file-history-snapshot`, `attachment`, `ai-title`, `mode`, `pr-link` —
-        // so they land here and report idle, and the conversational branches
-        // above are mostly unreachable in practice. Fixing it means teaching the
-        // machine about those types, not changing this fall-through.
-        _ => SessionStatus::Idle,
+        // Unreachable through the parser, which never projects a kind outside
+        // the allowlist. A hand-built projection still gets an answer.
+        EntryKind::Other(_) => SessionStatus::Idle,
     }
 }
 

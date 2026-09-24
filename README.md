@@ -22,7 +22,7 @@
 │    ● 8f3a  Edit src/orders/split.rs...  142K (71%)             ││                                    │
 │    ● 514e  idle  44K (22%)  main                               ││You:                                │
 │▼ 📁 dev/api  1 session  96K tokens                             ││the retry test is still flaky — look│
-│    ● c2d1  awaiting input  96K (48%)  fix/webhook-retry        ││at it before we merge               │
+│    ● c2d1  idle  96K (48%)  fix/webhook-retry                  ││at it before we merge               │
 │▼ 📁 dev/site  1 session                                        ││                                    │
 │    ● new  starting…                                            ││Claude:  (+1.4K)                    │
 │                                                                ││[Read: src/webhook/retry.rs]        │
@@ -39,7 +39,7 @@
 │                                                                ││Twenty runs, no failures. Open the  │
 │                                                                ││merge request?                      │
 │                                                                ││                                    │
-│                                                                ││● awaiting input                    │
+│                                                                ││● idle                              │
 ╰────────────────────────────────────────────────────────────────╯╰────────────────────────────────────╯
  09:14:37 PM  │  Tab view  S-Tab panel  ←→ expand  Enter select  o terminal  x kill  X purge  s settings  q quit
 ```
@@ -59,6 +59,7 @@
 - [Environment](#environment)
 - [Terminal Drivers](#terminal-drivers)
 - [Reporting Back: notify / done / blocked](#reporting-back-notify--done--blocked)
+- [Session Status Hooks](#session-status-hooks)
 - [Architecture](#architecture)
 - [Building from Source](#building-from-source)
 - [Ported from the original](#ported-from-the-original)
@@ -189,7 +190,8 @@ with the tmux driver.
 - **Live session discovery** — every Claude Code process on the machine, paired to its own
   transcript by four ranked strategies, grouped by project, appearing the moment it starts
 - **Status at a glance** — working / idle / awaiting-you, per session and per project, from
-  the transcript's last entry rather than from a guess
+  the transcript's newest conversational line, and exact about permission prompts once the
+  [status hook](#session-status-hooks) is installed
 - **Context meter** — per-session token usage and percentage of the context window
 - **Conversation pane** — the transcript as it streams, with syntax-highlighted code blocks
   and rendered tool calls; scroll it, filter it, search it, timestamp it
@@ -237,6 +239,7 @@ One binary, one install. The original shipped seven executables; they are now su
 | `claude-sessions notify [TITLE...] [--title <t>] [--message\|--msg <m>] [--level <l>] [--session <id>]` | Raise a notification for the calling session. The first bare argument is the title and the rest become the message. Exit 1 if nothing is listening |
 | `claude-sessions done [TASK_ID] [--summary-file <path>] [--summary\|--summary-text <text>]` | Report the calling session's work finished. Falls back to `CLAUDE_SESSIONS_TASK_ID`. Writes a marker file — no network, so it works before the daemon is up. Summaries are capped at 8000 characters |
 | `claude-sessions blocked [TASK_ID] [--questions\|--q "a \| b"]` | Report the session blocked on input; questions are split on `\|` |
+| `claude-sessions hook` | Record one Claude Code hook event from stdin, for the session status. Prints nothing and always exits 0. Register it as shown in [Session Status Hooks](#session-status-hooks) |
 | `claude-sessions journal [--stats] [--out <path>] [--no-open]` | Build the reasoning-journal page and open it. `--stats` prints per-repo counts instead |
 | `claude-sessions pipeline [--out <path>] [--no-open]` | Build the pipeline page and open it |
 | `claude-sessions pipeline init <repo> [--pipeline <id>]` | Write the starter `.claude-sessions/pipeline.json` into a repository. Never clobbers an existing one |
@@ -477,24 +480,76 @@ A spawned agent tells the dashboard what happened by running one of three subcom
 prompts the pipelines generate already bake them in with the task id, so this is wired for
 you when you start a task from the board.
 
-They are also ordinary commands, so you can call them from
-[Claude Code hooks](https://docs.claude.com/en/docs/claude-code/hooks) to have any session
-report itself:
-
-```json
-{
-  "hooks": {
-    "Stop": [{ "hooks": [{ "type": "command", "command": "claude-sessions done" }] }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "claude-sessions notify" }] }]
-  }
-}
-```
+Do not register `done`, `notify` or `blocked` as Claude Code hooks. They read their input
+from arguments, not from the hook's stdin: `done` exits 1 in any session that has no task id,
+and `notify` exits 1 when it has no title or no daemon is listening. Each failure shows as a
+hook error in the session. The hook command is `claude-sessions hook` — see
+[Session Status Hooks](#session-status-hooks).
 
 `done` and `blocked` write a marker file rather than making a request, so an agent can sign
 off whether or not a daemon is up; the daemon picks the marker up when it next runs. When a
 `done` marker names a task, the daemon opens the merge request if there is none, moves the
 task to your QA stage, posts the summary to the Odoo chatter as HTML, archives the
 transcript so `claude --resume` still works months later, and writes the day's standup line.
+
+## Session Status Hooks
+
+With no setup, a session's status comes from its transcript. The transcript cannot tell a
+permission prompt from a slow tool: both are a tool call with no result yet. So without hooks
+a session on a permission prompt reads "working", and the daemon raises a "may be waiting on
+a prompt" notification after two minutes of silence.
+
+`claude-sessions hook` makes the status exact. Claude Code runs it on each event below and
+passes the event as JSON on stdin. The command records the newest event per session in
+`~/.claude-sessions/hooks/<session_id>.json` (or under `CLAUDE_SESSIONS_HOME`), and deletes
+that file on `SessionEnd`. It prints nothing and always exits 0, so it never adds text to
+Claude's context and never shows an error in your session.
+
+Add this block to `~/.claude/settings.json`. If a `"hooks"` key already exists, add each entry
+to the array of the same event. Claude Code runs every matching hook, so this coexists with
+the hooks you already have. `claude-sessions` must be on the `PATH` that Claude Code's hook
+shell sees. If it is not, write the absolute path, for example `~/.cargo/bin/claude-sessions`.
+
+Keep the `2>/dev/null || true` guard. A `claude-sessions` build older than this command
+does not know `hook` and exits 2, and a `PreToolUse` hook that exits 2 blocks the tool call.
+With the guard, an old build does nothing and a new build works, so the block is safe to add
+before everyone upgrades.
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "PermissionRequest": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "StopFailure": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "claude-sessions hook 2>/dev/null || true" }] }]
+  }
+}
+```
+
+What each event means for the status:
+
+| Event | Status |
+|---|---|
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `SubagentStop` | working |
+| `PreToolUse` for `AskUserQuestion` or `ExitPlanMode` | awaiting |
+| `PermissionRequest`, `Notification` of type `permission_prompt`, `elicitation_dialog`, `elicitation_url_dialog` or `agent_needs_input` | awaiting |
+| `Notification` of type `elicitation_complete` or `elicitation_response` | working |
+| `Notification` of type `idle_prompt`, `Stop`, `StopFailure`, `SessionStart` | idle |
+| `SessionEnd` | the state file is deleted |
+
+The dashboard compares the hook's time with the transcript's newest conversational line, and
+the newer one wins. A denied prompt fires no hook, but the denial lands in the transcript after
+the `PermissionRequest`, so the row goes back to idle. Compacting and starting keep precedence
+over both.
+
+One gap remains. No hook fires when you approve a permission prompt, so a session reads
+"awaiting" from the approval until the tool finishes and `PostToolUse` fires.
 
 ## Architecture
 

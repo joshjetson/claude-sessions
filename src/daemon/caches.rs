@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::hook_state::HookStateCache;
 use crate::scan::{discover_projects, is_compacting};
 use crate::transcript::{Collect, TaskRefCache, TranscriptCursor};
 use crate::types::ParsedSession;
@@ -53,6 +54,9 @@ pub(crate) struct Caches {
     /// Only misses are kept here; hits live in the scanner's shared cache.
     task_ref_retry: HashMap<PathBuf, SystemTime>,
     discovery: HashMap<PathBuf, Fresh<Vec<String>>>,
+    /// The per-session hook state files, read once per change. See
+    /// [`crate::hook_state`].
+    pub(crate) hooks: HookStateCache,
     opened: u64,
 }
 
@@ -146,6 +150,7 @@ impl Caches {
         self.cursors.retain(|path, _| live.contains(path));
         self.compacting.retain(|path, _| live.contains(path));
         self.task_ref_retry.retain(|path, _| live.contains(path));
+        self.hooks.sweep();
     }
 
     /// Cursors currently open — one per live session, which is the invariant

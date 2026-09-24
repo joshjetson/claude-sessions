@@ -22,10 +22,12 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::time::SystemTime;
 
+use crate::hook_state::session_status;
+use crate::paths::Paths;
 use crate::scan::ProcessSource;
 use crate::transcript::TaskRefCache;
 use crate::types::{RawSession, Session, SessionStatus};
-use crate::util::{activity_label, detect_session_status, project_name, trim_trailing_separators};
+use crate::util::{activity_label, project_name, trim_trailing_separators};
 
 use super::caches::Caches;
 use super::engine::{EngineInner, ScanState};
@@ -88,9 +90,19 @@ impl<S: ProcessSource> EngineInner<S> {
             raw.iter().filter_map(|s| s.session_file.clone()).collect();
 
         let refs = scanner.task_refs();
+        // The sessions a hook has spoken for. The blocked-prompt watcher needs
+        // it: with hooks installed, a pending tool call is a running tool
+        // unless a hook said otherwise, so the transcript-only guess is off.
+        let mut hooked: HashSet<String> = HashSet::new();
         let sessions: Vec<Session> = raw
             .into_iter()
-            .map(|session| enrich(session, caches, refs, now))
+            .map(|session| {
+                let (session, has_hook) = enrich(session, caches, refs, &self.paths, now);
+                if has_hook {
+                    hooked.insert(session.session_id.clone());
+                }
+                session
+            })
             .collect();
 
         // Drop the cursor, the compacting answer and the retry timer for every
@@ -104,7 +116,7 @@ impl<S: ProcessSource> EngineInner<S> {
         // Node's order, kept: the stall watcher reads the links as they were
         // before this tick's linking, so a session linked a moment ago is not
         // immediately judged for silence.
-        self.notify_awaiting_decisions(&sessions, now);
+        self.notify_awaiting_decisions(&sessions, &hooked, now);
         self.notify_stalled_sessions(&sessions, now);
         self.auto_archive_vanished_sessions(&sessions, scanner.task_refs());
         self.link_pending_sessions(&sessions, now);
@@ -140,17 +152,19 @@ impl<S: ProcessSource> EngineInner<S> {
     }
 }
 
-/// A scanned session plus everything its transcript says.
+/// A scanned session plus everything its transcript and its hook state say.
 ///
 /// The transcript is read through the cursor cache, so this costs the bytes
 /// that were appended since the last tick rather than the 512 KB tail the Node
-/// app re-parsed every second for every open session.
+/// app re-parsed every second for every open session. The second value is
+/// whether a hook state file exists for the session.
 fn enrich(
     raw: RawSession,
     caches: &mut Caches,
     refs: &mut TaskRefCache,
+    paths: &Paths,
     now: SystemTime,
-) -> Session {
+) -> (Session, bool) {
     let parsed = raw
         .session_file
         .as_deref()
@@ -164,39 +178,6 @@ fn enrich(
         .as_deref()
         .and_then(|path| caches.task_id(path, refs, now));
 
-    let last_entry = parsed.as_ref().and_then(|p| p.last_entry.clone());
-    let activity_at = parsed
-        .as_ref()
-        .map(|p| p.last_timestamp.as_str())
-        .filter(|ts| !ts.is_empty())
-        .and_then(crate::util::parse_timestamp)
-        .map(SystemTime::from)
-        .unwrap_or(raw.session_mtime);
-    let status = match (compacting, raw.status) {
-        (true, _) => SessionStatus::Compacting,
-        // A placeholder keeps the status the scanner gave it. Node recomputed
-        // here and turned every `starting-<pid>` row into "idle", because a
-        // process with no transcript yet has no trailing entry to judge.
-        (false, Some(status)) => status,
-        // Aged from when the CONVERSATION last moved, not from the file's
-        // mtime.
-        //
-        // Claude Code appends bookkeeping entries — attachment, ai-title, mode,
-        // cost-state and others — at moments unrelated to the conversation, and
-        // every one of those writes touches the mtime. Ageing from the mtime
-        // made an idle session report "working" for ten seconds each time one
-        // landed, so sessions looked like they had started work on their own.
-        //
-        // The mtime is still the fallback for a transcript whose entries carry
-        // no timestamp at all.
-        (false, None) => detect_session_status(last_entry.as_ref(), activity_at, now),
-    };
-    let activity_detail = if compacting {
-        "compacting".to_string()
-    } else {
-        activity_label(last_entry.as_ref())
-    };
-
     // The transcript's own session id wins: it is what `claude --resume` takes,
     // and the process-derived one is a file name.
     let session_id = parsed
@@ -205,7 +186,36 @@ fn enrich(
         .filter(|id| !id.is_empty())
         .unwrap_or(raw.session_id);
 
-    Session {
+    // A hook names the session by its transcript's file stem. That is normally
+    // the transcript's own id too, and both are tried in case they differ.
+    let stem = raw
+        .session_file
+        .as_deref()
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let hook = caches.hooks.lookup(paths, &[&stem, &session_id]);
+
+    let last_entry = parsed.as_ref().and_then(|p| p.last_entry.clone());
+    let status = match (compacting, raw.status) {
+        (true, _) => SessionStatus::Compacting,
+        // A placeholder keeps the status the scanner gave it. Node recomputed
+        // here and turned every `starting-<pid>` row into "idle", because a
+        // process with no transcript yet has no trailing entry to judge.
+        (false, Some(status)) => status,
+        // Aged from when the CONVERSATION last moved, never from bookkeeping
+        // writes, and combined with the hook state. The embedded scan calls the
+        // same function, so the two paths cannot disagree.
+        (false, None) => session_status(last_entry.as_ref(), raw.session_mtime, hook.as_ref(), now),
+    };
+    let activity_detail = if compacting {
+        "compacting".to_string()
+    } else {
+        activity_label(last_entry.as_ref())
+    };
+
+    let session = Session {
         session_id,
         pids: raw.pids,
         cwd: raw.cwd,
@@ -231,5 +241,6 @@ fn enrich(
         cumulative_usage: parsed.as_ref().map(|p| p.cumulative_usage),
         prompts: parsed.map(|p| p.prompts).unwrap_or_default(),
         task_id,
-    }
+    };
+    (session, hook.is_some())
 }
