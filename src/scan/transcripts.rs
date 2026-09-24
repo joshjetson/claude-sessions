@@ -39,8 +39,8 @@ use std::cmp::Reverse;
 
 /// How recently a transcript must have been written to be listed as a session.
 ///
-/// The status machine already draws the fine lines: ten seconds of silence
-/// stops being "working", a minute of it is "idle"
+/// The status machine already draws the fine lines: a finished turn is "idle"
+/// at once, and a turn silent past the stall cap is "idle" too
 /// ([`crate::util::detect_session_status`]). Everything past that reads the
 /// same, so this constant is not about status — it is about whether a person
 /// still thinks of that window as open. A working day is the honest bound: a

@@ -8,6 +8,7 @@
 //! `vanished` module, because archiving is a different kind of work from
 //! raising a notification.
 
+use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use crate::scan::ProcessSource;
@@ -24,7 +25,8 @@ use super::state::SessionIndex;
 /// Marks that the assignment watcher has seen the board at least once.
 const BOOTSTRAP_KEY: &str = "alerts:bootstrapped";
 
-/// How long a pending tool call must sit before it is read as "blocked on you".
+/// How long a pending tool call must sit before it is read as "blocked on you",
+/// for a session with no hook state.
 ///
 /// A permission prompt is NOT `AskUserQuestion` — it is an ordinary tool call
 /// that never gets its result, so [`is_awaiting_user_decision`] cannot see it
@@ -35,7 +37,8 @@ const BOOTSTRAP_KEY: &str = "alerts:bootstrapped";
 /// The cost of the broader check is false positives on genuinely slow tools: a
 /// test run, a build, a browser step. Two minutes clears almost all of those
 /// while still being far better than fifteen. A false "this might want you" is
-/// cheap; a real block nobody hears is not.
+/// cheap; a real block nobody hears is not. With the hooks installed there is
+/// no guess and no dwell: see [`is_blocked_on_tool_call`].
 pub const BLOCKED_TOOL_DWELL: Duration = Duration::from_secs(120);
 
 /// A session is awaiting a user decision when its newest transcript entry is
@@ -51,18 +54,42 @@ pub fn is_awaiting_user_decision(last_entry: Option<&LastEntry>) -> bool {
             .any(|name| name == "AskUserQuestion" || name == "ExitPlanMode")
 }
 
-/// A pending tool call with no result yet, quiet long enough to look stuck
-/// rather than slow.
+/// The session is most likely stopped on a permission prompt.
 ///
-/// [`crate::util::detect_session_status`] already calls this state `awaiting` —
-/// this only adds the dwell time, so the two cannot disagree about what it
-/// means.
-pub fn is_blocked_on_tool_call(session: &Session, now: SystemTime) -> bool {
-    if session.status != SessionStatus::Awaiting {
+/// Two ways to know, depending on whether the hooks are installed (`hooked`
+/// is true when a hook state file exists for the session):
+///
+/// - With hooks, the status says so. `awaiting` that is not a question or a
+///   plan can only come from a `PermissionRequest` or a `permission_prompt`
+///   notification, so it counts at once.
+/// - Without hooks, a pending ordinary tool call quiet for
+///   [`BLOCKED_TOOL_DWELL`] counts. The quiet is measured from the
+///   conversation's newest line, because hook results and other bookkeeping
+///   touch the file's mtime on their own.
+///
+/// This used to require the status `awaiting` AND an ordinary tool call. The
+/// status machine only ever gave `awaiting` to a question, which the caller
+/// already excludes, so the notification could never fire.
+pub fn is_blocked_on_tool_call(session: &Session, hooked: bool, now: SystemTime) -> bool {
+    let asked = is_awaiting_user_decision(session.last_entry.as_ref());
+    if session.status == SessionStatus::Awaiting {
+        return !asked;
+    }
+    // With hooks, a pending tool call that no hook called a prompt is a tool
+    // that is running. Guessing from silence would only add false alarms.
+    if hooked || session.status != SessionStatus::Working || asked {
         return false;
     }
-    last_write(session)
-        .map(|mtime| now.duration_since(mtime).unwrap_or_default())
+    let Some(entry) = session.last_entry.as_ref() else {
+        return false;
+    };
+    if entry.kind != EntryKind::Assistant || !entry.has_tool_use() {
+        return false;
+    }
+    entry
+        .activity_instant()
+        .or_else(|| last_write(session))
+        .map(|since| now.duration_since(since).unwrap_or_default())
         .is_some_and(|silent| silent >= BLOCKED_TOOL_DWELL)
 }
 
@@ -72,7 +99,15 @@ impl<S: ProcessSource> EngineInner<S> {
     ///
     /// Edge-triggered per session: raised when the wait starts, cleared when it
     /// ends, so a session sitting on a question does not notify once a second.
-    pub(crate) fn notify_awaiting_decisions(&self, sessions: &SessionIndex, now: SystemTime) {
+    ///
+    /// `hooked` names the sessions that have a hook state file. See
+    /// [`is_blocked_on_tool_call`].
+    pub(crate) fn notify_awaiting_decisions(
+        &self,
+        sessions: &SessionIndex,
+        hooked: &HashSet<String>,
+        now: SystemTime,
+    ) {
         let mut raise = Vec::new();
         {
             let mut state = self.state();
@@ -81,7 +116,8 @@ impl<S: ProcessSource> EngineInner<S> {
                     continue;
                 }
                 let asked = is_awaiting_user_decision(session.last_entry.as_ref());
-                let blocked = !asked && is_blocked_on_tool_call(session, now);
+                let blocked = !asked
+                    && is_blocked_on_tool_call(session, hooked.contains(&session.session_id), now);
                 let already = state.await_notified.contains(&session.session_id);
                 match (asked || blocked, already) {
                     (true, false) => {
@@ -252,8 +288,8 @@ impl<S: ProcessSource> EngineInner<S> {
 ///    unanswerable by the coordinator and invisible to the reviewer's own relay
 ///    — the reviewer had to find the pane and type into it.
 ///
-///  * FALSE — a tool call has been pending for two minutes, most likely a
-///    permission prompt. That is a modal inside this tool's own UI: it is not
+///  * FALSE — a permission prompt, reported by a hook, or guessed from a tool
+///    call pending for two minutes when no hook is installed. That is a modal inside this tool's own UI: it is not
 ///    in the transcript, nothing can answer it remotely, and only the person at
 ///    the keyboard can clear it. It stays `info`, because marking it answerable
 ///    would invite the coordinator to try and be refused.
@@ -279,7 +315,7 @@ pub(crate) fn awaiting_notification(session: &Session, asked: bool) -> NewNotifi
     let (title, message) = {
         (
             format!("🔔 {project}: Claude may be waiting on a prompt"),
-            "A tool call has been pending for two minutes — most likely a permission prompt. Nothing can answer one of those remotely; open its terminal (press o on the session) to clear it.",
+            "A tool call is waiting, most likely on a permission prompt. Nothing can answer one of those remotely; open its terminal (press o on the session) to clear it.",
         )
     };
     NewNotification {

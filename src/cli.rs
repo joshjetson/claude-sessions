@@ -122,6 +122,8 @@ pub enum Command {
     QaShadow(QaShadowArgs),
     /// Deliver a coordinator's answer to the QA session working a task
     QaAnswer(QaAnswerArgs),
+    /// Record a Claude Code hook event from stdin (register it in settings.json)
+    Hook,
 }
 
 #[derive(Args)]
@@ -258,6 +260,14 @@ pub struct NotifyArgs {
 }
 
 pub fn run() -> Result<()> {
+    // The hook path runs before clap and before the config loads. Claude Code
+    // runs it on every tool call, so it must be fast, and it must print nothing
+    // whatever it is handed: the stdout of some hooks is added to Claude's
+    // context, and a non-zero exit shows an error in the person's session. A
+    // clap usage error or a config warning would break both promises.
+    if std::env::args_os().nth(1).is_some_and(|arg| arg == "hook") {
+        run_hook();
+    }
     let cli = Cli::parse();
     // Paths and config are resolved exactly once, here, and handed down —
     // nothing below reads the environment for itself.
@@ -276,7 +286,21 @@ pub fn run() -> Result<()> {
         }
         Some(Command::QaShadow(args)) => markers::qa_shadow(&paths, args),
         Some(Command::QaAnswer(args)) => markers::qa_answer(&paths, &config, args),
+        // Unreachable: `run` hands `hook` to `run_hook` before clap parses. The
+        // arm exists so the subcommand shows in `--help`.
+        Some(Command::Hook) => run_hook(),
     }
+}
+
+/// `claude-sessions hook`: record the event, print nothing, exit 0.
+///
+/// The panic hook is replaced first, because the default one prints to stderr.
+/// A panic is caught and ignored for the same reason: a broken hook must never
+/// show up in the person's session.
+fn run_hook() -> ! {
+    std::panic::set_hook(Box::new(|_| {}));
+    let _ = std::panic::catch_unwind(|| crate::hook_state::run(&Paths::from_env()));
+    std::process::exit(0)
 }
 
 /// Exit the way the helper CLIs always have: a line on stderr and status 1.
