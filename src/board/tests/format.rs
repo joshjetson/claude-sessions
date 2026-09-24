@@ -333,3 +333,22 @@ fn the_notification_header_counts_unread_and_total() {
     );
     assert_eq!(role_of(&quiet, "🔔"), Some(Role::Dim));
 }
+
+#[test]
+fn an_unread_error_is_red_with_its_own_marker() {
+    let notif = notification(NotificationStatus::Unread, NotificationLevel::Error);
+    let row = format_board_item(&BoardItem::Notification { notif: &notif }, &ctx());
+    assert_eq!(role_of(&row, "Task 5944 finished"), Some(Role::Danger));
+    assert_eq!(role_of(&row, "✖"), Some(Role::Danger));
+    // Danger is the theme's red, so the row is red on screen and not only
+    // in the row model.
+    assert_eq!(
+        crate::ui::spans::role_style(Role::Danger).fg,
+        Some(crate::ui::theme::color_from_name("red"))
+    );
+
+    // A warning keeps the yellow dot, so the two stay apart.
+    let warn = notification(NotificationStatus::Unread, NotificationLevel::Warn);
+    let row = format_board_item(&BoardItem::Notification { notif: &warn }, &ctx());
+    assert_eq!(role_of(&row, "●"), Some(Role::Warn));
+}

@@ -8,6 +8,7 @@ mod board;
 mod conversation;
 mod deploy;
 mod dialogs;
+mod errors;
 mod extras_dialogs;
 mod harness;
 mod keys;

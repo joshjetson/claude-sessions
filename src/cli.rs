@@ -394,6 +394,11 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
 
     // One sample a minute into `runtime/memory.log`, and only when asked for.
     let _diagnostics = crate::diagnostics::start(&paths, "daemon", config.diagnostics());
+    // Errors from the daemon share the dashboard's `logs/errors.log`. Its
+    // panics still reach `daemon.log` as well: the chained hook adds a line
+    // and then runs the one that was there before.
+    crate::errorlog::install(&paths, "daemon");
+    crate::errorlog::chain_panic_hook();
 
     let mut options = daemon_options(paths.clone(), config);
     options.usage = Some(hooks::usage_hook(&paths, options.spawn));

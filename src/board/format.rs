@@ -202,8 +202,13 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
         }
 
         BoardItem::Notification { notif } => {
+            // An error is red and keeps its own marker, so it reads as an
+            // error even on a terminal that shows no colour. It was drawn in
+            // the same yellow as a warning, which is how a failed `kill` and a
+            // finished task came to look alike.
             let (role, dot) = match notif.level {
                 NotificationLevel::Success => (Role::Ok, "✓"),
+                NotificationLevel::Error => (Role::Danger, "✖"),
                 _ => (Role::Warn, "●"),
             };
             let title = truncate(&notif.title, 34);

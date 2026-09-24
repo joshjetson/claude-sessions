@@ -13,7 +13,7 @@ mod system;
 
 pub use board::Lookup;
 pub use services::{BoardServices, Sounds};
-use system::{kill_pids, open_with, play, purge, ssh};
+use system::{kill_pids, open_with, play, purge, ssh, KillError};
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -218,8 +218,14 @@ fn run(
                 Ok(()) => {
                     let _ = results.send(ActionResult::Flash(format!("Sent SIGTERM to {label}.")));
                 }
-                Err(message) => {
+                // A refusal is a sentence for the status line. A failed `kill`
+                // is an error, and errors go to the log and the red feed row.
+                Err(KillError::Refused(message)) => {
                     let _ = results.send(ActionResult::Flash(message));
+                    return;
+                }
+                Err(KillError::Failed(message)) => {
+                    crate::errorlog::report("kill", &format!("{label}: {message}"));
                     return;
                 }
             }
