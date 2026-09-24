@@ -246,6 +246,10 @@ fn started_at(session: &Session) -> SystemTime {
 #[derive(Debug, Default)]
 pub struct EngineState {
     pub sessions: SessionIndex,
+    /// The tick that produced [`Self::sessions`] saw everything it looked for,
+    /// so an empty index there is a machine with no sessions and not a failed
+    /// read. `false` until the first tick, which is the safe answer.
+    pub sessions_complete: bool,
     pub task_sessions: BTreeMap<i64, TaskLink>,
     pub done_tasks: BTreeSet<i64>,
     pub blocked_tasks: BTreeMap<i64, BlockedTask>,

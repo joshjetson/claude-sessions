@@ -264,10 +264,14 @@ fn event_loop(
                 FeedEvent::Sessions {
                     by_project,
                     discovered,
+                    scan_complete,
                 } => {
                     state.discovered_dirs = discovered;
                     let empty = by_project.is_empty();
-                    state.apply_sessions(by_project);
+                    state.apply_sessions(by_project, scan_complete);
+                    if state.selected_session_file.is_none() {
+                        conversation = None;
+                    }
                     sync_selected_meta(state);
                     // Only when there is nothing to show: the answer costs a
                     // `stat` and it is only ever read by the empty pane.

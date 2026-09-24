@@ -592,3 +592,47 @@ fn a_snapshot_with_keys_we_do_not_know_still_delivers_the_ones_we_do() {
     assert_eq!(sessions[0].status, SessionStatus::Working);
     assert_eq!(snapshot.sessions.stats.total_sessions, 1);
 }
+
+// --- whether an empty tick can be believed -----------------------------------
+
+#[test]
+fn scan_complete_crosses_the_wire_under_its_camel_case_name() {
+    let event = crate::daemon::SessionsEvent {
+        scan_complete: true,
+        ..Default::default()
+    };
+    let json = serde_json::to_value(&event).unwrap();
+    assert_eq!(json["scanComplete"], true);
+
+    let back: crate::daemon::SessionsEvent = serde_json::from_value(json).unwrap();
+    assert_eq!(back, event);
+
+    // And inside the envelope the SSE stream actually sends.
+    let wrapped = crate::daemon::EngineEvent::Sessions(Box::new(event.clone()));
+    let text = serde_json::to_string(&wrapped).unwrap();
+    let parsed: crate::daemon::EngineEvent = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed, wrapped);
+}
+
+#[test]
+fn a_sessions_payload_from_a_daemon_older_than_scan_complete_is_not_trusted_when_empty() {
+    // An older daemon still running after an upgrade sends the three original
+    // keys only. It cannot tell a failed read from an empty machine, so its
+    // empty list must keep the dashboard's previous one, as it always did.
+    let old = r#"{"byProject": {}, "stats": {"totalSessions": 0, "totalProjects": 0},
+                  "discoveredDirs": {}}"#;
+    let event: crate::daemon::SessionsEvent = serde_json::from_str(old).unwrap();
+    assert!(event.by_project.is_empty());
+    assert!(!event.scan_complete);
+
+    let snapshot: crate::daemon::Snapshot =
+        serde_json::from_str(&format!(r#"{{"sessions": {old}}}"#)).unwrap();
+    assert!(!snapshot.sessions.scan_complete);
+}
+
+#[test]
+fn a_snapshot_carries_whether_the_last_tick_was_complete() {
+    let harness = engine();
+    harness.state().sessions_complete = true;
+    assert!(harness.engine.snapshot().sessions.scan_complete);
+}

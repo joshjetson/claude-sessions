@@ -27,6 +27,7 @@ fn a_payload() -> FeedEvent {
     FeedEvent::Sessions {
         by_project: BTreeMap::new(),
         discovered: BTreeMap::new(),
+        scan_complete: true,
     }
 }
 

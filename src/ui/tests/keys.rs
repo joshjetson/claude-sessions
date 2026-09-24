@@ -22,7 +22,7 @@ fn press(state: &mut AppState, code: KeyCode) {
 }
 
 fn with_sessions(state: &mut AppState, sessions: Vec<crate::types::Session>) {
-    state.apply_sessions(group_sessions(sessions));
+    state.apply_sessions(group_sessions(sessions), true);
 }
 
 fn three_sessions() -> Vec<crate::types::Session> {
@@ -673,10 +673,10 @@ fn killing_one_session_does_not_end_its_run() {
     );
 }
 
-// --- an empty scan must not erase the tree -----------------------------------
+// --- an empty scan must not erase the tree, unless it is the truth ----------
 
 #[test]
-fn an_empty_scan_keeps_the_previous_sessions() {
+fn an_incomplete_empty_scan_keeps_the_previous_sessions() {
     // A scan that reads nothing is not evidence that nothing is running. Deep
     // in swap, `lsof` took seconds against a 5s timeout and processes whose cwd
     // could not be read were dropped, so a slow moment produced "no sessions"
@@ -686,17 +686,111 @@ fn an_empty_scan_keeps_the_previous_sessions() {
     state.take_actions();
     let before = state.by_project.clone();
 
-    state.apply_sessions(group_sessions(Vec::new()));
+    state.apply_sessions(group_sessions(Vec::new()), false);
 
     assert_eq!(state.by_project, before, "an empty scan erased the tree");
     assert!(state.feed_went_quiet, "nothing says the list is stale");
 }
 
 #[test]
+fn a_complete_empty_scan_clears_the_tree() {
+    // Killing the last session is the ordinary way to get here. Every read
+    // answered and no Claude process was in it, so the old list is wrong and
+    // the dead session must not stay on screen under a title that blames the
+    // scan.
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.take_actions();
+
+    state.apply_sessions(group_sessions(Vec::new()), true);
+
+    assert!(state.by_project.is_empty(), "the dead sessions stayed");
+    assert_eq!(state.stats.total_sessions, 0);
+    assert_eq!(state.stats.total_projects, 0);
+    assert!(!state.feed_went_quiet, "a true empty was called stale");
+}
+
+#[test]
+fn a_complete_empty_scan_clears_the_selected_conversation() {
+    // The list clearing is half the fix. The conversation pane must not keep
+    // drawing the killed session's transcript next to it.
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.selected_session_id = Some("dead".into());
+    state.selected_session_file = Some(std::path::PathBuf::from("/tmp/dead.jsonl"));
+    state.conv.messages = vec![crate::ui::tests::message(
+        crate::types::MessageRole::Assistant,
+        "last words",
+    )];
+
+    state.apply_sessions(group_sessions(Vec::new()), true);
+
+    assert!(state.selected_session_id.is_none());
+    assert!(state.selected_session_file.is_none());
+    assert!(state.conv.messages.is_empty(), "the dead transcript stayed");
+}
+
+#[test]
+fn an_incomplete_empty_scan_keeps_the_selected_conversation() {
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.selected_session_id = Some("alive".into());
+
+    state.apply_sessions(group_sessions(Vec::new()), false);
+
+    assert_eq!(state.selected_session_id.as_deref(), Some("alive"));
+}
+
+#[test]
+fn a_complete_empty_scan_clears_the_quiet_flag_an_outage_left() {
+    // An outage, then the truth: the stale title must not outlive the outage
+    // just because the truth is an empty machine.
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    state.apply_sessions(group_sessions(Vec::new()), false);
+    assert!(state.feed_went_quiet);
+
+    state.apply_sessions(group_sessions(Vec::new()), true);
+    assert!(state.by_project.is_empty());
+    assert!(!state.feed_went_quiet);
+}
+
+#[test]
+fn keys_on_a_tree_emptied_by_a_kill_do_nothing_and_do_not_panic() {
+    // The cursor was on the session that was killed. With every row gone, the
+    // keys that act on the selected row must find nothing and say nothing.
+    let mut state = temp_state().1;
+    with_sessions(&mut state, three_sessions());
+    let snapshot = tree_snapshot(&state);
+    let last = snapshot.keys.len() - 1;
+    state.tree_sel.set(&snapshot.keys, last);
+    state.take_actions();
+
+    state.apply_sessions(group_sessions(Vec::new()), true);
+
+    for code in [
+        KeyCode::Down,
+        KeyCode::Up,
+        KeyCode::Enter,
+        KeyCode::Char('x'),
+        KeyCode::Enter,
+    ] {
+        press(&mut state, code);
+    }
+    assert!(
+        !state
+            .take_actions()
+            .iter()
+            .any(|action| matches!(action, Action::Kill { .. })),
+        "a kill was queued with nothing to kill"
+    );
+}
+
+#[test]
 fn a_real_session_list_clears_the_quiet_flag() {
     let mut state = temp_state().1;
     with_sessions(&mut state, three_sessions());
-    state.apply_sessions(group_sessions(Vec::new()));
+    state.apply_sessions(group_sessions(Vec::new()), false);
     assert!(state.feed_went_quiet);
 
     with_sessions(&mut state, three_sessions());
@@ -709,9 +803,11 @@ fn a_real_session_list_clears_the_quiet_flag() {
 #[test]
 fn an_empty_scan_on_an_empty_tree_is_accepted() {
     // Starting with nothing running is a real state, and must not be reported
-    // as a failed read.
-    let mut state = temp_state().1;
-    state.apply_sessions(group_sessions(Vec::new()));
-    assert!(state.by_project.is_empty());
-    assert!(!state.feed_went_quiet);
+    // as a failed read — whether or not the scan could vouch for it.
+    for scan_complete in [false, true] {
+        let mut state = temp_state().1;
+        state.apply_sessions(group_sessions(Vec::new()), scan_complete);
+        assert!(state.by_project.is_empty());
+        assert!(!state.feed_went_quiet);
+    }
 }

@@ -53,6 +53,17 @@ pub struct SessionsEvent {
     pub by_project: BTreeMap<String, Vec<Session>>,
     pub stats: SessionStats,
     pub discovered_dirs: BTreeMap<String, Vec<String>>,
+    /// The scan behind this tick read everything it depends on. See
+    /// [`crate::scan::Scanner::last_scan_complete`].
+    ///
+    /// Only an empty `byProject` needs this. With it set, the machine has no
+    /// sessions and the dashboard clears its list. Without it, the scan failed
+    /// and the dashboard keeps the list it has.
+    ///
+    /// It defaults to `false` because a daemon older than this key never sends
+    /// it. That daemon cannot tell the two cases apart, so the dashboard keeps
+    /// the behaviour it had before the key existed.
+    pub scan_complete: bool,
 }
 
 /// Everything a client that just connected needs to be current.
@@ -127,6 +138,7 @@ pub(crate) fn sessions_event(state: &EngineState) -> SessionsEvent {
             total_projects: state.sessions.project_count(),
         },
         discovered_dirs: state.discovered_dirs.clone(),
+        scan_complete: state.sessions_complete,
     }
 }
 

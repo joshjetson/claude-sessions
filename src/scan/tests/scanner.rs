@@ -443,3 +443,110 @@ fn an_empty_process_listing_is_treated_as_a_failed_read() {
         "the cache was discarded on a failed read and had to be rebuilt"
     );
 }
+
+// --- whether an empty scan can be believed ------------------------------------
+
+/// The dashboard's own process, which is in every real listing. It is what
+/// makes a listing with no Claude rows in it a readable answer.
+const DASHBOARD: u32 = 900;
+
+#[test]
+fn killing_the_last_session_is_a_complete_empty_scan() {
+    // The listing came back and no Claude process was in it. That is the
+    // machine with no sessions on it, and the dashboard may clear its list.
+    let env = Env::new();
+    env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(DASHBOARD, "claude-sessions", Some(CWD), 0);
+    procs.add(1, "claude", Some(CWD), 0);
+    let mut scanner = env.scanner(procs.clone());
+    assert_eq!(scanner.scan_sessions(SystemTime::now()).len(), 1);
+    assert!(scanner.last_scan_complete());
+
+    procs.remove(1);
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(
+        scanner.last_scan_complete(),
+        "a readable listing with no sessions in it was called a failed read"
+    );
+}
+
+#[test]
+fn an_empty_listing_is_never_a_complete_scan() {
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(1, "claude", Some(CWD), 0);
+    let mut scanner = env.scanner(procs.clone());
+    scanner.scan_sessions(SystemTime::now());
+    assert!(scanner.last_scan_complete());
+
+    // `ps` returned nothing at all, which this process being alive rules out.
+    procs.remove(1);
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(!scanner.last_scan_complete());
+}
+
+#[test]
+fn a_claude_process_whose_cwd_could_not_be_read_makes_the_scan_incomplete() {
+    // The `lsof` timeout the dashboard's empty-list guard was built for. The
+    // process is dropped from the result, so the empty result is not the truth
+    // and must not clear the list.
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(DASHBOARD, "claude-sessions", Some(CWD), 0);
+    procs.add(1, "claude", None, 0);
+    let mut scanner = env.scanner(procs);
+
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(!scanner.last_scan_complete());
+}
+
+#[test]
+fn a_command_line_that_did_not_come_back_makes_the_scan_incomplete() {
+    // Without its command line an npm install of Claude Code is only `node`,
+    // and it is dropped. This tick cannot say it saw every session.
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(DASHBOARD, "claude-sessions", Some(CWD), 0);
+    procs.add(1, "node", Some(CWD), 0);
+    procs.forget_details(1);
+    let mut scanner = env.scanner(procs);
+
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(!scanner.last_scan_complete());
+}
+
+#[test]
+fn helpers_and_scratch_workers_do_not_make_the_scan_incomplete() {
+    // These are dropped on purpose, from answers that did come back.
+    let env = Env::new();
+    let procs = FakeProcesses::new();
+    procs.add(DASHBOARD, "claude-sessions", Some(CWD), 0);
+    procs.add(10, "claude bg-spare", Some(CWD), 0);
+    procs.add(11, "claude", Some(CWD), 0);
+    procs.with_argv(11, "claude --bg-pty-host");
+    procs.add(12, "claude", Some("/private/tmp/cc-daemon-501/ab/spare"), 0);
+    let mut scanner = env.scanner(procs);
+
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(scanner.last_scan_complete());
+}
+
+#[test]
+fn a_transcript_scan_is_complete_only_when_the_store_can_be_read() {
+    let env = Env::new();
+    let mut scanner = Scanner::new(
+        FakeProcesses::new(),
+        env.paths.clone(),
+        Discovery::Transcripts,
+    );
+    scanner.scan_sessions(SystemTime::now());
+    assert!(
+        !scanner.last_scan_complete(),
+        "a store that is not there was read as an empty machine"
+    );
+
+    fs::create_dir_all(&env.paths.projects_dir).expect("mkdir");
+    assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
+    assert!(scanner.last_scan_complete());
+}
