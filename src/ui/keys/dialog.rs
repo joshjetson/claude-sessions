@@ -98,7 +98,13 @@ pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome
                     state.save_runs();
                 }
             }
-            state.enqueue(action)
+            // A notification change also changes the row on screen now, not
+            // only at its owner. The menu's Resolve and Dismiss used to queue
+            // the action and leave the row where it was.
+            match action {
+                Action::Notifications { ids, status } => state.change_notifications(ids, status),
+                action => state.enqueue(action),
+            }
         }
         DialogOutcome::Quit(quit) => state.quit = Some(quit),
         DialogOutcome::Flash(message) => state.flash(message),

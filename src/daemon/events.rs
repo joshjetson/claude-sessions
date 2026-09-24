@@ -155,6 +155,14 @@ pub(crate) fn sessions_event(state: &EngineState) -> SessionsEvent {
 pub enum EngineEvent {
     Sessions(Box<SessionsEvent>),
     Notification(Box<Notification>),
+    /// A notification already in the feed changed its text in place.
+    ///
+    /// Its own event, not a second `notification`, because a client plays a
+    /// sound for every `notification`. The quiet-sessions row is refreshed
+    /// once a minute while sessions stay quiet, and one sound per refresh is
+    /// the storm the row exists to prevent. A client that does not hold the
+    /// row yet inserts it, silently.
+    NotificationUpdated(Box<Notification>),
     NotificationsChanged {
         ids: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -215,6 +223,7 @@ impl EngineEvent {
         match self {
             EngineEvent::Sessions(_) => "sessions",
             EngineEvent::Notification(_) => "notification",
+            EngineEvent::NotificationUpdated(_) => "notification-updated",
             EngineEvent::NotificationsChanged { .. } => "notifications-changed",
             EngineEvent::TaskDone { .. } => "task-done",
             EngineEvent::TaskBlocked { .. } => "task-blocked",

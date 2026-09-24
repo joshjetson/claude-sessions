@@ -1,8 +1,10 @@
-//! The three things the engine notices on your behalf.
+//! The things the engine notices on your behalf.
 //!
 //! - a session waiting on a decision you have not been told about;
-//! - a running session that has gone quiet;
-//! - a task landing in a stage that means it is yours now.
+//! - a running session that has gone quiet (per task, or for the QA role one
+//!   aggregated row for every live session);
+//! - a task landing in a stage that means it is yours now (for the QA role, a
+//!   task landing in a QA stage).
 //!
 //! The fourth — a session that went away without saying so — is the
 //! `vanished` module, because archiving is a different kind of work from
@@ -16,14 +18,19 @@ use crate::types::{EntryKind, LastEntry, NotificationLevel, Session, SessionStat
 use crate::util::project_name;
 
 use super::alerts::{
-    detect_new_assignments, detect_stalls, human_duration, last_write, StallOptions,
+    detect_new_assignments, detect_qa_arrivals, detect_quiet_sessions, detect_stalls,
+    human_duration, last_write, quiet_sessions_text, StallOptions,
 };
 use super::engine::EngineInner;
 use super::notify::NewNotification;
-use super::state::SessionIndex;
+use super::state::{QuietStep, SessionIndex};
 
 /// Marks that the assignment watcher has seen the board at least once.
 const BOOTSTRAP_KEY: &str = "alerts:bootstrapped";
+/// The same for the QA role's arrival watcher. Its own key, so turning the role
+/// on for the first time records the QA stages silently even on a machine whose
+/// assignment watcher bootstrapped long ago.
+const QA_BOOTSTRAP_KEY: &str = "qa-new:bootstrapped";
 
 /// How long a pending tool call must sit before it is read as "blocked on you",
 /// for a session with no hook state.
@@ -109,6 +116,7 @@ impl<S: ProcessSource> EngineInner<S> {
         now: SystemTime,
     ) {
         let mut raise = Vec::new();
+        let mut ended = Vec::new();
         {
             let mut state = self.state();
             for session in sessions.iter() {
@@ -126,13 +134,17 @@ impl<S: ProcessSource> EngineInner<S> {
                     }
                     (false, true) => {
                         state.await_notified.remove(&session.session_id);
+                        ended.push(session.session_id.clone());
                     }
                     _ => {}
                 }
             }
         }
+        // The wait ended, so the question was answered, wherever that
+        // happened. Clearing it here is what takes "← asks you" off the board.
+        self.resolve_answered_questions(&ended);
         for notification in raise {
-            self.push_notification(notification);
+            self.raise_notification(notification);
         }
     }
 
@@ -145,6 +157,16 @@ impl<S: ProcessSource> EngineInner<S> {
     pub(crate) fn notify_stalled_sessions(&self, sessions: &SessionIndex, now: SystemTime) {
         let alerts = self.config().alerts();
         if !alerts.enabled || alerts.stuck_after.is_zero() {
+            return;
+        }
+        // The QA role gets one aggregated row instead. See
+        // [`Self::update_quiet_sessions`].
+        if !self
+            .config()
+            .role()
+            .notification_policy()
+            .per_task_stall_alerts()
+        {
             return;
         }
 
@@ -218,7 +240,48 @@ impl<S: ProcessSource> EngineInner<S> {
             }
         }
         for notification in raise {
-            self.push_notification(notification);
+            self.raise_notification(notification);
+        }
+    }
+
+    /// Keep the QA role's one quiet-sessions row current.
+    ///
+    /// The per-task stall alert raises one notification per task and repeats
+    /// it every reminder interval. A reviewer with ten sessions who steps away
+    /// for an hour came back to dozens of rows and as many sounds. This is one
+    /// row with a fixed id, updated in place: "4 sessions quiet 15m+", plus the
+    /// longest. It rings once, when it first appears, and it goes away by
+    /// itself when every session is writing again.
+    ///
+    /// It covers every live session, not only the ones linked to a task,
+    /// because a reviewer starts most QA sessions by hand.
+    pub(crate) fn update_quiet_sessions(&self, sessions: &SessionIndex, now: SystemTime) {
+        let (policy, alerts) = {
+            let config = self.config();
+            (config.role().notification_policy(), config.alerts())
+        };
+        if !policy.quiet_sessions_row() || !alerts.enabled || alerts.stuck_after.is_zero() {
+            // The role changed, or alerts were switched off: take the row away
+            // and forget any dismissal, so turning it back on starts clean.
+            if self.state().quiet.reset() {
+                self.remove_quiet_row();
+            }
+            return;
+        }
+        let quiet = detect_quiet_sessions(sessions.iter(), now, alerts.stuck_after);
+        let ids = quiet.iter().map(|q| q.session_id.clone()).collect();
+        let step = self.state().quiet.plan(ids);
+        match step {
+            QuietStep::Stay => {}
+            QuietStep::Remove => self.remove_quiet_row(),
+            QuietStep::Raise | QuietStep::Update => {
+                let (title, message) = quiet_sessions_text(&quiet, alerts.stuck_after);
+                if step == QuietStep::Raise {
+                    self.raise_quiet_row(title, message);
+                } else {
+                    self.update_quiet_row(title, message);
+                }
+            }
         }
     }
 
@@ -258,7 +321,7 @@ impl<S: ProcessSource> EngineInner<S> {
         for assignment in fresh {
             self.db.mark_alerted(&assignment.key);
             let task = assignment.task;
-            self.push_notification(NewNotification {
+            self.raise_notification(NewNotification {
                 project: Some(task.project_name.clone()),
                 task_id: Some(task.id),
                 level: NotificationLevel::Info,
@@ -267,6 +330,82 @@ impl<S: ProcessSource> EngineInner<S> {
                     format!("📥 Assigned: #{} {}", task.id, task.name),
                     format!(
                         "{} — now in {}. Press s on the board to start it.",
+                        task.project_name, task.stage_name
+                    ),
+                )
+            });
+        }
+    }
+}
+
+impl<S: ProcessSource> EngineInner<S> {
+    /// Tell a QA reviewer when a task lands in a QA stage.
+    ///
+    /// The QA Board's rule, run by the daemon so it works with no browser tab
+    /// open. See [`detect_qa_arrivals`] for what counts. Arrivals are recorded
+    /// in SQLite like the assignment watcher's, so a restart announces what
+    /// arrived while the daemon was down, and nothing twice.
+    ///
+    /// It runs only for the QA role, because it costs an Odoo query every slow
+    /// tick. When it has been skipped for another role, the next QA tick
+    /// records the stages silently, exactly like the first run ever: switching
+    /// role must not replay a week of arrivals.
+    pub(crate) fn notify_qa_arrivals(&self) {
+        let (policy, enabled, rule) = {
+            let config = self.config();
+            (
+                config.role().notification_policy(),
+                config.alerts().enabled,
+                config.qa_alerts(),
+            )
+        };
+        if !policy.watches_qa_arrivals() {
+            self.state().qa_watch_paused = true;
+            return;
+        }
+        if !enabled || rule.stages.is_empty() {
+            return;
+        }
+        let Some(fetch) = &self.fetch_qa_stage else {
+            return;
+        };
+        // Best-effort: an Odoo blip must not kill the loop.
+        let Ok(tasks) = fetch(&rule.stages) else {
+            return;
+        };
+
+        let fresh = detect_qa_arrivals(&tasks, &rule, |key| self.db.was_alerted(key));
+
+        let resume = std::mem::take(&mut self.state().qa_watch_paused);
+        if resume || !self.db.was_alerted(QA_BOOTSTRAP_KEY) {
+            for arrival in &fresh {
+                self.db.mark_alerted(&arrival.key);
+            }
+            self.db.mark_alerted(QA_BOOTSTRAP_KEY);
+            return;
+        }
+
+        for arrival in fresh {
+            self.db.mark_alerted(&arrival.key);
+            if !arrival.announce {
+                continue;
+            }
+            let entry = arrival.entry;
+            let task = &entry.task;
+            let title = if entry.assigned_to_me {
+                format!("🧪 Assigned to you · #{} {}", task.id, task.name)
+            } else {
+                format!("🧪 New in QA: #{} {}", task.id, task.name)
+            };
+            self.raise_notification(NewNotification {
+                project: Some(task.project_name.clone()),
+                task_id: Some(task.id),
+                level: NotificationLevel::Info,
+                ..NewNotification::new(
+                    "qa-new",
+                    title,
+                    format!(
+                        "{} — now in {}. Press Enter on it in the board and pick QA to start a pass.",
                         task.project_name, task.stage_name
                     ),
                 )

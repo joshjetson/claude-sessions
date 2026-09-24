@@ -72,6 +72,12 @@ pub struct Config {
     /// `sessions` | `board` | `deploy`; validated in the accessor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_view: Option<String>,
+    /// `dev` | `qa` | `pm`; validated in the accessor, so a typo reads as
+    /// `dev` instead of losing the file. A value that is not even a string
+    /// reads as absent, for the same reason. See [`crate::types::UserRole`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub role: Option<String>,
     /// Legacy sibling of `daemon.port`, still honoured.
     #[serde(
         default,
@@ -500,6 +506,46 @@ pub struct QaBlock {
     /// ended up resident at once, about 405 MB each, on a 16 GB machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_refill: Option<bool>,
+    /// Stages that mean "waiting on QA", for the QA role's new-arrival alert.
+    ///
+    /// Absent or empty means the default list. A revision stage in this list
+    /// is ignored: a task sent back to a developer is never a QA arrival.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub new_task_stages: Option<Vec<String>>,
+    /// The Odoo projects whose QA arrivals are announced.
+    ///
+    /// `None` and `Some([])` differ here. Absent means "the projects in
+    /// `odooProjectDirs`, or every project when that is empty". An explicit
+    /// empty list means every project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub projects: Option<Vec<String>>,
+    /// Odoo user ids of the other QA reviewers. A task one of them is assigned
+    /// to is theirs, so its arrival is not announced to you unless you are
+    /// assigned too.
+    ///
+    /// Ids, not names: names change and ids do not. Numbers written as strings
+    /// are accepted, because this list is typed by hand.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "de_id_list")]
+    pub other_qa_user_ids: Option<Vec<i64>>,
+}
+
+/// A list of ids that forgives a quoted number and skips anything else.
+///
+/// The whole `qa` block is read leniently, so a list that failed to parse here
+/// would reset the lane limit and the coordinator mode beside it.
+fn de_id_list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<i64>>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(value.as_array().map(|items| {
+        items
+            .iter()
+            .filter_map(as_f64)
+            .filter(|n| n.fract() == 0.0 && *n > 0.0)
+            .map(|n| n as i64)
+            .collect()
+    }))
 }
 
 /// How the sessions tree is drawn.

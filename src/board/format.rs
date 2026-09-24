@@ -65,6 +65,9 @@ pub struct BoardCtx<'a> {
     /// form below [`crate::qarun::QA_WIDE_MIN_COLS`]; every other row ignores
     /// this. Zero means "unknown", which reads as narrow.
     pub tree_cols: u16,
+    /// The stages that mean "waiting on QA", for the state badges. `None`
+    /// means the built-in list, [`crate::config::DEFAULT_QA_STAGES`].
+    pub qa_stages: Option<&'a [String]>,
 }
 
 impl BoardCtx<'_> {
@@ -75,6 +78,19 @@ impl BoardCtx<'_> {
     fn has(set: Option<&HashSet<i64>>, task_id: i64) -> bool {
         set.is_some_and(|set| set.contains(&task_id))
     }
+
+    /// The badge Odoo's `state` earns a task in a QA stage, if any.
+    fn qa_state_badge(&self, task: &Task) -> Option<crate::types::QaStateBadge> {
+        match self.qa_stages {
+            Some(stages) => task.qa_state_badge(stages),
+            None => task.qa_state_badge(
+                &crate::config::DEFAULT_QA_STAGES
+                    .iter()
+                    .map(|stage| stage.to_string())
+                    .collect::<Vec<_>>(),
+            ),
+        }
+    }
 }
 
 /// The per-task display bits shared by task and subtask rows.
@@ -82,6 +98,11 @@ struct TaskMarkers {
     marker: Row,
     id_tag: Row,
     story_points: Row,
+    /// `✅` Complete or `🔁` Changes Requested, for a task still in QA. See
+    /// [`crate::types::qa_state_badge`]. A badge, not the status glyph: the
+    /// glyph slot is this dashboard's own view of the task (done, running,
+    /// blocked), and this is Odoo's.
+    qa_state: Row,
     archived: Row,
     auto: Row,
     optics: Row,
@@ -140,6 +161,19 @@ fn task_markers(task: &Task, ctx: &BoardCtx<'_>) -> TaskMarkers {
         story_points: task
             .story_points
             .map(|points| prefixed(format!("{points}sp"), Role::Warn))
+            .unwrap_or_default(),
+        qa_state: ctx
+            .qa_state_badge(task)
+            .map(|badge| {
+                prefixed(
+                    badge.glyph,
+                    if badge.attention {
+                        Role::Warn
+                    } else {
+                        Role::Ok
+                    },
+                )
+            })
             .unwrap_or_default(),
         archived: if BoardCtx::has(ctx.archived_tasks, task.id) {
             prefixed("💾", Role::Accent)
@@ -288,6 +322,7 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
                 .plain("  ")
                 .extend(markers.id_tag)
                 .extend(markers.story_points)
+                .extend(markers.qa_state)
                 .extend(markers.archived)
                 .extend(markers.auto)
                 .extend(markers.optics)
@@ -375,6 +410,7 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
                 .plain("  ")
                 .extend(markers.id_tag)
                 .extend(markers.story_points)
+                .extend(markers.qa_state)
                 .extend(markers.archived)
                 .extend(markers.auto)
                 .extend(markers.optics)

@@ -29,6 +29,7 @@ mod ordering;
 mod protocol;
 mod refresh;
 mod remote;
+mod roles;
 mod routes;
 mod server;
 mod transcripts;
@@ -81,6 +82,7 @@ pub(crate) struct TestEngine {
 pub(crate) struct Setup {
     pub(crate) config: Option<serde_json::Value>,
     pub(crate) assigned: Option<super::engine::AssignedFetch>,
+    pub(crate) qa_stage: Option<super::engine::QaStageFetch>,
     pub(crate) usage: Option<super::engine::UsageHook>,
     pub(crate) board: Option<super::engine::BoardFetch>,
     pub(crate) deploy: Option<super::engine::DeployFetch>,
@@ -114,6 +116,7 @@ pub(crate) fn engine_with(setup: Setup) -> TestEngine {
     let engine = Engine::new(EngineOptions {
         backend: Arc::new(backend.clone()),
         fetch_assigned: setup.assigned,
+        fetch_qa_stage: setup.qa_stage,
         fetch_board: setup.board,
         fetch_deploy: setup.deploy,
         daily_log: Some(Box::new(move |record| {

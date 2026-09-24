@@ -234,6 +234,7 @@ fn event_loop(
 ) -> Result<()> {
     let mut conversation: Option<TranscriptCursor> = None;
     let mut last_clock = Instant::now();
+    let mut role_stamp = config_stamp(state.config.path());
     // `None` is the default and means "only when `u` is pressed": the check is
     // itself a request against the quota it reports.
     let mut next_usage = usage_interval.map(|interval| Instant::now() + interval);
@@ -291,6 +292,15 @@ fn event_loop(
                     }
                 }
                 FeedEvent::Notification(notification) => state.push_notification(*notification),
+                FeedEvent::Notifications(list) => state.replace_notifications(list),
+                FeedEvent::NotificationUpdated(notification) => {
+                    state.upsert_notification(*notification)
+                }
+                FeedEvent::NotificationsChanged {
+                    ids,
+                    status,
+                    removed,
+                } => state.apply_notifications_changed(&ids, status, removed),
                 FeedEvent::Board(update) => state.apply_board(*update),
                 FeedEvent::Usage(usage) => state.apply_usage(*usage),
                 FeedEvent::Deploy(update) => state.apply_deploy(*update),
@@ -382,6 +392,11 @@ fn event_loop(
                 // The daemon owns the usage hook when there is one, so the
                 // check runs once however many dashboards are attached.
                 Action::RefreshUsage if feed.feed().refresh_usage() => {}
+                // The daemon owns the notification list when there is one.
+                // Without one, the worker writes the change to SQLite.
+                Action::Notifications { ref ids, status }
+                    if feed.feed().update_notifications(ids.clone(), status) => {}
+                Action::ClearNotifications if feed.feed().clear_notifications() => {}
                 other => {
                     // A task launch has to be registered with the pending queue
                     // BEFORE the terminal opens, or nothing will claim the
@@ -396,6 +411,7 @@ fn event_loop(
         if last_clock.elapsed() >= Duration::from_secs(1) {
             last_clock = Instant::now();
             state.dirty = true;
+            refresh_role(state, &mut role_stamp);
         }
 
         if let Some(quit) = state.quit {
@@ -407,6 +423,33 @@ fn event_loop(
             }
             return Ok(());
         }
+    }
+}
+
+/// The config file's modification time and length, to notice an edit.
+fn config_stamp(path: &std::path::Path) -> Option<(Option<std::time::SystemTime>, u64)> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.modified().ok(), meta.len()))
+}
+
+/// Pick up a `"role"` edited in the config file while the dashboard runs.
+///
+/// Only the role is re-read, into [`AppState::role`]. The dashboard's own
+/// `ConfigHandle` is left alone: it is also what the settings dialogs write
+/// through, and swapping it under them is a larger change than this needs. The
+/// daemon re-reads the same file on its own tick, so the board keys and the
+/// notification feed change role together.
+fn refresh_role(state: &mut AppState, stamp: &mut Option<(Option<std::time::SystemTime>, u64)>) {
+    let now = config_stamp(state.config.path());
+    if now == *stamp {
+        return;
+    }
+    *stamp = now;
+    let role = state.config.reloaded().role();
+    if role != state.role {
+        state.role = role;
+        state.dirty = true;
     }
 }
 

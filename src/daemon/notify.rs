@@ -8,7 +8,9 @@ use std::sync::atomic::Ordering;
 
 use crate::db::{PRUNE_KEEP, RECENT_LIMIT};
 use crate::scan::ProcessSource;
-use crate::types::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
+use crate::types::{
+    Notification, NotificationKind, NotificationLevel, NotificationStatus, QUIET_SESSIONS_ID,
+};
 use crate::util::{iso_now, project_name};
 
 use super::engine::EngineInner;
@@ -91,7 +93,26 @@ impl ActionResult {
 }
 
 impl<S: ProcessSource> EngineInner<S> {
+    /// Raise a notification, unless the user's role does not want it.
+    ///
+    /// Every alert the daemon raises on its own comes through here, and so
+    /// does `POST /notify`. The role is read when the notification is raised,
+    /// so a dropped one is never stored, never sent and never rings. The role
+    /// comes from the engine's config, which each tick re-reads when the file
+    /// changes, so editing `"role"` takes effect within a second.
+    ///
+    /// `None` means the policy dropped it.
+    pub(crate) fn raise_notification(&self, new: NewNotification) -> Option<Notification> {
+        let policy = self.config().role().notification_policy();
+        if !policy.keeps(new.source, new.kind, new.level) {
+            return None;
+        }
+        Some(self.push_notification(new))
+    }
+
     /// Raise a notification: into the feed, into SQLite, out to every client.
+    ///
+    /// No role check. Production alerts go through [`Self::raise_notification`].
     pub(crate) fn push_notification(&self, new: NewNotification) -> Notification {
         let project = new.project.unwrap_or_else(|| {
             if new.cwd.is_empty() {
@@ -153,6 +174,14 @@ impl<S: ProcessSource> EngineInner<S> {
                     notification.status = status;
                 }
             }
+            // Reading the quiet row is looking at it. Resolving it is saying
+            // "I know", which is a dismissal.
+            if status != NotificationStatus::Unread
+                && status != NotificationStatus::Read
+                && ids.iter().any(|id| id == QUIET_SESSIONS_ID)
+            {
+                state.quiet.dismiss();
+            }
         }
         self.db.set_notification_status(ids, status);
         self.publish(EngineEvent::NotificationsChanged {
@@ -173,6 +202,9 @@ impl<S: ProcessSource> EngineInner<S> {
             state
                 .notifications
                 .retain(|notification| !ids.contains(&notification.id));
+            if ids.iter().any(|id| id == QUIET_SESSIONS_ID) {
+                state.quiet.dismiss();
+            }
         }
         self.db.delete_notifications(ids);
         self.publish(EngineEvent::NotificationsChanged {
@@ -205,6 +237,133 @@ impl<S: ProcessSource> EngineInner<S> {
         ActionResult::ok()
     }
 
+    /// Resolve every notification in the feed: the Clear all key.
+    ///
+    /// Resolved rather than deleted. Resolved is the status every view already
+    /// hides, the "asks you" markers ignore, and a QA run reads as answered, so
+    /// one status change clears all of them. The rows stay in SQLite as the
+    /// history of what was raised, and the table is pruned as before. SQLite is
+    /// updated as a whole, not only the rows held in memory, so an older unread
+    /// row cannot come back after a restart.
+    pub(crate) fn resolve_all_notifications(&self) -> ActionResult {
+        let ids: Vec<String> = {
+            let mut state = lock(&self.state);
+            let mut ids = Vec::new();
+            for notification in state.notifications.iter_mut() {
+                if notification.status != NotificationStatus::Resolved {
+                    notification.status = NotificationStatus::Resolved;
+                    ids.push(notification.id.clone());
+                }
+            }
+            if state.quiet.shown {
+                state.quiet.dismiss();
+            }
+            ids
+        };
+        self.db.resolve_all_notifications();
+        if !ids.is_empty() {
+            self.publish(EngineEvent::NotificationsChanged {
+                ids,
+                status: Some(NotificationStatus::Resolved),
+                removed: false,
+            });
+        }
+        ActionResult::ok()
+    }
+
+    /// Resolve the questions a session asked, once it stops waiting.
+    ///
+    /// The `await` watcher raises a `Question` when a session stops on a
+    /// decision. When the session moves on, somebody answered it, in its own
+    /// terminal or from here. Without this the question stayed unresolved, and
+    /// the board kept drawing "← asks you" beside a session that was working.
+    pub(crate) fn resolve_answered_questions(&self, session_ids: &[String]) {
+        if session_ids.is_empty() {
+            return;
+        }
+        let ids: Vec<String> = lock(&self.state)
+            .notifications
+            .iter()
+            .filter(|n| {
+                n.kind == NotificationKind::Question
+                    && n.status != NotificationStatus::Resolved
+                    && n.id.starts_with("await-")
+                    && n.session_id
+                        .as_ref()
+                        .is_some_and(|id| session_ids.contains(id))
+            })
+            .map(|n| n.id.clone())
+            .collect();
+        if !ids.is_empty() {
+            self.set_notification_status(&ids, NotificationStatus::Resolved);
+        }
+    }
+
+    /// Put the quiet-sessions row in the feed with its fixed id, and ring.
+    ///
+    /// Any older copy is dropped first, so a row the user resolved earlier
+    /// cannot sit beside the new one. It is not written to SQLite: see
+    /// [`QUIET_SESSIONS_ID`].
+    pub(crate) fn raise_quiet_row(&self, title: String, message: String) {
+        let notification = quiet_row(title, message);
+        {
+            let mut state = lock(&self.state);
+            state.notifications.retain(|n| n.id != QUIET_SESSIONS_ID);
+            state.notifications.push_front(notification.clone());
+            state.notifications.truncate(NOTIFICATION_LIMIT);
+        }
+        self.publish(EngineEvent::Notification(Box::new(notification)));
+    }
+
+    /// Refresh the quiet-sessions row's text in place, without a sound.
+    ///
+    /// Published only when the text changed, which is about once a minute
+    /// while the durations tick up. A row that fell off the end of the capped
+    /// list is put back at the front.
+    pub(crate) fn update_quiet_row(&self, title: String, message: String) {
+        let updated = {
+            let mut state = lock(&self.state);
+            match state
+                .notifications
+                .iter_mut()
+                .find(|n| n.id == QUIET_SESSIONS_ID)
+            {
+                Some(row) if row.title == title && row.message == message => None,
+                Some(row) => {
+                    row.title = title;
+                    row.message = message;
+                    Some(row.clone())
+                }
+                None => {
+                    let row = quiet_row(title, message);
+                    state.notifications.push_front(row.clone());
+                    state.notifications.truncate(NOTIFICATION_LIMIT);
+                    Some(row)
+                }
+            }
+        };
+        if let Some(row) = updated {
+            self.publish(EngineEvent::NotificationUpdated(Box::new(row)));
+        }
+    }
+
+    /// Take the quiet-sessions row out of the feed.
+    pub(crate) fn remove_quiet_row(&self) {
+        let removed = {
+            let mut state = lock(&self.state);
+            let before = state.notifications.len();
+            state.notifications.retain(|n| n.id != QUIET_SESSIONS_ID);
+            state.notifications.len() != before
+        };
+        if removed {
+            self.publish(EngineEvent::NotificationsChanged {
+                ids: vec![QUIET_SESSIONS_ID.to_string()],
+                status: None,
+                removed: true,
+            });
+        }
+    }
+
     /// Reload the feed at startup and trim the table behind it.
     ///
     /// The feed now survives a restart — previously anything that arrived while
@@ -216,5 +375,24 @@ impl<S: ProcessSource> EngineInner<S> {
             state.notifications = restored.into_iter().take(NOTIFICATION_LIMIT).collect();
         }
         self.db.prune_notifications(PRUNE_KEEP);
+    }
+}
+
+/// The quiet-sessions row. Warn level, so it rings the warn sound once when it
+/// is raised, and `Info` kind, because nothing in it can be answered.
+fn quiet_row(title: String, message: String) -> Notification {
+    Notification {
+        id: QUIET_SESSIONS_ID.to_string(),
+        title,
+        message,
+        cwd: String::new(),
+        project: String::new(),
+        session_id: None,
+        task_id: None,
+        level: NotificationLevel::Warn,
+        kind: NotificationKind::Info,
+        run_id: String::new(),
+        ts: iso_now(),
+        status: NotificationStatus::Unread,
     }
 }

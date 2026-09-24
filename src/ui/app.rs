@@ -63,6 +63,24 @@ fn draw_list(frame: &mut Frame, state: &mut AppState, area: Rect) {
     }
 }
 
+/// The board's key hints, for the role at the keyboard. The QA role has no
+/// `s`, `v` or `C`, so its hints lead with what a reviewer does instead.
+pub(crate) fn board_hints(role: crate::types::UserRole) -> [&'static str; 6] {
+    let launch = if role.shows_dev_actions() {
+        "s start   v revise   C resume chat   P pipeline   m stage"
+    } else {
+        "Enter → QA / QA dry run / brief   P pipeline   m stage"
+    };
+    [
+        "Select a task (→) to preview, Enter for its action menu.",
+        "",
+        launch,
+        "R watch a stage as a QA run   ] next agent waiting   a answer",
+        "g session   G terminal   o browser   S ssh   M MRs   D logs",
+        "f mine/all   p projects   x dismiss (on the 🔔 header: clear all)",
+    ]
+}
+
 fn placeholder_lines(text: &[&str]) -> Vec<Line<'static>> {
     text.iter()
         .map(|line| {
@@ -241,14 +259,7 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
             ),
             None => (
                 " Task ".to_string(),
-                placeholder_lines(&[
-                    "Select a task (→) to preview, Enter for its action menu.",
-                    "",
-                    "s start   v revise   C resume chat   P pipeline   m stage",
-                    "R watch a stage as a QA run   ] jump to the next agent waiting",
-                    "g session   G terminal   o browser   S ssh",
-                    "f mine/all   p projects   x dismiss a notification",
-                ]),
+                placeholder_lines(&board_hints(state.role)),
             ),
         },
         (None, View::Deploy) => match &state.deploy.detail {
@@ -267,7 +278,11 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
                     "because every refresh costs a GitLab call per open merge request.",
                     "",
                     "→ preview   Enter menu   m merge   M merge all ready",
-                    "R resolve conflicts   d deploy   X cancel   L output",
+                    if state.role.shows_dev_actions() {
+                        "R resolve conflicts   d deploy   X cancel   L output"
+                    } else {
+                        "d deploy   X cancel   L output"
+                    },
                     "g session   G terminal   o open MR   t open task   c configure",
                 ]),
             ),

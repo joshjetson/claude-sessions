@@ -25,7 +25,8 @@ pub use edit::DeployProjectPatch;
 pub use env::EnvOverrides;
 pub use model::*;
 pub use resolve::{
-    AlertConfig, BoardHideFilter, BoardProjectFilter, ResolvedDeployConfig, UsageConfig,
+    AlertConfig, BoardHideFilter, BoardProjectFilter, QaAlertConfig, ResolvedDeployConfig,
+    UsageConfig,
 };
 
 use crate::paths::Paths;
@@ -35,6 +36,21 @@ pub const DEFAULT_PORT: u16 = 8787;
 /// tmux session the dashboard groups its windows under.
 pub const DEFAULT_TMUX_SESSION: &str = "claude-sessions";
 const DEFAULT_NEW_TASK_STAGE: &str = "Approved to Start";
+/// Stages that mean "waiting on QA", from the QA Board this alert was ported
+/// from. Projects spell the stage differently, and `Tech Debt Work` is the one
+/// project lane where debt tasks wait for review. A project with its own QA
+/// stage name adds it through `qa.newTaskStages`.
+pub const DEFAULT_QA_STAGES: [&str; 3] = ["QA", "Quality Assurance", "Tech Debt Work"];
+/// Stages that mean "QA sent it back and a developer is fixing it". Every
+/// spelling here is live in at least one project. A task in one of these is a
+/// developer's queue, so it never counts as a QA arrival, even when someone
+/// lists the stage in `qa.newTaskStages`.
+pub const REVISION_STAGES: [&str; 4] = [
+    "Revision Required",
+    "Revisions Required",
+    "Revision Needed",
+    "Required Revisions",
+];
 const DEFAULT_HIDE_STAGE: &str = "Deployed";
 /// Odoo `state` values hidden from the board by default: "Done" (the checkmark)
 /// and "Cancelled". "Complete" (`03_approved`) stays visible.

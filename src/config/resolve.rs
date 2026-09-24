@@ -10,9 +10,10 @@ use std::time::Duration;
 
 use super::{
     expand_tilde, lookup_ci, ChatConfig, ConfigHandle, Group, OneOrMany, DEFAULT_HIDE_STAGE,
-    DEFAULT_HIDE_STATES, DEFAULT_NEW_TASK_STAGE, DEFAULT_PORT, DEFAULT_TMUX_SESSION,
+    DEFAULT_HIDE_STATES, DEFAULT_NEW_TASK_STAGE, DEFAULT_PORT, DEFAULT_QA_STAGES,
+    DEFAULT_TMUX_SESSION, REVISION_STAGES,
 };
-use crate::types::{DefaultView, OdooCreds, TerminalDriverName};
+use crate::types::{DefaultView, OdooCreds, TerminalDriverName, UserRole};
 
 impl ConfigHandle {
     // --- sessions view ------------------------------------------------------
@@ -54,6 +55,16 @@ impl ConfigHandle {
             Some("deploy") => DefaultView::Deploy,
             _ => DefaultView::Board,
         }
+    }
+
+    /// Who is using the dashboard. Absent, empty or unrecognised reads as
+    /// `dev`, which is how every install behaved before the setting existed.
+    pub fn role(&self) -> UserRole {
+        self.config
+            .role
+            .as_deref()
+            .map(UserRole::from_label)
+            .unwrap_or_default()
     }
 
     pub fn nicknames(&self) -> &BTreeMap<String, String> {
@@ -210,6 +221,52 @@ impl ConfigHandle {
         {
             Some(mode) if mode.eq_ignore_ascii_case("shadow") => crate::qarun::RunMode::Shadow,
             _ => crate::qarun::RunMode::Triage,
+        }
+    }
+
+    /// What the QA role's new-arrival alert watches.
+    ///
+    /// The project default is the `odooProjectDirs` keys. Those are the
+    /// projects this person has a local checkout for, which is the closest
+    /// thing the config has to "my projects". With none mapped, every project
+    /// counts, so a fresh install still hears about arrivals rather than
+    /// hearing nothing and looking broken.
+    pub fn qa_alerts(&self) -> QaAlertConfig {
+        let qa = self.config.qa.as_ref();
+        let revision: Vec<String> = REVISION_STAGES
+            .iter()
+            .map(|stage| stage.to_lowercase())
+            .collect();
+        let configured: Vec<String> = qa
+            .and_then(|qa| qa.new_task_stages.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|stage| !stage.trim().is_empty())
+            .collect();
+        let stages = if configured.is_empty() {
+            DEFAULT_QA_STAGES.iter().map(|s| s.to_string()).collect()
+        } else {
+            configured
+        };
+        let projects = match qa.and_then(|qa| qa.projects.clone()) {
+            Some(projects) if projects.is_empty() => None,
+            Some(projects) => Some(projects),
+            None => {
+                let mapped: Vec<String> = self.odoo_project_names().map(str::to_string).collect();
+                (!mapped.is_empty()).then_some(mapped)
+            }
+        };
+        QaAlertConfig {
+            stages: stages
+                .into_iter()
+                .filter(|stage| !revision.contains(&stage.trim().to_lowercase()))
+                .collect(),
+            revision_stages: REVISION_STAGES.iter().map(|s| s.to_string()).collect(),
+            projects,
+            ignore: self.board_project_filter().ignore,
+            other_qa_user_ids: qa
+                .and_then(|qa| qa.other_qa_user_ids.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -442,6 +499,22 @@ pub struct AlertConfig {
     pub stuck_after: Duration,
     /// How often to re-flag a still-silent session; zero means once only.
     pub remind_every: Duration,
+}
+
+/// The QA role's "a task just landed in QA" alert, resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QaAlertConfig {
+    /// Stages that mean "waiting on QA", with any revision stage removed.
+    pub stages: Vec<String>,
+    /// Stages that never count as an arrival, whatever `stages` says.
+    pub revision_stages: Vec<String>,
+    /// `None` means every project.
+    pub projects: Option<Vec<String>>,
+    /// Projects hidden everywhere by `board.ignore`. An ignored project stays
+    /// quiet here too.
+    pub ignore: Vec<String>,
+    /// Odoo user ids of the other QA reviewers.
+    pub other_qa_user_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

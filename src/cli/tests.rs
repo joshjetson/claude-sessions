@@ -37,6 +37,10 @@ fn complete_odoo_credentials_wire_every_poll_the_daemon_owns() {
         options.fetch_assigned.is_some(),
         "new-assignment alerts unwired"
     );
+    assert!(
+        options.fetch_qa_stage.is_some(),
+        "QA arrival alerts unwired"
+    );
     assert!(options.fetch_deploy.is_some(), "deploy poll unwired");
 }
 
@@ -45,6 +49,7 @@ fn an_install_with_no_credentials_still_builds_an_engine_with_no_polls() {
     let (_dir, options) = options_for(json!({ "groups": [] }));
     assert!(options.fetch_board.is_none());
     assert!(options.fetch_assigned.is_none());
+    assert!(options.fetch_qa_stage.is_none());
     assert!(options.fetch_deploy.is_none());
 }
 

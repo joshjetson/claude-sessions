@@ -19,7 +19,7 @@ use std::thread;
 
 use crate::daemon::client::{self, DaemonClient, SseEvent, SseMessage, Subscription};
 use crate::daemon::{BoardFilter, PendingRequest, RefreshRequest, SessionsEvent, Snapshot};
-use crate::types::{DeployRun, Notification};
+use crate::types::{DeployRun, Notification, NotificationStatus};
 use crate::ui::board::BoardUpdate;
 use crate::ui::deploy::DeployUpdate;
 use crate::ui::feed::{FeedEvent, SessionFeed};
@@ -100,6 +100,11 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
                 for run in snapshot.deploy_runs.values() {
                     let _ = sender.send(FeedEvent::DeployRun(Box::new(run.clone())));
                 }
+                // The daemon's feed replaces this dashboard's. It is the
+                // backlog a dashboard opened late has never seen, and after a
+                // reconnect it is the only list that knows what was resolved
+                // in between.
+                let _ = sender.send(FeedEvent::Notifications(snapshot.notifications));
                 let _ = sender.send(sessions(snapshot.sessions));
                 let _ = sender.send(board);
                 let _ = sender.send(deploy);
@@ -113,6 +118,32 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
         "notification" => {
             if let Ok(notification) = serde_json::from_str::<Notification>(&event.data) {
                 let _ = sender.send(FeedEvent::Notification(Box::new(notification)));
+            }
+        }
+        "notification-updated" => {
+            if let Ok(notification) = serde_json::from_str::<Notification>(&event.data) {
+                let _ = sender.send(FeedEvent::NotificationUpdated(Box::new(notification)));
+            }
+        }
+        // Another dashboard, the coordinator or the daemon itself resolved,
+        // read or dismissed something. Ignoring this is why a question answered
+        // elsewhere kept its "← asks you" here.
+        "notifications-changed" => {
+            #[derive(serde::Deserialize)]
+            struct Changed {
+                #[serde(default)]
+                ids: Vec<String>,
+                #[serde(default)]
+                status: Option<NotificationStatus>,
+                #[serde(default)]
+                removed: bool,
+            }
+            if let Ok(changed) = serde_json::from_str::<Changed>(&event.data) {
+                let _ = sender.send(FeedEvent::NotificationsChanged {
+                    ids: changed.ids,
+                    status: changed.status,
+                    removed: changed.removed,
+                });
             }
         }
         // The board event on the wire is a light "it changed" signal
@@ -315,6 +346,25 @@ impl SessionFeed for RemoteFeed {
 
     fn shutdown_daemon(&self) {
         self.client.shutdown();
+    }
+
+    /// The daemon owns the list, so the change goes there. Off the draw
+    /// thread, like every other post: the local copy already changed.
+    fn update_notifications(&self, ids: Vec<String>, status: Option<NotificationStatus>) -> bool {
+        self.act(move |client| {
+            match status {
+                Some(status) => client.set_notification_status(&ids, status),
+                None => client.dismiss_notifications(&ids),
+            };
+        });
+        true
+    }
+
+    fn clear_notifications(&self) -> bool {
+        self.act(|client| {
+            client.clear_notifications();
+        });
+        true
     }
 
     fn start_deploy(&self, project: &str) -> Option<String> {

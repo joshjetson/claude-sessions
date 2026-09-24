@@ -133,6 +133,8 @@ pub enum Action {
         ids: Vec<String>,
         status: Option<NotificationStatus>,
     },
+    /// Resolve every notification: the feed header's Clear all.
+    ClearNotifications,
 
     // --- deploy --------------------------------------------------------------
     /// Reload the deploy board. Manual only: one GitLab call per open MR.

@@ -28,6 +28,7 @@ pub const TASK_FIELDS: &[&str] = &[
     "depend_on_ids",
     "depend_on_count",
     "closed_depend_on_count",
+    "state",
 ];
 
 /// The name shown when a task sits in no stage at all.
@@ -134,6 +135,11 @@ pub fn to_task(record: &Value, tag_names: &dyn Fn(i64) -> Option<String>) -> Tas
         blocked_by: id_list(record.get("depend_on_ids")),
         blocker_count,
         open_blocker_count: blocker_count.saturating_sub(closed_blockers),
+        state: record
+            .get("state")
+            .and_then(Value::as_str)
+            .filter(|state| !state.is_empty())
+            .map(str::to_string),
     }
 }
 

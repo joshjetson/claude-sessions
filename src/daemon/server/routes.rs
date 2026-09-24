@@ -55,10 +55,13 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
             200,
             serde_json::to_value(engine.snapshot()).unwrap_or(Value::Null),
         ),
-        ("POST", "/notify") => {
-            let id = engine.push_notification(notification(&body())).id;
-            (200, json!({ "ok": true, "id": id }))
-        }
+        // A post the user's role does not want is still a success: the sender
+        // did nothing wrong, and an error would make an agent retry it. `id`
+        // is null and `filtered` says why.
+        ("POST", "/notify") => match engine.raise_notification(notification(&body())) {
+            Some(raised) => (200, json!({ "ok": true, "id": raised.id })),
+            None => (200, json!({ "ok": true, "id": null, "filtered": true })),
+        },
         // A coordinator answering one of the sessions in its run.
         //
         // The daemon decides and the CALLER delivers: nothing here drives a
@@ -93,6 +96,9 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         ("POST", "/notifications/dismiss") => {
             answer(engine.dismiss_notifications(&id_list(&body(), "ids")))
         }
+        // The feed's Clear all: every notification resolved, in memory and in
+        // SQLite. No body, because "all" has nothing to name.
+        ("POST", "/notifications/clear") => answer(engine.resolve_all_notifications()),
         ("POST", "/done") => {
             let body = body();
             engine.process_done(DoneMarker {

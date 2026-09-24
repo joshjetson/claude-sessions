@@ -3,6 +3,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// The fixed id of the one aggregated "sessions have gone quiet" row.
+///
+/// Fixed, so the daemon updates the row in place instead of stacking a new one
+/// every minute, and so the feed can pin it above everything else. It is never
+/// written to SQLite: the daemon rebuilds it from the live sessions on every
+/// tick, and a copy restored after a restart would describe sessions that may
+/// no longer exist.
+pub const QUIET_SESSIONS_ID: &str = "quiet-sessions";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NotificationLevel {

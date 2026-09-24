@@ -11,10 +11,10 @@ use ratatui::text::Line;
 
 use crate::board::{
     board_item_key, build_board_tree_with_runs, format_board_item, project_key, stage_key,
-    subtask_key, BoardItem,
+    subtask_key, BoardCtx, BoardItem,
 };
 use crate::qarun::{QaRun, RunCtx};
-use crate::types::{Notification, NotificationStatus, Task};
+use crate::types::{Notification, NotificationStatus, Task, QUIET_SESSIONS_ID};
 use crate::ui::spans::row_line;
 use crate::ui::state::AppState;
 
@@ -23,11 +23,16 @@ use super::slice::{live_task_ids, BoardSlice};
 /// The feed rows: a header, the unresolved notifications, and a blank line
 /// separating them from the tree. Resolved notifications are gone, not dimmed —
 /// resolving one is how you make it go away.
+///
+/// The quiet-sessions row is pinned first. It is one row that stands for every
+/// quiet session, so it would sink below newer rows while it still matters.
 fn notification_items(notifications: &VecDeque<Notification>) -> Vec<BoardItem<'_>> {
-    let active: Vec<&Notification> = notifications
+    let mut active: Vec<&Notification> = notifications
         .iter()
         .filter(|n| n.status != NotificationStatus::Resolved)
         .collect();
+    // Stable, so every other row keeps its newest-first order.
+    active.sort_by_key(|n| n.id != QUIET_SESSIONS_ID);
     if active.is_empty() {
         return Vec::new();
     }
@@ -134,6 +139,9 @@ pub enum BoardRow {
     Notification {
         id: String,
     },
+    /// The "🔔 Notifications" header. Selectable so `x` on it can clear the
+    /// whole feed at once: there is no mouse, and a key needs a row to act on.
+    NotificationHeader,
     /// A QA run's header.
     QaRun {
         run_id: String,
@@ -181,6 +189,7 @@ impl BoardRow {
             BoardItem::Notification { notif } => BoardRow::Notification {
                 id: notif.id.clone(),
             },
+            BoardItem::NotificationHeader { .. } => BoardRow::NotificationHeader,
             BoardItem::QaRun { run, .. } => BoardRow::QaRun {
                 run_id: run.id.clone(),
                 project: run.project_name.clone(),
@@ -292,7 +301,11 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize, width: u16) ->
     let live = live_task_ids(state.sessions());
     // Only a QA run's status column reads the width; every other row formats
     // identically whatever the pane is.
-    let ctx = state.board.ctx_at_width(&live, width);
+    let qa_stages = state.config.qa_alerts().stages;
+    let ctx = BoardCtx {
+        qa_stages: Some(&qa_stages),
+        ..state.board.ctx_at_width(&live, width)
+    };
     BoardWindow {
         total: items.len(),
         selected,

@@ -160,7 +160,7 @@ impl<S: ProcessSource> EngineInner<S> {
             mr_url: mr_url.clone(),
         });
 
-        self.push_notification(NewNotification {
+        self.raise_notification(NewNotification {
             cwd: marker.cwd.clone(),
             project: Some(detail.project_name.clone()),
             task_id: Some(task_id),
@@ -225,7 +225,7 @@ impl<S: ProcessSource> EngineInner<S> {
                 .collect::<Vec<_>>()
                 .join("  ")
         };
-        self.push_notification(NewNotification {
+        self.raise_notification(NewNotification {
             cwd: marker.cwd.clone(),
             project: Some(project.clone()),
             task_id: Some(task_id),

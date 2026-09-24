@@ -223,6 +223,11 @@ fn the_shipped_example_config_is_read_key_for_key() {
     let alerts = config.alerts();
     assert!(alerts.enabled);
     assert_eq!(alerts.new_task_stages, ["Approved to Start"]);
+    assert_eq!(config.role(), crate::types::UserRole::Dev);
+    let qa = config.qa_alerts();
+    assert_eq!(qa.stages.len(), 3);
+    assert_eq!(qa.projects, Some(vec!["Your Odoo Project".to_string()]));
+    assert!(qa.other_qa_user_ids.is_empty());
     assert_eq!(
         config.sounds().success.as_deref(),
         Some("/System/Library/Sounds/Glass.aiff")

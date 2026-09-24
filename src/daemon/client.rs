@@ -209,6 +209,12 @@ impl DaemonClient {
             .is_some_and(|response| response.accepted())
     }
 
+    /// Resolve every notification in the daemon's feed.
+    pub fn clear_notifications(&self) -> bool {
+        self.post("/notifications/clear", json!({}))
+            .is_some_and(|response| response.accepted())
+    }
+
     /// The legacy notification contract `claude-sessions notify` posts.
     pub fn notify(&self, body: Value) -> Option<Response> {
         self.post("/notify", body)

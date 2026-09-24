@@ -219,6 +219,14 @@ fn cancel(state: &mut AppState, project: String) {
 }
 
 fn resolve_conflicts(state: &mut AppState, task: DeployTask) {
+    // Resolving a conflict is development work on the branch. The QA role
+    // does not start it.
+    if !state.role.shows_dev_actions() {
+        return state.flash(format!(
+            "Resolving conflicts starts development work, which the {} role does not offer.",
+            state.role.as_str().to_uppercase()
+        ));
+    }
     if !has_conflicts(&task) {
         // Said rather than silently opening a dialog that would refuse: the
         // key only ever applies to a conflicted MR.

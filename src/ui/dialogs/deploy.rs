@@ -161,7 +161,8 @@ impl DeployTaskMenu {
             },
             DeployTaskAction::Merge,
         ));
-        if has_conflicts(task) {
+        // Not for the QA role: resolving a conflict is development work.
+        if has_conflicts(task) && state.role.shows_dev_actions() {
             // Conflicts are the one merge blocker an agent can clear, so the
             // offer sits right under Merge — and it says which session it will
             // use, because resuming the wrong one silently is the failure mode.

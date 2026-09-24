@@ -32,6 +32,7 @@ fn saved(handle: &ConfigHandle) -> Value {
 mod deploy;
 mod editing;
 mod keys;
+mod roles;
 mod round_trip;
 
 // --- defaults ---------------------------------------------------------------
