@@ -312,7 +312,18 @@ Audited against the key maps themselves, not against this document.
 | `f` | Filter: mine ↔ all |
 | `p` | Choose which projects load |
 | `M` | Your open merge requests |
-| `x` | Dismiss the selected notification |
+| `x` | Dismiss the selected notification. On the `🔔 Notifications` header, clear the whole feed (every row is marked resolved) |
+| `a` | Answer the selected question or verdict as yourself |
+| `]` | Jump to the next agent waiting on a decision |
+| `R` | Watch the selected stage as a QA run |
+
+With `"role": "qa"`, `s`, `v` and `C` start nothing and say so, the task menu drops
+**Start task**, **Add context & start** and the revision resumes, and the Deploy tab drops
+conflict resolution (`R`). QA, QA dry run, the pre-work brief, `R`, `]`, `a`, `m`, `M`,
+`D` and the archived **Resume conversation** stay.
+
+A task in a QA stage shows `✅` when Odoo says a developer marked it Complete, and `🔁`
+when Odoo says Changes Requested. The detail pane names the state too.
 
 ### Deploy
 
@@ -426,6 +437,10 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 
 | Key | Default | What it does |
 |---|---|---|
+| `role` | `dev` | `dev` \| `qa` \| `pm`. Anything else reads as `dev`. `qa` hides the development launches on the board and filters the notification feed (see below). `pm` behaves like `dev` for now. The daemon picks up an edit within a second |
+| `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | QA role only: tell me when a task lands in one of these. Revision stages never count. The first run records what is already there silently |
+| `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |
+| `qa.otherQaUserIds[]` | `[]` | QA role only: Odoo user ids of the other reviewers. A task one of them has is not announced unless you are assigned too |
 | `alerts.enabled` | `true` | The daemon's alerting as a whole |
 | `alerts.newTaskStages[]` | `["Approved to Start"]` | Tell me when a task assigned to me lands in one of these. The first run records what is already there silently, so you get new arrivals rather than your backlog |
 | `alerts.stuckAfterMinutes` | `15` | How quiet a running session has to be before it is worth mentioning |
@@ -441,6 +456,25 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | `diagnostics` | `false` | One memory sample a minute into `<runtime>/memory.log`, rotated at 256 KiB |
 | `terminal.driver` | `auto` | `auto` \| `iterm2` \| `tmux`. An explicit choice is never silently substituted |
 | `terminal.tmuxSession` | `claude-sessions` | The tmux session windows are grouped under |
+
+### What each role hears
+
+The daemon filters when it raises a notification, so a dropped one is never stored and
+never rings.
+
+| Source | `dev` / `pm` | `qa` |
+|---|---|---|
+| A session needs your decision, or waits on a prompt | ✓ | ✓ |
+| A task finished or was blocked | ✓ | ✓ |
+| `notify` posts that are a question or a verdict, or at warn or error level | ✓ | ✓ |
+| `notify` posts at info or success level | ✓ | — |
+| A task landed in `alerts.newTaskStages` (Approved to Start) | ✓ | — |
+| One alert per quiet task session | ✓ | — |
+| A task landed in a QA stage (`🧪 New in QA`) | — | ✓ |
+| One `⏳ N sessions quiet` row for every live session, updated in place, pinned first, one sound when it appears | — | ✓ |
+
+A dismissed quiet row stays hidden until a session that was not quiet at the time goes
+quiet. A question clears itself when its session stops waiting.
 
 ## Environment
 

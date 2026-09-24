@@ -66,8 +66,9 @@ pub mod protocol;
 pub mod server;
 
 pub use alerts::{
-    detect_new_assignments, detect_stalls, human_duration, normalise_stage, NewAssignment, Stall,
-    StallOptions,
+    detect_new_assignments, detect_qa_arrivals, detect_quiet_sessions, detect_stalls,
+    human_duration, normalise_stage, quiet_sessions_text, short_duration, NewAssignment, QaArrival,
+    QuietSession, Stall, StallOptions,
 };
 pub use backend::{
     resolve_target_branch, MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove,
@@ -83,7 +84,7 @@ pub use deploy::{
 };
 pub use engine::{
     AnswerOutcome, AssignedFetch, BoardFetch, DeployFetch, Engine, EngineOptions, EngineStats,
-    RefreshRequest, UsageHook,
+    QaStageFetch, RefreshRequest, UsageHook,
 };
 pub use events::{wire_session, EngineEvent, SessionStats, SessionsEvent, Snapshot};
 pub use markers::{BlockedMarker, DoneMarker, MARKER_SETTLE};
@@ -92,8 +93,8 @@ pub use pending::PendingRequest;
 pub use protocol::{DaemonInfo, DEFAULT_PORT};
 pub use server::ServerHandle;
 pub use state::{
-    BlockedTask, BoardFilter, EngineState, PendingLaunch, SessionIndex, TaskLink, TaskLinkPatch,
-    TaskLinkStatus,
+    BlockedTask, BoardFilter, EngineState, PendingLaunch, QuietSessions, QuietStep, SessionIndex,
+    TaskLink, TaskLinkPatch, TaskLinkStatus,
 };
 pub use summary::summary_to_html;
 pub use watchers::{is_awaiting_user_decision, is_blocked_on_tool_call, BLOCKED_TOOL_DWELL};

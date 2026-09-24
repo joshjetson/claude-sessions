@@ -78,6 +78,9 @@ impl<S: ProcessSource> EngineInner<S> {
         // the same clock and a slow scan cannot make the first row look fresher
         // than the last.
         let now = self.now();
+        // Before anything reads a setting: a role or alert edit takes effect on
+        // the next tick rather than at the next daemon restart.
+        self.sync_config();
 
         // The scan guard is held across the watchers because the archive asks
         // the same transcript-head cache the pairing rules use. Lock order is
@@ -119,6 +122,7 @@ impl<S: ProcessSource> EngineInner<S> {
         // immediately judged for silence.
         self.notify_awaiting_decisions(&sessions, &hooked, now);
         self.notify_stalled_sessions(&sessions, now);
+        self.update_quiet_sessions(&sessions, now);
         self.auto_archive_vanished_sessions(&sessions, scanner.task_refs());
         self.link_pending_sessions(&sessions, now);
         drop(scan);

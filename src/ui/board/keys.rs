@@ -30,8 +30,21 @@ pub fn handle_board(state: &mut AppState, key: KeyEvent) {
     }
 }
 
+/// Keys that start or resume development work. The QA role does not get them.
+const DEV_KEYS: [char; 3] = ['s', 'v', 'C'];
+
 fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
     let task = snapshot.row.task().cloned();
+    if DEV_KEYS.contains(&ch) && !state.role.shows_dev_actions() {
+        // Said, not silently swallowed: a reviewer pressing `s` from habit
+        // should learn where the QA launch is rather than think the key broke.
+        state.flash(format!(
+            "`{ch}` starts development work, which the {} role does not offer. \
+             Press Enter on the task and pick QA to start a pass.",
+            state.role.as_str().to_uppercase()
+        ));
+        return;
+    }
     match ch {
         's' => with_task(state, task, |state, task| {
             start(state, StartRequest::new(&task, LaunchKind::Task))
@@ -248,7 +261,7 @@ fn on_select(state: &mut AppState, snapshot: &BoardSnapshot) {
             let run_id = run_id.clone();
             open(state, Dialog::RunMenu(RunMenu::build(&run_id, state)));
         }
-        BoardRow::Inert => {}
+        BoardRow::NotificationHeader | BoardRow::Inert => {}
     }
 }
 
@@ -315,7 +328,7 @@ fn on_expand(state: &mut AppState, snapshot: &BoardSnapshot, expand: bool) {
                 show_notification(state, &id);
             }
         }
-        BoardRow::Inert => {}
+        BoardRow::NotificationHeader | BoardRow::Inert => {}
     }
 }
 
@@ -364,21 +377,21 @@ fn read_notification(state: &mut AppState, id: &str) {
     if state.notification(id).map(|n| n.status) != Some(NotificationStatus::Unread) {
         return;
     }
-    state.set_notification_status(id, NotificationStatus::Read);
-    state.enqueue(Action::Notifications {
-        ids: vec![id.to_string()],
-        status: Some(NotificationStatus::Read),
-    });
+    state.change_notifications(vec![id.to_string()], Some(NotificationStatus::Read));
 }
 
+/// `x` dismisses the notification under the cursor. On the feed's header it
+/// clears the whole feed.
 fn dismiss(state: &mut AppState, snapshot: &BoardSnapshot) {
-    if let BoardRow::Notification { id } = &snapshot.row {
-        let id = id.clone();
-        state.dismiss_notification(&id);
-        state.enqueue(Action::Notifications {
-            ids: vec![id],
-            status: None,
-        });
+    match &snapshot.row {
+        BoardRow::Notification { id } => {
+            state.change_notifications(vec![id.clone()], None);
+        }
+        BoardRow::NotificationHeader => {
+            state.clear_notifications();
+            state.flash("Cleared every notification.");
+        }
+        _ => {}
     }
 }
 

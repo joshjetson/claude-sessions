@@ -47,6 +47,16 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
     }
     rows.push(meta.build());
     rows.push(line(task.stage_name.clone(), Role::Accent));
+    if let Some(badge) = state.qa_state_badge {
+        rows.push(line(
+            badge.detail,
+            if badge.attention {
+                Role::Warn
+            } else {
+                Role::Ok
+            },
+        ));
+    }
     if let Some(deadline) = task.deadline.as_deref().filter(|d| !d.is_empty()) {
         rows.push(line(format!("deadline: {deadline}"), Role::Dim));
     }
@@ -56,15 +66,30 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         rows.push(line("⟳ session running", Role::Ok));
     }
     rows.push(blank());
-    rows.push(line(
-        "Enter → action menu (start / add context)   ·   s → start now",
-        Role::Dim,
-    ));
-    if state.archived {
+    if state.qa_role {
+        // The QA role has no `s`, `v` or `C`. Pointing at them would send a
+        // reviewer to a key that only explains it is not theirs.
         rows.push(line(
-            "💾 transcript archived → press v to resume for a revision, C to just talk to it",
-            Role::Accent,
+            "Enter → action menu (QA / QA dry run / brief)",
+            Role::Dim,
         ));
+        if state.archived {
+            rows.push(line(
+                "💾 transcript archived → Enter, then Resume conversation",
+                Role::Accent,
+            ));
+        }
+    } else {
+        rows.push(line(
+            "Enter → action menu (start / add context)   ·   s → start now",
+            Role::Dim,
+        ));
+        if state.archived {
+            rows.push(line(
+                "💾 transcript archived → press v to resume for a revision, C to just talk to it",
+                Role::Accent,
+            ));
+        }
     }
 
     // The auto-dev daemon's own state, when it is the one working this task:
@@ -177,6 +202,12 @@ pub struct TaskState<'a> {
     /// Named individually, because "there are four recordings" and "here are
     /// the four workflows someone recorded" are different answers.
     pub optics_detail: Option<&'a crate::optics::TaskOptics>,
+    /// The QA role, whose pane names the QA entries rather than `s` and `v`.
+    /// False by default, which is the developer view every install had.
+    pub qa_role: bool,
+    /// What Odoo's `state` says about a task still in a QA stage: Complete,
+    /// or Changes Requested. See [`crate::types::qa_state_badge`].
+    pub qa_state_badge: Option<crate::types::QaStateBadge>,
 }
 
 /// What the board knows about a task right now.
@@ -214,6 +245,11 @@ pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
             .optics
             .as_ref()
             .filter(|_| state.board.detail_answers.task_id == Some(task_id)),
+        qa_role: !state.role.shows_dev_actions(),
+        qa_state_badge: state
+            .board
+            .task(task_id)
+            .and_then(|task| task.qa_state_badge(&state.config.qa_alerts().stages)),
     }
 }
 

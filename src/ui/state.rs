@@ -20,7 +20,7 @@ use crate::errorlog::ErrorReport;
 use crate::paths::Paths;
 use crate::types::{
     ConversationMessage, DefaultView, Notification, NotificationKind, NotificationLevel,
-    NotificationStatus,
+    NotificationStatus, UserRole,
 };
 use crate::ui::board::slice::{BoardSlice, BoardUpdate};
 use crate::ui::conversation::ConversationMeta;
@@ -196,6 +196,10 @@ pub struct ConversationView {
 pub struct AppState {
     pub paths: Paths,
     pub config: ConfigHandle,
+    /// Who is using the dashboard, which decides the keys and menu entries the
+    /// board offers. Read from the config at startup and refreshed by the run
+    /// loop when the file changes, so it is a field read in every key handler.
+    pub role: UserRole,
     pub view: View,
     pub focus: Pane,
     pub by_project: SessionsByProject,
@@ -274,6 +278,7 @@ impl AppState {
         let restored = db.qa_runs();
         AppState {
             paths,
+            role: config.role(),
             config,
             view,
             focus: Pane::Tree,
@@ -469,14 +474,95 @@ impl AppState {
         self.dirty = true;
     }
 
+    /// Change notifications here AND at their owner.
+    ///
+    /// Every key and menu entry that resolves, reads or dismisses goes through
+    /// this, so the row changes on screen at once and the same change is queued
+    /// for the daemon, or for SQLite when there is no daemon. `None` dismisses.
+    ///
+    /// The NotifMenu's Resolve and Dismiss used to queue the action only. The
+    /// row stayed on screen until something else redrew the feed, which read as
+    /// the menu doing nothing.
+    pub fn change_notifications(&mut self, ids: Vec<String>, status: Option<NotificationStatus>) {
+        self.apply_notifications_changed(&ids, status, status.is_none());
+        self.enqueue(Action::Notifications { ids, status });
+    }
+
+    /// Resolve every notification: the feed header's Clear all.
+    ///
+    /// Resolved, not dismissed, to match the daemon. See
+    /// `EngineInner::resolve_all_notifications` for why.
+    pub fn clear_notifications(&mut self) {
+        for notification in self.notifications.iter_mut() {
+            notification.status = NotificationStatus::Resolved;
+        }
+        self.enqueue(Action::ClearNotifications);
+        self.dirty = true;
+    }
+
+    /// Fold in a change the daemon announced: a status for some ids, or their
+    /// removal. Ids this dashboard does not hold are ignored.
+    pub fn apply_notifications_changed(
+        &mut self,
+        ids: &[String],
+        status: Option<NotificationStatus>,
+        removed: bool,
+    ) {
+        if removed {
+            self.notifications.retain(|n| !ids.contains(&n.id));
+        } else if let Some(status) = status {
+            for notification in self.notifications.iter_mut() {
+                if ids.contains(&notification.id) {
+                    notification.status = status;
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Replace the feed with the daemon's list, from the snapshot it sends on
+    /// connect.
+    ///
+    /// Silent, and it wakes no coordinator: this is the backlog, not news.
+    /// Without it a dashboard opened after an alert showed an empty feed, and a
+    /// reconnect kept rows the daemon had already resolved.
+    pub fn replace_notifications(&mut self, notifications: Vec<Notification>) {
+        self.notifications = notifications.into_iter().take(MAX_NOTIFICATIONS).collect();
+        self.dirty = true;
+    }
+
+    /// A notification already in the feed changed its text. Replaced where it
+    /// sits, or put at the front when this dashboard does not hold it yet, and
+    /// never with a sound. The daemon sends these for the quiet-sessions row,
+    /// which it refreshes about once a minute.
+    pub fn upsert_notification(&mut self, notification: Notification) {
+        match self
+            .notifications
+            .iter_mut()
+            .find(|n| n.id == notification.id)
+        {
+            Some(existing) => *existing = notification,
+            None => {
+                self.notifications.push_front(notification);
+                self.notifications.truncate(MAX_NOTIFICATIONS);
+            }
+        }
+        self.dirty = true;
+    }
+
     /// A new notification rings, then joins the feed.
     ///
     /// The sound is enqueued rather than played here: the draw thread starts no
     /// processes (brief §10 mandate #9), and `afplay` is a process like any
     /// other.
+    ///
+    /// A notification whose id is already in the feed replaces it. The daemon
+    /// re-raises the quiet-sessions row under its fixed id after a dismissal,
+    /// and two copies of one row would be a lie about how many there are.
     pub fn push_notification(&mut self, notification: Notification) {
         self.enqueue(Action::Sound(notification.level));
         self.wake_coordinator_for(&notification);
+        self.notifications.retain(|n| n.id != notification.id);
         self.notifications.push_front(notification);
         while self.notifications.len() > MAX_NOTIFICATIONS {
             self.notifications.pop_back();

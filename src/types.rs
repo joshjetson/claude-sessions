@@ -12,16 +12,20 @@
 mod board;
 mod deploy;
 mod notify;
+mod role;
 mod session;
 mod transcript;
 mod ui;
 mod wire;
 
-pub use board::{Board, BoardProject, BoardStage, OdooCreds, Task};
+pub use board::{qa_state_badge, Board, BoardProject, BoardStage, OdooCreds, QaStateBadge, Task};
 pub use deploy::{
     DeployBoard, DeployProjectState, DeployRun, DeployRunStatus, DeployTask, MergeRequest,
 };
-pub use notify::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
+pub use notify::{
+    Notification, NotificationKind, NotificationLevel, NotificationStatus, QUIET_SESSIONS_ID,
+};
+pub use role::{NotificationPolicy, UserRole};
 pub use session::{RawSession, Session, SessionFile, SessionStatus};
 pub use transcript::{
     ConversationMessage, CumulativeUsage, EntryKind, LastEntry, MessageRole, ParsedSession,

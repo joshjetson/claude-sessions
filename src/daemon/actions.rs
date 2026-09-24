@@ -117,6 +117,21 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.mark_notifications_read(ids)
     }
 
+    /// Raise a notification through the user's role policy. `None` means the
+    /// policy dropped it, so nothing was stored or sent.
+    pub fn raise_notification(
+        &self,
+        notification: NewNotification,
+    ) -> Option<crate::types::Notification> {
+        self.inner.raise_notification(notification)
+    }
+
+    /// Resolve every notification in the feed. See
+    /// [`super::notify`]'s `resolve_all_notifications`.
+    pub fn resolve_all_notifications(&self) -> ActionResult {
+        self.inner.resolve_all_notifications()
+    }
+
     /// Ask Claude Code how much of the plan is used. Failures keep the previous
     /// numbers: a stale readout with its timestamp beats one that blinks out.
     pub fn refresh_usage(&self) -> Option<serde_json::Value> {

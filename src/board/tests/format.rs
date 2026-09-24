@@ -352,3 +352,121 @@ fn an_unread_error_is_red_with_its_own_marker() {
     let row = format_board_item(&BoardItem::Notification { notif: &warn }, &ctx());
     assert_eq!(role_of(&row, "●"), Some(Role::Warn));
 }
+
+// --- the Complete badge -----------------------------------------------------
+
+fn with_state(stage: &str, state: Option<&str>) -> Task {
+    Task {
+        stage_name: stage.to_string(),
+        state: state.map(str::to_string),
+        ..task(6101, "Checked by dev")
+    }
+}
+
+/// A developer marked it Complete while it still sits in QA. Odoo moves the two
+/// independently, so the row says so.
+#[test]
+fn a_complete_task_in_a_qa_stage_carries_the_badge() {
+    for stage in ["QA", "Quality Assurance", " quality assurance "] {
+        let row = row_for(&with_state(stage, Some("03_approved")), &ctx());
+        assert!(text(&row).contains("✅"), "{stage}: {}", text(&row));
+        assert_eq!(role_of(&row, "✅"), Some(Role::Ok));
+    }
+}
+
+#[test]
+fn complete_outside_a_qa_stage_or_another_state_in_qa_carries_none() {
+    for (stage, state) in [
+        ("In Progress", Some("03_approved")),
+        ("Deployed", Some("03_approved")),
+        ("QA", Some("1_done")),
+        ("QA", Some("01_in_progress")),
+        ("QA", None),
+    ] {
+        let row = row_for(&with_state(stage, state), &ctx());
+        assert!(!text(&row).contains("✅"), "{stage} {state:?}");
+    }
+}
+
+/// The badge is not the status glyph: the dashboard's own "done" marker keeps
+/// its slot and meaning.
+#[test]
+fn the_badge_leaves_the_status_marker_alone() {
+    let row = row_for(&with_state("QA", Some("03_approved")), &ctx());
+    assert!(text(&row).starts_with("      ○ "), "{}", text(&row));
+}
+
+/// The configured stage list wins over the built-in one.
+#[test]
+fn the_badge_follows_the_configured_qa_stages() {
+    let stages = vec!["Ready for QA".to_string()];
+    let ctx = BoardCtx {
+        qa_stages: Some(&stages),
+        ..ctx()
+    };
+    let custom = row_for(&with_state("ready for qa", Some("03_approved")), &ctx);
+    assert!(text(&custom).contains("✅"));
+    let default = row_for(&with_state("QA", Some("03_approved")), &ctx);
+    assert!(!text(&default).contains("✅"));
+}
+
+/// A task from a daemon that predates the field still parses, and a task with
+/// no state writes none, so an older client reads it too.
+#[test]
+fn a_task_without_state_round_trips() {
+    let old = serde_json::json!({
+        "id": 1, "name": "n", "stageId": 2, "stageName": "QA",
+        "projectId": 3, "projectName": "Aurora"
+    });
+    let task: Task = serde_json::from_value(old).unwrap();
+    assert_eq!(task.state, None);
+    assert!(serde_json::to_value(&task).unwrap().get("state").is_none());
+
+    let complete = with_state("QA", Some("03_approved"));
+    let wire = serde_json::to_value(&complete).unwrap();
+    assert_eq!(wire["state"], "03_approved");
+    assert_eq!(serde_json::from_value::<Task>(wire).unwrap(), complete);
+}
+
+/// Changes Requested gets its own badge, in the warning colour: the reviewer
+/// has asked for something, and the stage has not moved.
+#[test]
+fn changes_requested_in_a_qa_stage_carries_its_own_badge() {
+    for stage in ["QA", "Quality Assurance", " quality assurance "] {
+        let row = row_for(&with_state(stage, Some("02_changes_requested")), &ctx());
+        assert!(text(&row).contains("🔁"), "{stage}: {}", text(&row));
+        assert!(!text(&row).contains("✅"));
+        assert_eq!(role_of(&row, "🔁"), Some(Role::Warn));
+    }
+}
+
+#[test]
+fn changes_requested_outside_a_qa_stage_carries_none() {
+    for stage in ["In Progress", "Deployed", "Revision Required"] {
+        let row = row_for(&with_state(stage, Some("02_changes_requested")), &ctx());
+        assert!(!text(&row).contains("🔁"), "{stage}");
+    }
+}
+
+/// The one mapping every state badge goes through.
+#[test]
+fn the_state_badge_mapping() {
+    use crate::types::qa_state_badge;
+    assert_eq!(
+        qa_state_badge(Some("03_approved"), true).unwrap().glyph,
+        "✅"
+    );
+    assert_eq!(
+        qa_state_badge(Some("03_approved"), true).unwrap().detail,
+        "✅ Marked Complete in Odoo"
+    );
+    let changes = qa_state_badge(Some("02_changes_requested"), true).unwrap();
+    assert_eq!(changes.glyph, "🔁");
+    assert_eq!(changes.detail, "🔁 Changes Requested in Odoo");
+    assert!(changes.attention);
+    for state in [None, Some("1_done"), Some("01_in_progress"), Some("")] {
+        assert_eq!(qa_state_badge(state, true), None, "{state:?}");
+    }
+    assert_eq!(qa_state_badge(Some("03_approved"), false), None);
+    assert_eq!(qa_state_badge(Some("02_changes_requested"), false), None);
+}

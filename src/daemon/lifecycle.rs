@@ -23,7 +23,8 @@ const TICK: Duration = Duration::from_secs(1);
 /// …and how often while a launch is still waiting for its session, so a new
 /// session shows up within half a second of being spawned.
 const FAST_TICK: Duration = Duration::from_millis(500);
-/// The slow cadence: the board poll and the new-assignment watcher.
+/// The slow cadence: the board poll, the new-assignment watcher and the QA
+/// arrival watcher.
 const SLOW_TICK: Duration = Duration::from_secs(45);
 
 /// A stop flag with a condition variable, so a sleeping loop wakes the instant
@@ -93,6 +94,7 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
 
         self.inner.refresh(true);
         self.inner.notify_new_assignments();
+        self.inner.notify_qa_arrivals();
         // Warmed, never awaited: the board is one Odoo round trip and `start`
         // is what a client waits on before its first snapshot. The Node
         // original did the same, for the same reason.
@@ -152,6 +154,7 @@ fn run_loop<S: ProcessSource + Send + 'static>(
         if now >= next_slow {
             next_slow = now + SLOW_TICK;
             inner.notify_new_assignments();
+            inner.notify_qa_arrivals();
             inner.poll_board();
         }
         if let (Some(at), Some(interval)) = (next_usage, usage_interval) {

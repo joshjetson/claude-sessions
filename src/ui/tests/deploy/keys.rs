@@ -173,3 +173,18 @@ fn big_r_only_applies_to_a_conflicted_merge_request() {
         .unwrap_or_default()
         .contains("does not report merge conflicts"));
 }
+
+/// Resolving a conflict is development work, so the QA role does not start it.
+#[test]
+fn big_r_is_not_offered_to_the_qa_role() {
+    let (_dir, mut state) = deploy_state(vec![task(1, Some(mr(101)))]);
+    state.role = crate::types::UserRole::Qa;
+    select(&mut state, "dt:1");
+    press_shift(&mut state, 'R');
+    assert!(state.dialog.is_none());
+    assert!(state
+        .flash
+        .clone()
+        .unwrap_or_default()
+        .contains("QA role does not offer"));
+}

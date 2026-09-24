@@ -42,7 +42,9 @@ fn blank() -> Row {
 
 /// One task, with everything known about its merge request and — the point of
 /// the pane — exactly why it can or cannot be merged.
-pub fn task_rows(task: &DeployTask, resumable: bool) -> Vec<Row> {
+/// `dev_actions` is false for the QA role, which is not offered conflict
+/// resolution, so neither is the pane.
+pub fn task_rows(task: &DeployTask, resumable: bool, dev_actions: bool) -> Vec<Row> {
     let mut rows = vec![
         bold(task.name.clone()),
         line(format!("#{}  ·  {}", task.id, task.project_name), Role::Dim),
@@ -116,7 +118,7 @@ pub fn task_rows(task: &DeployTask, resumable: bool) -> Vec<Row> {
 
     // Conflicts are the one merge blocker an agent can actually clear, so the
     // offer sits right under the verdict.
-    if has_conflicts(task) {
+    if has_conflicts(task) && dev_actions {
         rows.push(blank());
         rows.push(line(
             if resumable {
@@ -130,7 +132,11 @@ pub fn task_rows(task: &DeployTask, resumable: bool) -> Vec<Row> {
 
     rows.push(blank());
     rows.push(line(
-        "m merge  ·  R resolve conflicts  ·  g session  ·  o open MR  ·  t open task  ·  d deploy",
+        if dev_actions {
+            "m merge  ·  R resolve conflicts  ·  g session  ·  o open MR  ·  t open task  ·  d deploy"
+        } else {
+            "m merge  ·  g session  ·  o open MR  ·  t open task  ·  d deploy"
+        },
         Role::Dim,
     ));
     rows
@@ -277,7 +283,7 @@ pub fn show_row(state: &mut AppState, row: &super::view::DeployRow) {
     match row {
         DeployRow::Task { task, .. } => {
             let resumable = state.board.archived_tasks.contains(&task.id);
-            let rows = task_rows(task, resumable);
+            let rows = task_rows(task, resumable, state.role.shows_dev_actions());
             set_detail(state, TASK_LABEL, rows, Some(task.id), None);
         }
         DeployRow::Project { name } => show_project(state, &name.clone()),

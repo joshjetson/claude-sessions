@@ -262,6 +262,9 @@ impl BoardSlice {
             auto_dev: Some(crate::autodev::board_marker),
             now: None,
             tree_cols,
+            // The built-in QA stages. The board window passes the configured
+            // list; see [`crate::ui::board::view::window`].
+            qa_stages: None,
         }
     }
 }

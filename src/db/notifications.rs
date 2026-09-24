@@ -114,6 +114,17 @@ impl Db {
         self.set_notification_status(ids, NotificationStatus::Read);
     }
 
+    /// Resolves every row that is still unread or read: the feed's Clear all.
+    pub fn resolve_all_notifications(&self) {
+        self.exec("resolve_all_notifications", |conn| {
+            conn.execute(
+                "UPDATE notifications SET status = 'resolved' WHERE status IN ('unread', 'read')",
+                [],
+            )?;
+            Ok(())
+        });
+    }
+
     /// Keeps the table from growing without bound, newest `keep` rows surviving.
     pub fn prune_notifications(&self, keep: i64) {
         self.exec("prune_notifications", |conn| {

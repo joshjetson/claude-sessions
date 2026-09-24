@@ -5,6 +5,8 @@
 
   "defaultView": "board",
 
+  "role": "dev",
+
   "odoo": {
     "url": "https://odoo.example.com",
     "db": "REPLACE_WITH_DB",
@@ -75,6 +77,12 @@
   "usage": {
     "enabled": true,
     "intervalMinutes": 0
+  },
+
+  "qa": {
+    "newTaskStages": ["QA", "Quality Assurance", "Tech Debt Work"],
+    "projects": ["Your Odoo Project"],
+    "otherQaUserIds": []
   },
 
   "alerts": {

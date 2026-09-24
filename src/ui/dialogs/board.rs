@@ -67,11 +67,16 @@ impl TaskMenu {
             ));
             entries.push(("⌨  Open session terminal".into(), TaskAction::FocusTerminal));
         }
-        entries.push(("▶  Start task".into(), TaskAction::Start(LaunchKind::Task)));
-        entries.push((
-            "✎  Add context & start…".into(),
-            TaskAction::Context { revision: false },
-        ));
+        // Development launches. The QA role never starts development work on a
+        // task, so it is not offered the entries that would.
+        let dev = state.role.shows_dev_actions();
+        if dev {
+            entries.push(("▶  Start task".into(), TaskAction::Start(LaunchKind::Task)));
+            entries.push((
+                "✎  Add context & start…".into(),
+                TaskAction::Context { revision: false },
+            ));
+        }
         // The QA label states what selecting it will do — start, resume a
         // round, or open a new one — which depends on QAden run state the board
         // cannot otherwise show. The `run.json` read is local and cheap; the
@@ -97,16 +102,19 @@ impl TaskMenu {
                     session_id: String::new(),
                 }),
             ));
-            entries.push((
-                "↺  Resume for revision (prior context)".into(),
-                TaskAction::Start(LaunchKind::Revision {
-                    session_id: String::new(),
-                }),
-            ));
-            entries.push((
-                "↺  Resume for revision + add context…".into(),
-                TaskAction::Context { revision: true },
-            ));
+            // A revision is a developer fixing what QA sent back.
+            if dev {
+                entries.push((
+                    "↺  Resume for revision (prior context)".into(),
+                    TaskAction::Start(LaunchKind::Revision {
+                        session_id: String::new(),
+                    }),
+                ));
+                entries.push((
+                    "↺  Resume for revision + add context…".into(),
+                    TaskAction::Context { revision: true },
+                ));
+            }
         }
         // Only when there is something to read, or a daemon tag saying there
         // will be — Node gated the row the same way (`dialogs.js:347`), and an

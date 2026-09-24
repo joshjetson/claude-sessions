@@ -77,6 +77,16 @@ fn daemon_options(paths: Paths, config: ConfigHandle) -> EngineOptions {
             .map_err(|error| error.to_string())
     }));
 
+    // QA arrivals, for the QA role. Installed whatever the role is: the
+    // watcher checks the role on each slow tick, so a role edited in the
+    // config takes effect without restarting the daemon.
+    let qa_odoo = Arc::clone(&odoo);
+    options.fetch_qa_stage = Some(Box::new(move |stages| {
+        qa_odoo
+            .fetch_in_qa_stages(stages)
+            .map_err(|error| error.to_string())
+    }));
+
     // Cloned into the hook rather than borrowed: the engine outlives this
     // function, and a deploy fetch happens on a worker thread.
     let specs_config = options.config.clone();

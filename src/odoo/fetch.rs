@@ -259,6 +259,84 @@ impl OdooClient {
     }
 }
 
+/// A task sitting in a QA stage, with what the QA arrival rule needs beyond
+/// the board fields: who it is assigned to, and when it entered its stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QaStageTask {
+    pub task: Task,
+    /// Odoo user ids on the task.
+    pub user_ids: Vec<i64>,
+    /// Whether the authenticated user is one of `user_ids`.
+    pub assigned_to_me: bool,
+    /// Odoo's `date_last_stage_update`, as written. Empty when Odoo sent none.
+    ///
+    /// It changes each time the task enters a stage, so a task that goes to QA,
+    /// back to a developer and to QA again reads as a new arrival the second
+    /// time, while a daemon restart does not.
+    pub stage_entered: String,
+}
+
+impl OdooClient {
+    /// Every open task in the given stages, whoever it is assigned to.
+    ///
+    /// Not scoped to the current user, unlike
+    /// [`OdooClient::fetch_assigned_in_stages`]: a QA reviewer is told about
+    /// unclaimed arrivals too, and a task claimed by another reviewer is told
+    /// apart by its `user_ids`. Newest stage entry first, so the 200-row cap
+    /// drops the oldest arrivals rather than the newest.
+    ///
+    /// "Complete" (`03_approved`) is excluded along with done and cancelled. A
+    /// developer can mark a task complete while its stage still says QA, and
+    /// the QA Board found tasks left that way for 195 days.
+    pub fn fetch_in_qa_stages(&self, stage_names: &[String]) -> Result<Vec<QaStageTask>> {
+        if stage_names.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uid = self.authenticate()?;
+        let mut fields: Vec<&str> = TASK_FIELDS.to_vec();
+        fields.extend(["user_ids", "date_last_stage_update"]);
+        let records = self.search_read(
+            "project.task",
+            vec![
+                json!(["stage_id.name", "in", stage_names]),
+                json!([
+                    "state",
+                    "not in",
+                    [
+                        super::task_state::DONE,
+                        super::task_state::CANCELLED,
+                        super::task_state::COMPLETE
+                    ]
+                ]),
+            ],
+            json!({ "fields": fields, "order": "date_last_stage_update desc", "limit": 200 }),
+        )?;
+        let tag_meta = self.tag_meta();
+        Ok(records
+            .iter()
+            .filter(|record| {
+                record
+                    .get("project_id")
+                    .and_then(|p| p.as_array())
+                    .is_some()
+            })
+            .map(|record| {
+                let user_ids = records::id_list(record.get("user_ids"));
+                QaStageTask {
+                    task: to_task(record, &|id| tag_meta.get(&id).cloned()),
+                    assigned_to_me: user_ids.contains(&uid),
+                    user_ids,
+                    stage_entered: record
+                        .get("date_last_stage_update")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                }
+            })
+            .collect())
+    }
+}
+
 /// The rows of a `read`/`search_read` result, or nothing when the shape is
 /// not what we asked for.
 pub(super) fn as_records(value: &Value) -> Vec<&Value> {

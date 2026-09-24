@@ -17,6 +17,7 @@ mod launch;
 mod linking;
 mod pickers;
 mod revision;
+mod roles;
 mod runs;
 mod view;
 

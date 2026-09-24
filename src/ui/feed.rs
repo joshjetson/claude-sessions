@@ -47,8 +47,19 @@ pub enum FeedEvent {
         /// is the truth. See [`crate::scan::Scanner::last_scan_complete`].
         scan_complete: bool,
     },
-    /// Phase 5/6 produce these; nothing does yet.
+    /// A new notification from the daemon. Rings.
     Notification(Box<Notification>),
+    /// The daemon's whole feed, from the snapshot it sends on connect. Replaces
+    /// the local list, silently.
+    Notifications(Vec<Notification>),
+    /// A notification already in the feed changed its text. Silent.
+    NotificationUpdated(Box<Notification>),
+    /// The daemon changed some notifications' status, or removed them.
+    NotificationsChanged {
+        ids: Vec<String>,
+        status: Option<crate::types::NotificationStatus>,
+        removed: bool,
+    },
     /// One Odoo board fetch, from whichever side made it — the daemon's `board`
     /// event, or the in-process worker.
     Board(Box<crate::ui::board::BoardUpdate>),
@@ -94,6 +105,24 @@ pub trait SessionFeed: Send {
     }
     /// Re-read the group list (a group was added or removed).
     fn set_groups(&self, group_paths: Vec<String>);
+    /// Tell whoever owns the notification list that some changed. `None`
+    /// dismisses.
+    ///
+    /// `true` means this transport handled it. `false` means the caller writes
+    /// the change to SQLite itself, which is all an embedded feed has: it runs
+    /// no engine and holds no notification list of its own.
+    fn update_notifications(
+        &self,
+        ids: Vec<String>,
+        status: Option<crate::types::NotificationStatus>,
+    ) -> bool {
+        let _ = (ids, status);
+        false
+    }
+    /// The same for Clear all.
+    fn clear_notifications(&self) -> bool {
+        false
+    }
     /// Stop the engine behind this feed, for Shift-Q. Only the remote
     /// transport has anything to stop: an embedded engine dies with the
     /// process, and the daemon is meant to outlive the dashboard otherwise.

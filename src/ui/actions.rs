@@ -340,10 +340,22 @@ fn run(
         // deploy has to outlive the dashboard, so the feed posts it to the
         // daemon and the loop handles the answer.
         Action::StartDeploy { .. } | Action::CancelDeploy { .. } => {}
-        // The engine owns the notification list and persists it; the daemon
-        // client that writes a status change through arrives with Phase 6. The
-        // local copy has already been updated for immediate feedback.
-        Action::Notifications { .. } => {}
+        // Only reached when no daemon took the change: the run loop hands it
+        // to the daemon first, and the daemon owns the list and its SQLite
+        // rows. Without one, the rows in SQLite are all there is, so they are
+        // written here. A daemon started later restores the feed from them and
+        // must not bring back what was cleared. The local copy has already
+        // been updated for immediate feedback.
+        Action::Notifications { ids, status } => {
+            let db = crate::db::Db::open(&services.paths);
+            match status {
+                Some(status) => db.set_notification_status(&ids, status),
+                None => db.delete_notifications(&ids),
+            }
+        }
+        Action::ClearNotifications => {
+            crate::db::Db::open(&services.paths).resolve_all_notifications();
+        }
 
         Action::Refresh | Action::RefreshBurst | Action::SelectSession { .. } => {}
     }

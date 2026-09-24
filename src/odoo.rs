@@ -19,7 +19,7 @@ pub mod records;
 mod rpc;
 mod stages;
 
-pub use fetch::FetchBoardOptions;
+pub use fetch::{FetchBoardOptions, QaStageTask};
 pub use records::{Blocker, OdooProject, TaskDetail, TaskGitlab, TASK_FIELDS};
 pub use rpc::{HttpTransport, OdooError, Result, Transport, DEFAULT_TIMEOUT};
 pub use stages::{

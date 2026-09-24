@@ -32,6 +32,12 @@ use super::state::{BoardFilter, EngineState};
 /// real one.
 pub type AssignedFetch = Box<dyn Fn(&[String]) -> Result<Vec<Task>, String> + Send + Sync>;
 
+/// The Odoo lookup behind the QA role's new-arrival alert: every open task in
+/// the named stages, whoever it is assigned to. Injected for the same reason
+/// as [`AssignedFetch`].
+pub type QaStageFetch =
+    Box<dyn Fn(&[String]) -> Result<Vec<crate::odoo::QaStageTask>, String> + Send + Sync>;
+
 /// The plan-usage readout. Phase 11 supplies it; the engine only carries the
 /// value to clients.
 pub type UsageHook = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
@@ -125,6 +131,7 @@ pub(crate) struct EngineInner<S: ProcessSource> {
     pub(crate) bus: EventBus,
     pub(crate) backend: Arc<dyn TaskBackend>,
     pub(crate) fetch_assigned: Option<AssignedFetch>,
+    pub(crate) fetch_qa_stage: Option<QaStageFetch>,
     pub(crate) fetch_board: Option<BoardFetch>,
     pub(crate) fetch_deploy: Option<DeployFetch>,
     pub(crate) daily_log: Option<DailyLogHook>,
@@ -134,7 +141,15 @@ pub(crate) struct EngineInner<S: ProcessSource> {
     pub(crate) counters: Counters,
     pub(crate) seq: AtomicU64,
     pub(crate) workers: Mutex<Vec<JoinHandle<()>>>,
+    /// The config file's modification time and length when the engine last
+    /// read it. See [`EngineInner::sync_config`].
+    pub(crate) config_stamp: Mutex<Option<ConfigStamp>>,
 }
+
+/// What [`EngineInner::sync_config`] compares to notice an edit. The length is
+/// there because two saves inside one timestamp tick are possible on a
+/// filesystem with coarse times.
+pub(crate) type ConfigStamp = (Option<std::time::SystemTime>, u64);
 
 impl<S: ProcessSource> EngineInner<S> {
     pub(crate) fn state(&self) -> MutexGuard<'_, EngineState> {
@@ -147,6 +162,32 @@ impl<S: ProcessSource> EngineInner<S> {
 
     pub(crate) fn config(&self) -> RwLockReadGuard<'_, ConfigHandle> {
         self.config.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Re-read the config file when it changed on disk since the last look.
+    ///
+    /// Called at the top of every tick. The board and deploy polls already
+    /// read a fresh copy each time through `reloaded()`, but the role and the
+    /// alert settings are read on the tick itself, and parsing the file every
+    /// second to learn that nothing changed is waste. A `stat` is enough to
+    /// tell. A file that cannot be read keeps the settings already loaded.
+    pub(crate) fn sync_config(&self) {
+        let path = self.config().path().to_path_buf();
+        let Ok(meta) = std::fs::metadata(&path) else {
+            return;
+        };
+        let stamp = Some((meta.modified().ok(), meta.len()));
+        {
+            let mut last = lock(&self.config_stamp);
+            if *last == stamp {
+                return;
+            }
+            *last = stamp;
+        }
+        self.config
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reload();
     }
 
     pub(crate) fn archive(&self) -> Archive<'_> {
@@ -203,6 +244,9 @@ pub struct EngineOptions<S: ProcessSource = PlatformProcessSource> {
     /// credentials still scans, archives and notifies.
     pub backend: Arc<dyn TaskBackend>,
     pub fetch_assigned: Option<AssignedFetch>,
+    /// The QA role's arrival watcher. `None` leaves that alert off, which is
+    /// what a daemon with no Odoo credentials should do.
+    pub fetch_qa_stage: Option<QaStageFetch>,
     /// The board poll. `None` leaves the board tab empty and says so, which is
     /// what a daemon with no Odoo credentials should do.
     pub fetch_board: Option<BoardFetch>,
@@ -246,6 +290,7 @@ impl<S: ProcessSource> EngineOptions<S> {
             scanner,
             backend: Arc::new(NullBackend),
             fetch_assigned: None,
+            fetch_qa_stage: None,
             fetch_board: None,
             fetch_deploy: None,
             daily_log: None,
@@ -280,6 +325,7 @@ impl<S: ProcessSource> Engine<S> {
                 bus: EventBus::default(),
                 backend: options.backend,
                 fetch_assigned: options.fetch_assigned,
+                fetch_qa_stage: options.fetch_qa_stage,
                 fetch_board: options.fetch_board,
                 fetch_deploy: options.fetch_deploy,
                 daily_log: options.daily_log,
@@ -289,6 +335,7 @@ impl<S: ProcessSource> Engine<S> {
                 counters: Counters::default(),
                 seq: AtomicU64::new(0),
                 workers: Mutex::new(Vec::new()),
+                config_stamp: Mutex::new(None),
             }),
             loops: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),

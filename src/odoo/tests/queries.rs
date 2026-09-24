@@ -221,3 +221,66 @@ fn projects_are_fetched_once_and_ordered_by_name() {
         json!("name")
     );
 }
+
+#[test]
+fn qa_stage_tasks_carry_who_has_them_and_when_they_arrived() {
+    let mut mine = record(8101, "Check the export", (3, "Aurora"), (4, "QA"));
+    mine["user_ids"] = json!([7, 24]);
+    mine["date_last_stage_update"] = json!("2026-09-24 09:15:00");
+    let mut theirs = record(8102, "Check the import", (3, "Aurora"), (4, "QA"));
+    theirs["user_ids"] = json!([24]);
+    theirs["date_last_stage_update"] = json!(false);
+    let (client, server) = client_with(vec![
+        Reply::result(json!([mine, theirs])),
+        Reply::result(json!([])),
+    ]);
+
+    let tasks = client
+        .fetch_in_qa_stages(&["QA".to_string(), "Acceptance Testing".to_string()])
+        .unwrap();
+    assert_eq!(tasks.len(), 2);
+    assert!(tasks[0].assigned_to_me, "uid 7 is the authenticated user");
+    assert_eq!(tasks[0].user_ids, [7, 24]);
+    assert_eq!(tasks[0].stage_entered, "2026-09-24 09:15:00");
+    assert!(!tasks[1].assigned_to_me);
+    assert_eq!(tasks[1].stage_entered, "");
+
+    // Not scoped to the current user, and Complete is excluded with the
+    // finished states.
+    assert_eq!(
+        server.args(1)[5][0],
+        json!([
+            ["stage_id.name", "in", ["QA", "Acceptance Testing"]],
+            ["state", "not in", ["1_done", "1_canceled", "03_approved"]],
+        ])
+    );
+    let options = &server.requests()[1]["params"]["args"][6];
+    assert_eq!(options["order"], json!("date_last_stage_update desc"));
+    let fields = options["fields"].as_array().unwrap();
+    assert!(fields.contains(&json!("user_ids")));
+    assert!(fields.contains(&json!("date_last_stage_update")));
+}
+
+#[test]
+fn no_qa_stages_asks_odoo_nothing() {
+    let (client, server) = client_with(vec![]);
+    assert!(client.fetch_in_qa_stages(&[]).unwrap().is_empty());
+    assert_eq!(server.request_count(), 0);
+}
+
+/// `state` is how a developer marks work Complete. The board reads it for the
+/// Complete badge, so the board query asks for it.
+#[test]
+fn a_task_record_carries_its_odoo_state() {
+    let mut complete = record(8201, "Done by dev", (3, "Aurora"), (4, "QA"));
+    complete["state"] = json!("03_approved");
+    let task = crate::odoo::records::to_task(&complete, &|_| None);
+    assert_eq!(task.state.as_deref(), Some("03_approved"));
+
+    let missing = record(8202, "Older server", (3, "Aurora"), (4, "QA"));
+    assert_eq!(
+        crate::odoo::records::to_task(&missing, &|_| None).state,
+        None
+    );
+    assert!(crate::odoo::TASK_FIELDS.contains(&"state"));
+}
