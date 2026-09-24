@@ -53,6 +53,19 @@ impl FakeProcesses {
         self
     }
 
+    /// A process that is not Claude, such as the daemon itself. Every real
+    /// listing has one, which is what makes a listing with no `claude` rows a
+    /// readable answer rather than a failed `ps`.
+    pub(crate) fn add_bystander(&self, pid: u32) -> &Self {
+        self.rows.lock().unwrap().push(ProcessRow {
+            pid,
+            tty: None,
+            lstart: String::new(),
+            comm: "claude-sessions".to_string(),
+        });
+        self
+    }
+
     pub(crate) fn remove(&self, pid: u32) -> &Self {
         self.rows.lock().unwrap().retain(|row| row.pid != pid);
         self.cwds.lock().unwrap().remove(&pid);

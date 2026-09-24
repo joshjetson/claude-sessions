@@ -351,3 +351,52 @@ fn a_fresh_board_is_indexed_and_announced() {
         .collect();
     assert_eq!(announced, vec![true, false]);
 }
+
+// --- whether an empty tick can be believed -----------------------------------
+
+fn last_sessions_event(
+    events: &std::sync::mpsc::Receiver<EngineEvent>,
+) -> crate::daemon::SessionsEvent {
+    events
+        .try_iter()
+        .filter_map(|event| match event {
+            EngineEvent::Sessions(payload) => Some(*payload),
+            _ => None,
+        })
+        .last()
+        .expect("no sessions event")
+}
+
+#[test]
+fn a_tick_after_the_last_session_is_killed_says_its_empty_list_is_the_truth() {
+    let harness = engine();
+    harness.procs.add_bystander(900);
+    harness.procs.add(501, "/repo/app");
+    let events = harness.engine.subscribe();
+    harness.engine.refresh(RefreshRequest::default());
+    let first = last_sessions_event(&events);
+    assert_eq!(first.stats.total_sessions, 1);
+    assert!(first.scan_complete);
+
+    harness.procs.remove(501);
+    harness.engine.refresh(RefreshRequest::default());
+
+    let announced = last_sessions_event(&events);
+    assert!(announced.by_project.is_empty());
+    assert!(
+        announced.scan_complete,
+        "a readable listing with no sessions was announced as a failed read"
+    );
+    assert!(harness.state().sessions_complete);
+}
+
+#[test]
+fn a_tick_that_read_an_empty_listing_does_not_vouch_for_it() {
+    let harness = engine();
+    let events = harness.engine.subscribe();
+    harness.engine.refresh(RefreshRequest::default());
+
+    let announced = last_sessions_event(&events);
+    assert!(announced.by_project.is_empty());
+    assert!(!announced.scan_complete);
+}

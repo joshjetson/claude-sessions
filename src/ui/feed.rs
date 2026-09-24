@@ -43,6 +43,9 @@ pub enum FeedEvent {
     Sessions {
         by_project: SessionsByProject,
         discovered: BTreeMap<String, Vec<String>>,
+        /// The scan read everything it depends on, so an empty `by_project`
+        /// is the truth. See [`crate::scan::Scanner::last_scan_complete`].
+        scan_complete: bool,
     },
     /// Phase 5/6 produce these; nothing does yet.
     Notification(Box<Notification>),
@@ -232,6 +235,7 @@ fn scan_loop(
 
         let wall = SystemTime::now();
         let raw = scanner.scan_sessions(wall);
+        let scan_complete = scanner.last_scan_complete();
         let live: HashSet<PathBuf> = raw.iter().filter_map(|s| s.session_file.clone()).collect();
         cursors.retain(|path, _| live.contains(path));
 
@@ -256,6 +260,7 @@ fn scan_loop(
             .send(FeedEvent::Sessions {
                 by_project: group_sessions(sessions),
                 discovered: discovered.clone(),
+                scan_complete,
             })
             .is_err()
         {

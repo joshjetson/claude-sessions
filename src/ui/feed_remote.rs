@@ -261,6 +261,7 @@ fn sessions(event: SessionsEvent) -> FeedEvent {
     FeedEvent::Sessions {
         by_project: event.by_project,
         discovered: event.discovered_dirs,
+        scan_complete: event.scan_complete,
     }
 }
 

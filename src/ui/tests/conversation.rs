@@ -411,7 +411,7 @@ fn a_session_that_arrived_over_the_wire_still_opens_its_transcript() {
     assert_eq!(received.session_file.as_ref(), Some(&transcript));
 
     let (_dir, mut state) = crate::ui::tests::sessions_state();
-    state.apply_sessions(crate::ui::feed::group_sessions(vec![received]));
+    state.apply_sessions(crate::ui::feed::group_sessions(vec![received]), true);
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     crate::ui::keys::handle_key(
         &mut state,

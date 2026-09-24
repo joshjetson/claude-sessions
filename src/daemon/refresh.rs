@@ -86,6 +86,7 @@ impl<S: ProcessSource> EngineInner<S> {
         let ScanState { scanner, caches } = &mut *scan;
 
         let raw = scanner.scan_sessions(now);
+        let complete = scanner.last_scan_complete();
         let live_files: HashSet<PathBuf> =
             raw.iter().filter_map(|s| s.session_file.clone()).collect();
 
@@ -125,6 +126,7 @@ impl<S: ProcessSource> EngineInner<S> {
         let event = {
             let mut state = self.state();
             state.sessions = sessions;
+            state.sessions_complete = complete;
             state.discovered_dirs = discovered;
             sessions_event(&state)
         };

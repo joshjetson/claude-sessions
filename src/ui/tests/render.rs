@@ -25,7 +25,7 @@ fn press(state: &mut AppState, code: KeyCode) {
 }
 
 fn with_sessions(state: &mut AppState, sessions: Vec<crate::types::Session>) {
-    state.apply_sessions(group_sessions(sessions));
+    state.apply_sessions(group_sessions(sessions), true);
 }
 
 fn three_sessions() -> Vec<crate::types::Session> {
@@ -53,10 +53,16 @@ fn a_feed_update_opens_projects_seen_for_the_first_time_only() {
     let mut feed = StaticFeed::with(vec![FeedEvent::Sessions {
         by_project: group_sessions(three_sessions()),
         discovered: Default::default(),
+        scan_complete: true,
     }]);
     for event in feed.drain() {
-        if let FeedEvent::Sessions { by_project, .. } = event {
-            state.apply_sessions(by_project);
+        if let FeedEvent::Sessions {
+            by_project,
+            scan_complete,
+            ..
+        } = event
+        {
+            state.apply_sessions(by_project, scan_complete);
         }
     }
     assert_eq!(state.stats.total_sessions, 3);
@@ -65,7 +71,7 @@ fn a_feed_update_opens_projects_seen_for_the_first_time_only() {
 
     // Collapse it, then send the same list again: it stays collapsed.
     state.expanded_projects.remove("x/alpha");
-    state.apply_sessions(group_sessions(three_sessions()));
+    state.apply_sessions(group_sessions(three_sessions()), true);
     assert!(!state.expanded_projects.contains("x/alpha"));
 }
 
@@ -94,6 +100,40 @@ fn an_empty_tree_says_so_rather_than_drawing_a_blank_pane() {
     let (_dir, mut state) = sessions_state();
     let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
     assert!(painted.contains("No active sessions found"), "{painted}");
+}
+
+#[test]
+fn killing_the_last_session_draws_the_empty_placeholder() {
+    // The cursor sat on the session that was killed. A complete scan that
+    // finds nothing must draw the normal empty pane, not the dead row under a
+    // title that blames the scan.
+    let (_dir, mut state) = sessions_state();
+    with_sessions(
+        &mut state,
+        vec![session("aaa", "/Users/x/dev/alpha", SessionStatus::Idle)],
+    );
+    press(&mut state, KeyCode::Down);
+    press(&mut state, KeyCode::Enter);
+    state.take_actions();
+
+    state.apply_sessions(group_sessions(Vec::new()), true);
+
+    let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
+    assert!(painted.contains("No active sessions found"), "{painted}");
+    assert!(!painted.contains("showing the previous list"), "{painted}");
+    assert!(!painted.contains("x/alpha"), "{painted}");
+}
+
+#[test]
+fn an_incomplete_empty_scan_draws_the_previous_list_and_says_so() {
+    let (_dir, mut state) = sessions_state();
+    with_sessions(&mut state, three_sessions());
+
+    state.apply_sessions(group_sessions(Vec::new()), false);
+
+    let painted = text(&render(100, 24, |frame| draw(frame, &mut state)));
+    assert!(painted.contains("x/alpha"), "{painted}");
+    assert!(painted.contains("showing the previous list"), "{painted}");
 }
 
 #[test]

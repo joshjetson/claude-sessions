@@ -363,8 +363,11 @@ impl AppState {
     /// Replace the session list. A project seen for the first time opens itself,
     /// so a launch into a quiet folder is visible without pressing anything —
     /// but a project the user has since collapsed stays collapsed.
-    pub fn apply_sessions(&mut self, by_project: SessionsByProject) {
-        // An EMPTY list never replaces a populated one.
+    ///
+    /// `scan_complete` says whether the scan behind the list read everything it
+    /// depends on. See [`crate::scan::Scanner::last_scan_complete`].
+    pub fn apply_sessions(&mut self, by_project: SessionsByProject, scan_complete: bool) {
+        // An EMPTY list from an incomplete scan never replaces a populated one.
         //
         // A scan that reads nothing is not evidence that nothing is running. On
         // a machine deep in swap, `lsof` took 1.6-4.1s against a 5s timeout,
@@ -377,10 +380,12 @@ impl AppState {
         // `loading` edge "rather than blanking for the seconds an Odoo round
         // trip takes". Sessions had no such guard.
         //
-        // Keeping the last list is right even when the machine really is empty:
-        // that state corrects itself on the next tick that reads one session,
-        // and a stale row costs far less than a dashboard that erases itself.
-        if by_project.is_empty() && !self.by_project.is_empty() {
+        // A COMPLETE scan that finds nothing is different. Every read answered
+        // and no Claude process was in it, so the machine really is empty. That
+        // is what the user sees after killing the last session, and keeping the
+        // old list there left the dead session on screen, under a title that
+        // blamed the scan, until some other session started.
+        if by_project.is_empty() && !self.by_project.is_empty() && !scan_complete {
             self.feed_went_quiet = true;
             self.dirty = true;
             return;
@@ -404,6 +409,15 @@ impl AppState {
             total_projects: by_project.len(),
         };
         self.by_project = by_project;
+
+        // No sessions means no selected session. Without this, the conversation
+        // pane keeps drawing the killed session's transcript next to an empty
+        // list. The run loop drops its transcript cursor when the file clears.
+        if self.by_project.is_empty() {
+            self.selected_session_id = None;
+            self.selected_session_file = None;
+            self.conv = ConversationView::default();
+        }
 
         // A lane frees when a session ENDS, and nothing else notices that.
         crate::ui::board::auto_refill(self, std::time::SystemTime::now());

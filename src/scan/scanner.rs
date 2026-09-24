@@ -104,6 +104,9 @@ pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     /// asks — with a process there is an `lsof` answer, which is the process's
     /// own truth rather than what it wrote down.
     session_cwds: SessionCwdCache,
+    /// The last tick saw everything it looked for. See
+    /// [`Scanner::last_scan_complete`].
+    complete: bool,
 }
 
 impl Scanner<PlatformProcessSource> {
@@ -132,7 +135,27 @@ impl<S: ProcessSource> Scanner<S> {
             files: SessionFilesCache::new(),
             task_refs: TaskRefCache::new(),
             session_cwds: SessionCwdCache::new(),
+            complete: false,
         }
+    }
+
+    /// Whether the last tick read every source it depends on, so that what it
+    /// returned is the whole truth and not just the part that answered in time.
+    ///
+    /// This is what lets an EMPTY result mean something. The process table
+    /// cannot fail loudly, and a Claude process whose cwd `lsof` could not read
+    /// is dropped from the result, so "no sessions" used to be ambiguous: the
+    /// last session was killed, or the machine was too slow to answer. The
+    /// dashboard kept the previous list in both cases, which left a killed
+    /// session on screen until another one started.
+    ///
+    /// A tick is complete when the listing came back, every command line it
+    /// asked for came back, and every Claude process in it has a known cwd. An
+    /// empty result from a complete tick is a machine with no sessions on it,
+    /// and the dashboard may clear its list. An empty result from any other
+    /// tick is a failed read, and the dashboard keeps what it had.
+    pub fn last_scan_complete(&self) -> bool {
+        self.complete
     }
 
     /// The transcript-head task ids read so far. Shared with the archive layer,
@@ -171,9 +194,15 @@ impl<S: ProcessSource> Scanner<S> {
         //
         // This process is itself in that listing, so a genuinely empty result
         // is impossible. Keep everything and let the next tick try again.
+        //
+        // Also the one case [`Scanner::last_scan_complete`] must never report as
+        // complete: an empty list from here is not evidence of anything.
         if listing.is_empty() {
+            self.complete = false;
             return Vec::new();
         }
+        // Set false below by every read that did not answer for a pid.
+        let mut complete = true;
 
         let alive: HashSet<u32> = listing.iter().map(|row| row.pid).collect();
         self.cwds.retain(|pid, _| alive.contains(pid));
@@ -199,6 +228,12 @@ impl<S: ProcessSource> Scanner<S> {
         if !need_argv.is_empty() {
             let lines = self.source.argv(&need_argv);
             for pid in &need_argv {
+                // No line at all is either a process that exited between the
+                // two calls or a `ps` that failed. The two look the same here,
+                // so this tick cannot vouch that it saw every session.
+                if !lines.contains_key(pid) {
+                    complete = false;
+                }
                 let cmd = lines.get(pid).map(String::as_str).unwrap_or_default();
                 // A process that exited between the two calls gets a definite
                 // answer too, so it is not re-queried on every tick for as long
@@ -224,6 +259,13 @@ impl<S: ProcessSource> Scanner<S> {
             // asked again next tick rather than being dropped for good.
             self.cwds.extend(self.source.cwds(&need_cwd));
         }
+        // A Claude process with no cwd is dropped from the result below. That
+        // is the `lsof` timeout the empty-list guard in the dashboard exists
+        // for, so this tick is not complete while any such process remains.
+        if rows.iter().any(|row| !self.cwds.contains_key(&row.pid)) {
+            complete = false;
+        }
+        self.complete = complete;
 
         let need_env = uncached(&rows, &self.launch_tasks);
         if !need_env.is_empty() {
@@ -273,12 +315,18 @@ impl<S: ProcessSource> Scanner<S> {
     pub fn scan_sessions(&mut self, now: SystemTime) -> Vec<RawSession> {
         match self.discovery {
             Discovery::Processes => self.scan_processes(now),
-            Discovery::Transcripts => transcript_sessions(
-                &self.paths.projects_dir,
-                &mut self.files,
-                &mut self.session_cwds,
-                now,
-            ),
+            Discovery::Transcripts => {
+                // Reading files has no `lsof` to time out. The only failure is a
+                // store that cannot be read, and then an empty result means
+                // nothing.
+                self.complete = self.paths.projects_dir.is_dir();
+                transcript_sessions(
+                    &self.paths.projects_dir,
+                    &mut self.files,
+                    &mut self.session_cwds,
+                    now,
+                )
+            }
         }
     }
 

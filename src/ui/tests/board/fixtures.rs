@@ -83,7 +83,7 @@ pub fn live_session(session_id: &str, task_id: Option<i64>, mtime_secs: u64) -> 
 pub fn with_sessions(state: &mut AppState, sessions: Vec<Session>) {
     let mut by_project = std::collections::BTreeMap::new();
     by_project.insert("repo".to_string(), sessions);
-    state.apply_sessions(by_project);
+    state.apply_sessions(by_project, true);
     state.take_actions();
 }
 

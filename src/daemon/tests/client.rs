@@ -288,6 +288,28 @@ fn the_dashboard_feed_mirrors_a_daemon_over_the_wire() {
     assert!(served.server.wait_for_shutdown(PATIENCE));
 }
 
+#[test]
+fn a_complete_empty_tick_reaches_the_dashboard_as_one() {
+    // The kill of the last session, seen from a dashboard attached to the
+    // daemon: the flag has to survive the snapshot and the mapping into the
+    // feed, or the dashboard keeps the dead session on screen.
+    use crate::ui::feed::{FeedEvent, SessionFeed};
+    use crate::ui::feed_remote::RemoteFeed;
+
+    let served = served();
+    served.engine.inner().state().sessions_complete = true;
+
+    let mut feed = RemoteFeed::connect(served.port());
+    let mut seen: Vec<FeedEvent> = Vec::new();
+    wait_for("the snapshot to arrive as a complete empty list", || {
+        seen.extend(feed.drain());
+        seen.iter().any(|event| {
+            matches!(event, FeedEvent::Sessions { by_project, scan_complete: true, .. }
+                if by_project.is_empty())
+        })
+    });
+}
+
 // --- a peer that accepts and says nothing ------------------------------------
 
 /// The v1.0.1 wedge. Something takes the daemon's port and never answers — a
