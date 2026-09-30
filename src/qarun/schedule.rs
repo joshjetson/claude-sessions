@@ -25,6 +25,14 @@ pub enum Refusal {
     AlreadyRunning(i64),
     /// This run started it once already.
     AlreadySpawned(i64),
+    /// Odoo marks it Done, Complete, Changes Requested or Cancelled. The run
+    /// never starts such a task, whatever its stage says. See
+    /// [`crate::odoo::task_state::refuses_auto_start`].
+    ClosedInOdoo(i64, &'static str),
+    /// The board does not list it now, so its Odoo state cannot be checked.
+    /// The board hides Done and Cancelled tasks, so this is how a task that
+    /// was closed after the run began looks.
+    NotOnBoard(i64),
     /// It reached a verdict. Starting again archives a completed round, which
     /// is what the QA menu label exists to stop a person doing by accident — a
     /// scheduler must not do it by accident either.
@@ -42,6 +50,14 @@ impl Refusal {
             Refusal::AlreadySpawned(id) => {
                 format!("This run started task {id}, and its session has ended.")
             }
+            Refusal::ClosedInOdoo(id, state) => format!(
+                "Task {id} is marked {state} in Odoo, so the run does not start it. \
+                 Start it by hand to QA it anyway."
+            ),
+            Refusal::NotOnBoard(id) => format!(
+                "Task {id} is not on the board now, so its Odoo state cannot be checked. \
+                 Refresh the board, or start it by hand."
+            ),
             Refusal::AlreadyFinished(id, verdict) => {
                 format!(
                     "Task {id} already reached a verdict ({}).",
@@ -62,6 +78,9 @@ pub struct AdmitCtx<'a> {
     /// A task's recorded QA state. Injected so admission can be tested without
     /// a QA directory on disk.
     pub state_of: &'a dyn Fn(i64) -> QaRunState,
+    /// A task's Odoo `state` as the board lists it. `None` when the board does
+    /// not list the task now, and `Some("")` when it lists it with no state.
+    pub odoo_state_of: &'a dyn Fn(i64) -> Option<String>,
     /// `None` means uncapped.
     pub lane_limit: Option<usize>,
 }
@@ -82,6 +101,16 @@ pub fn admit(run: &QaRun, task_id: i64, ctx: &AdmitCtx<'_>) -> Result<(), Refusa
     }
     if run.spawned.contains(&task_id) {
         return Err(Refusal::AlreadySpawned(task_id));
+    }
+    // Checked on every admission, not once, so a task whose state changes
+    // back to In Progress while it sits in the stage becomes startable again.
+    match (ctx.odoo_state_of)(task_id) {
+        None => return Err(Refusal::NotOnBoard(task_id)),
+        Some(state) => {
+            if let Some(name) = crate::odoo::task_state::refuses_auto_start(&state) {
+                return Err(Refusal::ClosedInOdoo(task_id, name));
+            }
+        }
     }
     // A verdict refuses a fresh pass only while it still describes the work in
     // front of you.
@@ -133,6 +162,7 @@ pub fn plan_spawns(run: &QaRun, ctx: &AdmitCtx<'_>) -> Vec<i64> {
         let local = AdmitCtx {
             live_task_ids: &occupied,
             state_of: ctx.state_of,
+            odoo_state_of: ctx.odoo_state_of,
             lane_limit: ctx.lane_limit,
         };
         match admit(run, task_id, &local) {

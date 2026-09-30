@@ -727,9 +727,12 @@ impl AppState {
                 let paths = self.paths.clone();
                 let state_of =
                     move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
+                let odoo_states = self.board.odoo_states(&run.task_ids);
+                let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
                 let ctx = crate::qarun::AdmitCtx {
                     live_task_ids: &live,
                     state_of: &state_of,
+                    odoo_state_of: &odoo_state_of,
                     lane_limit: self.config.qa_lane_limit(),
                 };
 

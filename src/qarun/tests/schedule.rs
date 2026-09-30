@@ -15,10 +15,16 @@ fn nothing_recorded(_task_id: i64) -> QaRunState {
     QaRunState::default()
 }
 
+/// On the board, In Progress: the Odoo state stops nothing.
+fn in_progress(_task_id: i64) -> Option<String> {
+    Some(crate::odoo::task_state::IN_PROGRESS.to_string())
+}
+
 fn ctx<'a>(live: &'a HashSet<i64>, limit: Option<usize>) -> AdmitCtx<'a> {
     AdmitCtx {
         live_task_ids: live,
         state_of: &nothing_recorded,
+        odoo_state_of: &in_progress,
         lane_limit: limit,
     }
 }
@@ -78,6 +84,7 @@ fn a_verdict_on_the_current_code_still_refuses() {
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &finished,
+        odoo_state_of: &in_progress,
         lane_limit: None,
     };
     assert_eq!(
@@ -180,6 +187,7 @@ fn a_finished_task_is_skipped_without_spending_a_lane() {
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &done_first_two,
+        odoo_state_of: &in_progress,
         lane_limit: Some(2),
     };
     assert_eq!(plan_spawns(&run(vec![50, 51, 52, 53]), &ctx), vec![52, 53]);
@@ -241,6 +249,7 @@ fn a_stale_verdict_does_not_refuse_a_fresh_pass() {
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &moved_on,
+        odoo_state_of: &in_progress,
         lane_limit: None,
     };
     assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
@@ -267,7 +276,83 @@ fn a_verdict_that_cannot_be_judged_does_not_refuse_either() {
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &unjudgeable,
+        odoo_state_of: &in_progress,
         lane_limit: None,
     };
     assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
+}
+
+// --- the task's Odoo state ----------------------------------------------------
+
+/// Odoo moves the state and the stage independently, so a task can sit in QA
+/// marked Complete or Changes Requested. A pass started on it tests work that
+/// is finished or was sent back.
+#[test]
+fn a_task_odoo_calls_finished_or_sent_back_is_never_started() {
+    use crate::odoo::task_state::{CANCELLED, CHANGES_REQUESTED, COMPLETE, DONE};
+    let live = HashSet::new();
+    for (state, name) in [
+        (DONE, "Done"),
+        (COMPLETE, "Complete"),
+        (CHANGES_REQUESTED, "Changes Requested"),
+        (CANCELLED, "Cancelled"),
+    ] {
+        let odoo = move |_id: i64| Some(state.to_string());
+        let ctx = AdmitCtx {
+            odoo_state_of: &odoo,
+            ..ctx(&live, None)
+        };
+        let refused = admit(&run(vec![1]), 1, &ctx);
+        assert_eq!(refused, Err(Refusal::ClosedInOdoo(1, name)), "{state}");
+        let detail = refused.unwrap_err().detail();
+        assert!(
+            detail.contains(&format!("marked {name} in Odoo")),
+            "{detail}"
+        );
+        assert!(detail.contains("by hand"), "{detail}");
+    }
+}
+
+#[test]
+fn a_task_with_no_state_or_one_in_progress_is_started() {
+    let live = HashSet::new();
+    for state in ["", "01_in_progress", "04_waiting_normal"] {
+        let odoo = move |_id: i64| Some(state.to_string());
+        let ctx = AdmitCtx {
+            odoo_state_of: &odoo,
+            ..ctx(&live, None)
+        };
+        assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()), "{state:?}");
+    }
+}
+
+/// The board hides Done and Cancelled tasks, so a task closed after the run
+/// began drops off the board. Unchecked, it would start.
+#[test]
+fn a_task_the_board_no_longer_lists_is_not_started() {
+    let live = HashSet::new();
+    let gone = |_id: i64| None;
+    let ctx = AdmitCtx {
+        odoo_state_of: &gone,
+        ..ctx(&live, None)
+    };
+    assert_eq!(admit(&run(vec![1]), 1, &ctx), Err(Refusal::NotOnBoard(1)));
+}
+
+/// A closed task does not use a lane, and the plan moves on to the next one.
+#[test]
+fn the_plan_skips_a_closed_task_and_starts_the_next() {
+    let live = HashSet::new();
+    let odoo = |id: i64| {
+        Some(if id == 1 {
+            crate::odoo::task_state::COMPLETE.to_string()
+        } else {
+            String::new()
+        })
+    };
+    let ctx = AdmitCtx {
+        odoo_state_of: &odoo,
+        ..ctx(&live, Some(1))
+    };
+    assert_eq!(plan_spawns(&run(vec![1, 2, 3]), &ctx), vec![2]);
 }

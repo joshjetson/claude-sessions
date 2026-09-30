@@ -143,9 +143,12 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     let live = live_task_ids(state, &run);
     let paths = state.paths.clone();
     let state_of = move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
+    let odoo_states = state.board.odoo_states(&run.task_ids);
+    let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &state_of,
+        odoo_state_of: &odoo_state_of,
         lane_limit: state.config.qa_lane_limit(),
     };
 
