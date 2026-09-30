@@ -295,6 +295,12 @@ fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
         crate::pipeline::definitions::TRIAGE_VAR.to_string(),
         (run.mode == RunMode::Triage).to_string(),
     );
+    // The coordinator's own launch is the start of the run for its results:
+    // a record written before it is an earlier pass's.
+    request.extras.insert(
+        crate::pipeline::definitions::RUN_STARTED_VAR.to_string(),
+        crate::util::iso_now(),
+    );
 
     // The folder no longer has to be pinned for recognition — the run id in
     // the environment does that — so this launch resolves its directory the

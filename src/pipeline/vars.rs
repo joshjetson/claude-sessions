@@ -75,9 +75,9 @@ pub fn notify_command(title: &str, message: &str) -> String {
 ///
 /// Called before the coordinator acts, never after. The store refuses to
 /// overwrite, and that refusal is what makes the record worth keeping.
-pub fn qa_shadow_command(run_id: &str, task_id: i64) -> String {
+pub fn qa_shadow_command(run_id: &str, task: impl std::fmt::Display) -> String {
     format!(
-        "{} qa-shadow --run \"{run_id}\" --task {task_id} \
+        "{} qa-shadow --run \"{run_id}\" --task {task} \
          --question \"<their question>\" --would-answer \"<your answer>\" \
          --confidence high|medium|low",
         bin()
@@ -88,9 +88,17 @@ pub fn qa_shadow_command(run_id: &str, task_id: i64) -> String {
 ///
 /// The daemon decides whether it may be delivered: a question may be answered,
 /// a verdict checkpoint never may be, whatever this command is told.
-pub fn qa_answer_command(task_id: i64) -> String {
+pub fn qa_answer_command(task: impl std::fmt::Display) -> String {
     format!(
-        "{} qa-answer --task {task_id} --answer \"<your answer>\"",
+        "{} qa-answer --task {task} --answer \"<your answer>\"",
+        bin()
+    )
+}
+
+/// `claude-sessions qa-status …` — which tasks' QA records belong to this run.
+pub fn qa_status_command(since: &str, tasks: &str) -> String {
+    format!(
+        "{} qa-status --since \"{since}\" --tasks \"{tasks}\"",
         bin()
     )
 }

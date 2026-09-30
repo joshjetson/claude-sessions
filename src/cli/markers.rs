@@ -23,7 +23,9 @@ use crate::types::NotificationStatus;
 use crate::util::iso_now;
 use serde_json::Value;
 
-use super::{fail, BlockedArgs, DoneArgs, NotifyArgs, QaAnswerArgs, QaShadowArgs, TASK_ID_ENV};
+use super::{
+    fail, BlockedArgs, DoneArgs, NotifyArgs, QaAnswerArgs, QaShadowArgs, QaStatusArgs, TASK_ID_ENV,
+};
 
 // --- notify -----------------------------------------------------------------
 
@@ -205,6 +207,37 @@ pub(super) fn qa_shadow(paths: &Paths, args: QaShadowArgs) -> Result<()> {
         }
         Err(error) => fail(format!("qa-shadow: {}", error.detail())),
     }
+}
+
+/// Print, per task, whether its QA record belongs to this run.
+///
+/// Reads files only, like `qa-shadow`. The rule is in
+/// [`crate::qarun::task_record`]: a `run.json` written before the run started
+/// is an earlier pass's.
+pub(super) fn qa_status(paths: &Paths, args: QaStatusArgs) -> Result<()> {
+    let Some(since) = crate::util::parse_timestamp(&args.since) else {
+        fail(format!(
+            "qa-status: --since {:?} is not an RFC 3339 time",
+            args.since
+        ));
+    };
+    let tasks = parse_task_list(&args.tasks);
+    if tasks.is_empty() {
+        fail(format!("qa-status: --tasks {:?} names no task", args.tasks));
+    }
+    for task_id in tasks {
+        let record = crate::qarun::task_record(paths, task_id, since.into());
+        println!("{}", crate::qarun::record_line(&record));
+    }
+    Ok(())
+}
+
+/// Task ids separated by commas, spaces, or both. Anything that is not a
+/// number is skipped.
+pub(super) fn parse_task_list(text: &str) -> Vec<i64> {
+    text.split(|c: char| c == ',' || c.is_whitespace())
+        .filter_map(|part| part.trim().trim_start_matches('#').parse().ok())
+        .collect()
 }
 
 /// Deliver a coordinator's answer to the session working a task.

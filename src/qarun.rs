@@ -483,10 +483,12 @@ pub fn run_header_text(run: &QaRun, summary: &RunSummary, wide: bool) -> String 
 mod answer;
 mod schedule;
 mod shadow;
+mod since;
 
 pub use answer::{deliverable_session, may_answer, AnswerRefusal, MAX_ANSWER_CHARS};
 pub use schedule::{admit, first_refusal, plan_spawns, AdmitCtx, Refusal};
 pub use shadow::{Agreement, ShadowError, ShadowRecord, ShadowStore};
+pub use since::{record_line, task_record, Recorded, TaskRecord};
 
 #[cfg(test)]
 mod tests;

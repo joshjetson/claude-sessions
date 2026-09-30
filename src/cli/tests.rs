@@ -90,3 +90,12 @@ fn the_board_hook_follows_a_config_edit() {
     // The handle itself is untouched — only the fresh read sees the edit.
     assert_eq!(handle.board_project_filter().ignore, ["Aurora"]);
 }
+
+#[test]
+fn a_task_list_reads_commas_spaces_and_hashes() {
+    assert_eq!(
+        super::markers::parse_task_list("4101, 4102 #4103,,x"),
+        vec![4101, 4102, 4103]
+    );
+    assert!(super::markers::parse_task_list("none").is_empty());
+}

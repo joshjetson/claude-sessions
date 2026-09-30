@@ -5,7 +5,9 @@
 //! because each of them is a sentence a future edit could soften without
 //! anything failing.
 
-use crate::pipeline::definitions::{QA_ROOT_VAR, RUN_ID_VAR, TASK_IDS_VAR, TRIAGE_VAR};
+use crate::pipeline::definitions::{
+    QA_ROOT_VAR, RUN_ID_VAR, RUN_STARTED_VAR, TASK_IDS_VAR, TRIAGE_VAR,
+};
 use crate::pipeline::resolve_pipeline;
 use crate::pipeline::vars::PromptVars;
 
@@ -18,6 +20,10 @@ fn prompt(triage: bool) -> String {
     vars.extras.insert(QA_ROOT_VAR.to_string(), "/qa".into());
     vars.extras
         .insert(TRIAGE_VAR.to_string(), triage.to_string());
+    vars.extras.insert(
+        RUN_STARTED_VAR.to_string(),
+        "2026-09-30T12:00:00.000Z".into(),
+    );
     resolve_pipeline("qa-run", None)
         .expect("qa-run pipeline")
         .build_prompt(&vars)
@@ -302,4 +308,41 @@ fn the_coordinator_may_not_speak_for_the_reviewer() {
             "it is not told the dashboard carries decisions (triage={triage})"
         );
     }
+}
+
+#[test]
+fn the_coordinator_is_told_to_tell_this_runs_results_from_earlier_ones() {
+    // It once reported the verdicts an earlier pass left on disk as this
+    // run's results, before any of its QA sessions had begun.
+    for triage in [false, true] {
+        let prompt = prompt(triage);
+        assert!(
+            prompt.contains("This run started at 2026-09-30T12:00:00.000Z"),
+            "triage={triage}"
+        );
+        assert!(
+            prompt.contains(
+                "qa-status --since \"2026-09-30T12:00:00.000Z\" --tasks \"4101, 4102, 4103\""
+            ),
+            "the qa-status command is missing or wrong at triage={triage}"
+        );
+        assert!(
+            prompt.contains("is NOT this run's result"),
+            "triage={triage}"
+        );
+    }
+}
+
+#[test]
+fn the_commands_name_the_task_asked_about_not_the_first_one() {
+    // The coordinator is launched against the run's first task only to find
+    // the project folder. Its commands used to carry that task's id as a
+    // literal, so every record and answer named task 4101.
+    let prompt = prompt(true);
+    assert!(prompt.contains("qa-shadow --run \"Aurora::Quality Assurance\" --task <id>"));
+    assert!(prompt.contains("qa-answer --task <id>"));
+    assert!(
+        !prompt.contains("--task 4101"),
+        "a command names the first task"
+    );
 }
