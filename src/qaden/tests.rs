@@ -201,6 +201,78 @@ fn staleness_needs_both_commits_to_be_known() {
     assert!(!qa_run_state(&f.paths, 700007, |_| Some("bbb2222".into())).stale);
 }
 
+/// Write a `run.json` from a literal body, for the shapes `write_run` does not
+/// produce.
+fn write_raw(paths: &Paths, task_id: i64, body: serde_json::Value) {
+    let dir = paths.qa_task_dir(task_id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("run.json"), body.to_string()).unwrap();
+}
+
+#[test]
+fn a_written_note_recorded_as_an_object_keeps_the_verdict() {
+    // The shape QAden writes today. When `note_written` was a bool, this object
+    // failed the whole parse: 93 of 137 real runs read as "no prior run", so
+    // the dashboard saw no verdict and would start a finished task again.
+    let f = fixture();
+    write_raw(
+        &f.paths,
+        700040,
+        json!({
+            "cells": { "G1:C1": { "verdict": "PASS" } },
+            "meta": { "head": "abc1234" },
+            "phase": "P5",
+            "verdict": "revisions",
+            "note_written": { "kind": "rev", "at": "2026-09-29T17:26:16+00:00" },
+        }),
+    );
+    let s = state(&f.paths, 700040);
+    assert!(s.exists);
+    assert_eq!(s.verdict, Some(QaVerdict::Revisions));
+    assert!(s.note_written);
+    assert_eq!(s.closed_gaps, 1);
+}
+
+#[test]
+fn a_note_is_written_only_when_the_run_records_one() {
+    let f = fixture();
+    let cases = [
+        (700041, json!(null), false),
+        (700042, json!(false), false),
+        (700043, json!(true), true),
+        (700044, json!({ "kind": "pass" }), true),
+    ];
+    for (task_id, note, expected) in cases {
+        write_raw(
+            &f.paths,
+            task_id,
+            json!({ "verdict": "pass", "note_written": note }),
+        );
+        let s = state(&f.paths, task_id);
+        assert!(s.exists, "{note} must still parse");
+        assert_eq!(s.note_written, expected, "note_written: {note}");
+    }
+    // A run that never mentions a note has none.
+    write_raw(&f.paths, 700045, json!({ "verdict": "pass" }));
+    assert!(!state(&f.paths, 700045).note_written);
+}
+
+#[test]
+fn null_cells_read_as_no_gaps_rather_than_no_run() {
+    // One real run.json carries `"cells": null`. `#[serde(default)]` covers a
+    // missing key, not a null one, so this used to fail the whole parse.
+    let f = fixture();
+    write_raw(
+        &f.paths,
+        700046,
+        json!({ "cells": null, "meta": { "head": "abc1234" }, "verdict": "pass" }),
+    );
+    let s = state(&f.paths, 700046);
+    assert!(s.exists);
+    assert_eq!(s.verdict, Some(QaVerdict::Pass));
+    assert_eq!((s.open_gaps, s.closed_gaps), (0, 0));
+}
+
 // --- qa_menu_label ----------------------------------------------------------
 
 #[test]

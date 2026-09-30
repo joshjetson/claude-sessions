@@ -94,14 +94,20 @@ impl QaVerdict {
 #[serde(default)]
 struct RunFile {
     meta: RunMeta,
-    cells: HashMap<String, Option<Cell>>,
+    /// `null` on a run that stopped before it recorded any cell. An `Option`,
+    /// because `#[serde(default)]` covers a missing key but not a `null` one.
+    cells: Option<HashMap<String, Option<Cell>>>,
     /// A bare string on every run written so far. Typed as a free-form value so
     /// an object here reads as "no verdict" rather than failing the whole
     /// parse — the module's rule is that an unrecognised schema means no prior
     /// run, never an error.
     verdict: Option<serde_json::Value>,
     phase: Option<String>,
-    note_written: bool,
+    /// QAden writes `{"kind": "rev", "at": "..."}` once a note exists, and
+    /// `null` before. Read as a free-form value for the same reason as
+    /// `verdict`: when this was a `bool`, the object failed the whole parse, and
+    /// 93 of 137 real runs read as "no prior run", verdict and all.
+    note_written: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -138,7 +144,7 @@ pub fn qa_run_state(
         return empty;
     };
 
-    let cells = run.cells.values().flatten();
+    let cells = run.cells.iter().flat_map(HashMap::values).flatten();
     let (mut open_gaps, mut closed_gaps) = (0, 0);
     for cell in cells {
         match &cell.verdict {
@@ -177,7 +183,7 @@ pub fn qa_run_state(
         round: archived as u32 + 1,
         verdict,
         phase: run.phase,
-        note_written: run.note_written,
+        note_written: note_written(run.note_written.as_ref()),
         // Only claim staleness when both commits are actually known. An absent
         // worktree means we cannot tell, and guessing "stale" would push the
         // reviewer toward archiving a round that may still be the current one.
@@ -192,6 +198,15 @@ pub fn qa_run_state(
         dir,
         worktree,
     }
+}
+
+/// Whether a note exists. Any record of one counts, whatever its shape, except
+/// `null` and `false`: those are the two ways a writer says "not yet".
+fn note_written(value: Option<&serde_json::Value>) -> bool {
+    !matches!(
+        value,
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false))
+    )
 }
 
 /// `run-round<N>.json`, and nothing else in the directory.
