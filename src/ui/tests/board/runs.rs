@@ -993,3 +993,108 @@ fn the_refill_says_nothing_when_there_is_nothing_to_start() {
     assert_eq!(state.flash, None, "the refill flashed on a quiet run");
     assert!(state.dialog.is_none());
 }
+
+// --- one session per row, and only its own task's -----------------------------
+
+fn link_to(session_id: &str) -> crate::daemon::TaskLink {
+    crate::daemon::TaskLink {
+        session_id: session_id.to_string(),
+        ..crate::daemon::TaskLink::default()
+    }
+}
+
+/// How many of a run's rows draw this session.
+fn rows_drawing(state: &crate::ui::state::AppState, session_id: &str) -> Vec<i64> {
+    state.run_sections()[0]
+        .agents
+        .iter()
+        .filter(|agent| agent.session.is_some_and(|s| s.session_id == session_id))
+        .map(|agent| agent.task_id)
+        .collect()
+}
+
+#[test]
+fn a_link_to_another_tasks_session_is_not_followed() {
+    // Observed: one task's session drawn twice in a run. Several launches in
+    // one folder race for the fresh sessions, and one claimed another task's
+    // session before its transcript named its task. The row then followed that
+    // link to a session whose transcript says it works a different task.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let mut agent = coordinator_session("sess-a", "/repo/alpha", None);
+    agent.task_id = Some(4101);
+    state.by_project.insert("alpha".to_string(), vec![agent]);
+    state.board.links.insert(4102, link_to("sess-a"));
+
+    assert_eq!(rows_drawing(&state, "sess-a"), vec![4101]);
+}
+
+#[test]
+fn one_session_is_never_drawn_on_two_rows() {
+    // A session whose transcript names no task yet can only be placed by the
+    // links, and two links can point at it. It goes on one row.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let unnamed = coordinator_session("sess-b", "/repo/alpha", None);
+    state.by_project.insert("alpha".to_string(), vec![unnamed]);
+    state.board.links.insert(4101, link_to("sess-b"));
+    state.board.links.insert(4102, link_to("sess-b"));
+
+    assert_eq!(rows_drawing(&state, "sess-b"), vec![4101]);
+}
+
+#[test]
+fn a_coordinator_alone_does_not_fill_a_lane() {
+    // The coordinator's transcript names the run's first task. Counted as that
+    // task's session, it filled a lane: with a limit of one, the run started
+    // nothing at all. Here a start is visible as the folder picker opening,
+    // because the fixture maps the project to no folder.
+    let (_dir, mut state) = on_a_stage();
+    press(&mut state, 'R');
+    let run_id = state.board.runs[0].id.clone();
+    let first = state.board.runs[0].task_ids[0];
+    state.board.runs[0].coordinator_started = true;
+    state.board.runs[0].lane_limit = Some(1);
+    let mut coordinator = coordinator_session("coord", "/repo/alpha", Some(&run_id));
+    coordinator.task_id = Some(first);
+    state
+        .by_project
+        .insert("alpha".to_string(), vec![coordinator]);
+    state.dialog = None;
+
+    board::run_command(
+        &mut state,
+        crate::ui::dialogs::RunCommand {
+            run_id,
+            action: crate::ui::dialogs::RunAction::StartRun,
+            context: String::new(),
+        },
+    );
+
+    assert!(
+        state.dialog.is_some(),
+        "the run started nothing: the coordinator held its only lane"
+    );
+}
+
+#[test]
+fn a_stage_that_lists_a_task_twice_makes_one_row_for_it() {
+    let (_dir, mut state) = board_state();
+    state.view = View::Board;
+    with_tasks(
+        &mut state,
+        vec![
+            task(4101, "Summary row shows the wrong total"),
+            task(4102, "Description field ignores its length cap"),
+            task(4101, "Summary row shows the wrong total"),
+        ],
+    );
+    let project = state.board.runs.len();
+    assert_eq!(project, 0);
+    let (project, stage) = {
+        let task = state.board.task(4101).expect("task").clone();
+        (task.project_name, task.stage_name)
+    };
+    state.board.watch_stage(&project, &stage);
+    assert_eq!(state.board.runs[0].task_ids, vec![4101, 4102]);
+}

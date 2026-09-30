@@ -33,7 +33,7 @@ pub mod view;
 
 pub use controller::{
     focus_task_terminal, go_to_task_session, match_session_by_cwd, resolve_notif_session,
-    task_session, task_sessions, FocusTarget, SessionTarget,
+    run_task_sessions, task_session, task_sessions, FocusTarget, SessionTarget,
 };
 pub use detail::TaskState;
 pub use keys::handle_board;

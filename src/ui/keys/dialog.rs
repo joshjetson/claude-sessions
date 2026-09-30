@@ -89,12 +89,19 @@ pub(super) fn apply_dialog_outcome(state: &mut AppState, dialog: Dialog, outcome
             // act on nor dismiss.
             // Read from the dialog the caller handed over, not from
             // `state.dialog` — it has already been taken by this point.
-            let stops_run = match &dialog {
-                Dialog::Kill(confirm) => confirm.stops_run.clone(),
-                _ => None,
+            let (stops_run, leaves_run) = match &dialog {
+                Dialog::Kill(confirm) => (confirm.stops_run.clone(), confirm.leaves_run.clone()),
+                _ => (None, None),
             };
             if let Some(run_id) = stops_run {
                 if state.board.stop_watching(&run_id) {
+                    state.save_runs();
+                }
+            }
+            // A killed agent leaves its run, so its row goes with it rather
+            // than staying behind as a task the run will not start again.
+            if let Some((run_id, task_id)) = leaves_run {
+                if state.board.leave_run(&run_id, task_id) {
                     state.save_runs();
                 }
             }

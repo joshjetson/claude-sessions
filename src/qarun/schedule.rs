@@ -39,7 +39,9 @@ impl Refusal {
         match self {
             Refusal::NotInRun(id) => format!("Task {id} is not part of this run."),
             Refusal::AlreadyRunning(id) => format!("Task {id} already has a live session."),
-            Refusal::AlreadySpawned(id) => format!("This run already started task {id}."),
+            Refusal::AlreadySpawned(id) => {
+                format!("This run started task {id}, and its session has ended.")
+            }
             Refusal::AlreadyFinished(id, verdict) => {
                 format!(
                     "Task {id} already reached a verdict ({}).",

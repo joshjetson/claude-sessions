@@ -176,6 +176,22 @@ fn a_session_whose_transcript_names_another_task_is_never_taken() {
     assert_eq!(harness.state().pending.len(), 1, "gave up on the launch");
 }
 
+/// A QA run's coordinator starts in the run's folder just before its QA
+/// sessions, and its transcript names the run's first task. It belongs to no
+/// task, so no launch may take it.
+#[test]
+fn a_coordinator_is_never_taken_by_a_launch() {
+    let harness = engine();
+    queue(&harness, &[("/repo/one", Some(6270))]);
+    let coordinator = Session {
+        run_id: Some("Aurora::Quality Assurance".to_string()),
+        ..live("coord", Some(6270))
+    };
+    link(&harness, vec![coordinator]);
+    assert_eq!(linked_session(&harness, 6270), None);
+    assert_eq!(harness.state().pending.len(), 1, "gave up on the launch");
+}
+
 // --- the queue holds every launch in flight ---------------------------------
 
 #[test]

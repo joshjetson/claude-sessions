@@ -8,8 +8,8 @@
 //! once the real transcript arrived — seven tasks ended up pointing at one
 //! placeholder.
 //!
-//! Hence the three rules in [`claimable`], each of which is one of those
-//! failures written down.
+//! Hence the rules in [`claimable`], each of which is one of those failures
+//! written down.
 
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -162,7 +162,7 @@ impl<S: ProcessSource> EngineInner<S> {
             })
     }
 
-    /// The three hard rules.
+    /// The hard rules.
     fn claimable(
         &self,
         session: &Session,
@@ -179,6 +179,13 @@ impl<S: ProcessSource> EngineInner<S> {
         let Some(session_file) = session.session_file.as_ref() else {
             return false;
         };
+        // 4. A QA run's coordinator belongs to no task. It starts in the run's
+        //    folder moments before the run's QA sessions, and its transcript
+        //    names the run's first task, so rules 1 and 2 let the first task's
+        //    launch claim it.
+        if session.run_id.is_some() {
+            return false;
+        }
         // 2. A session whose own transcript names a different task cannot be
         //    the one this launch just started, however well its directory
         //    matches.

@@ -311,6 +311,10 @@ impl BoardSlice {
             .iter()
             .map(|task| task.id)
             .collect();
+        // A task can be listed twice in one stage, for example as a subtask
+        // under its parent and on its own. A run drew one row per id, so it
+        // showed that task twice.
+        let task_ids = crate::qarun::unique_task_ids(task_ids);
         if task_ids.is_empty() {
             return None;
         }
@@ -349,6 +353,20 @@ impl BoardSlice {
         let before = self.runs.len();
         self.runs.retain(|run| run.id != run_id);
         self.runs.len() != before
+    }
+
+    /// Take one task out of a run, because its session was killed there.
+    ///
+    /// Out of `spawned` as well, so watching the stage again adds it back as
+    /// a task the run may start.
+    pub fn leave_run(&mut self, run_id: &str, task_id: i64) -> bool {
+        let Some(run) = self.runs.iter_mut().find(|run| run.id == run_id) else {
+            return false;
+        };
+        let before = run.task_ids.len();
+        run.task_ids.retain(|id| *id != task_id);
+        run.spawned.retain(|id| *id != task_id);
+        run.task_ids.len() != before
     }
 
     /// The context a run's rows are built from.

@@ -117,6 +117,7 @@ fn a_dialog_swallows_input_before_the_view_sees_it() {
     let (_dir, mut config) = temp_config();
     let mut dialog = Dialog::Kill(KillConfirm {
         stops_run: None,
+        leaves_run: None,
         pids: vec![1],
         label: "one".into(),
     });
@@ -135,6 +136,7 @@ fn kill_enqueues_rather_than_signalling_from_the_draw_thread() {
     let (_dir, mut config) = temp_config();
     let mut dialog = Dialog::Kill(KillConfirm {
         stops_run: None,
+        leaves_run: None,
         pids: vec![4242, 4243],
         label: "session abcd".into(),
     });

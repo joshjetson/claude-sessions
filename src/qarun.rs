@@ -204,6 +204,13 @@ impl QaRun {
     }
 }
 
+/// The task ids in their first-seen order, each once. A run draws one row per
+/// id, so an id listed twice drew one task twice.
+pub fn unique_task_ids(ids: Vec<i64>) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter().filter(|id| seen.insert(*id)).collect()
+}
+
 /// One row of a run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunEntry<'a> {

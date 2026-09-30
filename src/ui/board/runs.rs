@@ -83,14 +83,11 @@ pub fn run_command(state: &mut AppState, command: RunCommand) {
 
 /// Which tasks in a run currently have a live session.
 fn live_task_ids(state: &AppState, run: &QaRun) -> std::collections::HashSet<i64> {
-    run.task_ids
-        .iter()
-        .copied()
-        .filter(|&task_id| {
-            crate::ui::board::task_session(state.sessions(), task_id, state.board.link(task_id))
-                .is_some()
-        })
-        .collect()
+    crate::ui::board::run_task_sessions(state.sessions(), &run.task_ids, |task_id| {
+        state.board.link(task_id)
+    })
+    .into_keys()
+    .collect()
 }
 
 /// Start the run: the coordinator first, then the QA sessions.
