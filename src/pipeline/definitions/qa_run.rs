@@ -22,7 +22,7 @@
 
 use super::{PipelineDef, StepDef};
 use crate::pipeline::vars::{
-    notify_kind_command, qa_answer_command, qa_shadow_command, PromptVars,
+    notify_kind_command, qa_answer_command, qa_shadow_command, qa_status_command, PromptVars,
 };
 
 /// The key a caller sets to turn triage on. Absent means shadow, which is the
@@ -34,6 +34,9 @@ pub const RUN_ID_VAR: &str = "runId";
 pub const TASK_IDS_VAR: &str = "taskIds";
 /// Where QAden records each task's state.
 pub const QA_ROOT_VAR: &str = "qaRoot";
+/// When this coordinator was launched, as an RFC 3339 time: the start of the
+/// run as far as its results are concerned.
+pub const RUN_STARTED_VAR: &str = "runStartedAt";
 
 pub static QA_RUN_PIPELINE: PipelineDef = PipelineDef {
     id: "qa-run",
@@ -49,6 +52,14 @@ pub static QA_RUN_PIPELINE: PipelineDef = PipelineDef {
             context,
         )
         .detail("The task list is fixed at launch. A task that fails QA leaves the stage and stays in the run, so the coordinator is told its own list rather than re-reading the stage."),
+
+        StepDef::new(
+            "this-run-only",
+            "This run's results, not an earlier one's",
+            "Tells a verdict from this run apart from one left by an earlier pass.",
+            this_run_only,
+        )
+        .detail("A run over a stage has the same id every time, and QAden keeps one run.json per task. A coordinator started first read those files, found the verdicts an earlier pass left, and reported them as this run's results before any of its QA sessions had begun. `qa-status` settles it in code, from the file's write time."),
 
         StepDef::new(
             "no-qa",
@@ -177,6 +188,23 @@ fn context(vars: &PromptVars) -> String {
     )
 }
 
+fn this_run_only(vars: &PromptVars) -> String {
+    let Some(since) = vars.extras.get(RUN_STARTED_VAR) else {
+        return String::new();
+    };
+    let ids = vars.extras.get(TASK_IDS_VAR).map_or("", String::as_str);
+    format!(
+        " This run started at {since}. Every task in it may already have a run.json from an \
+         EARLIER pass, verdict and all, and keeps it until this run's session for that task starts \
+         its round, which takes minutes. A verdict an earlier pass left is NOT this run's result. \
+         To tell them apart, run {} — it prints one line per task and says which records belong \
+         to this run. Run it before every report, and trust it over your own reading of the files. \
+         Never report a task as passed or failed, and never say the run is finished, on the \
+         strength of a record it calls earlier.",
+        qa_status_command(since, ids)
+    )
+}
+
 fn no_qa(_vars: &PromptVars) -> String {
     " Do NOT run /qa, /review-task or any QA skill yourself, and do not open the application. \
      You are watching passes, not performing one. If you find yourself reading a diff in detail, \
@@ -186,9 +214,9 @@ fn no_qa(_vars: &PromptVars) -> String {
 
 fn watch(vars: &PromptVars) -> String {
     format!(
-        " Start by reading every task's run.json under the QA directory, including the tasks whose \
-         sessions began before you did — a question asked before you existed is still open and \
-         still waiting, not lost. After that you do not poll. The dashboard types a line into this \
+        " Start by running qa-status, then read the run.json of every task it says belongs to this \
+         run, including the tasks whose sessions began before you did — a question asked before \
+         you existed is still open and still waiting, not lost. After that you do not poll. The dashboard types a line into this \
          session when a task in run \"{}\" asks something, naming the task. Treat that line as your \
          cue to read that task's state and act. If you are ever unsure whether you missed one, \
          re-read the run.json files rather than assuming you were told.",
@@ -304,7 +332,7 @@ fn triage(vars: &PromptVars) -> String {
          a real data point where an empty answer is not. Record BEFORE you act, never after, and \
          never try to edit a recorded answer: the command will refuse, and that refusal is what \
          makes the record worth keeping.",
-        qa_shadow_command(id, vars.task_id)
+        qa_shadow_command(id, "<id>")
     );
 
     let escalate = notify_kind_command(
@@ -332,7 +360,7 @@ fn triage(vars: &PromptVars) -> String {
          When you are between the two, escalate. A wrong answer sends a QA pass down a false trail \
          and the pass will not know to doubt you. If the answer command refuses, do not rephrase it \
          to get past the refusal — escalate instead, and say the refusal happened.",
-        qa_answer_command(vars.task_id)
+        qa_answer_command("<id>")
     )
 }
 
@@ -362,8 +390,9 @@ fn no_odoo(_vars: &PromptVars) -> String {
 fn report(vars: &PromptVars) -> String {
     format!(
         " When I ask for the state of the run, report one line per task: the id, what it is doing, \
-         and anything outstanding. Say plainly which tasks you are unsure about. When every task in \
-         run \"{}\" has a recorded verdict, tell me and stop — do not end the session.",
+         and anything outstanding. Say plainly which tasks you are unsure about. When qa-status \
+         shows a verdict from THIS run for every task in run \"{}\", tell me and stop — do not end \
+         the session.",
         run_id(vars)
     )
 }

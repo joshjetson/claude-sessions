@@ -132,6 +132,8 @@ pub enum Command {
     QaShadow(QaShadowArgs),
     /// Deliver a coordinator's answer to the QA session working a task
     QaAnswer(QaAnswerArgs),
+    /// Say, per task, whether its QA record belongs to this run or an earlier one
+    QaStatus(QaStatusArgs),
     /// Record a Claude Code hook event from stdin (register it in settings.json)
     Hook,
 }
@@ -163,6 +165,17 @@ pub struct QaAnswerArgs {
     /// checkpoint is refused whatever this says.
     #[arg(long, default_value = "question")]
     pub kind: String,
+}
+
+#[derive(Args)]
+pub struct QaStatusArgs {
+    /// When the run started, as an RFC 3339 time. A record written before it
+    /// is from an earlier pass.
+    #[arg(long)]
+    pub since: String,
+    /// The run's task ids, separated by commas or spaces
+    #[arg(long)]
+    pub tasks: String,
 }
 
 #[derive(Args)]
@@ -296,6 +309,7 @@ pub fn run() -> Result<()> {
         }
         Some(Command::QaShadow(args)) => markers::qa_shadow(&paths, args),
         Some(Command::QaAnswer(args)) => markers::qa_answer(&paths, &config, args),
+        Some(Command::QaStatus(args)) => markers::qa_status(&paths, args),
         // Unreachable: `run` hands `hook` to `run_hook` before clap parses. The
         // arm exists so the subcommand shows in `--help`.
         Some(Command::Hook) => run_hook(),
