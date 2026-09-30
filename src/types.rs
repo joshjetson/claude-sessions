@@ -22,9 +22,7 @@ pub use board::{qa_state_badge, Board, BoardProject, BoardStage, OdooCreds, QaSt
 pub use deploy::{
     DeployBoard, DeployProjectState, DeployRun, DeployRunStatus, DeployTask, MergeRequest,
 };
-pub use notify::{
-    Notification, NotificationKind, NotificationLevel, NotificationStatus, QUIET_SESSIONS_ID,
-};
+pub use notify::{Notification, NotificationKind, NotificationLevel, NotificationStatus};
 pub use role::{NotificationPolicy, UserRole};
 pub use session::{RawSession, Session, SessionFile, SessionStatus};
 pub use transcript::{

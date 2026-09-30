@@ -207,6 +207,16 @@ impl ConfigHandle {
             .unwrap_or(true)
     }
 
+    /// Whether a task arriving in a QA stage raises a notification. Default
+    /// off: the QA board already shows it.
+    pub fn qa_notify_new_in_qa(&self) -> bool {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.notify_new_in_qa)
+            .unwrap_or(false)
+    }
+
     /// The mode every new coordinator starts in.
     ///
     /// Anything other than `"shadow"` — including an absent block and a typo —

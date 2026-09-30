@@ -1,11 +1,10 @@
 //! What the user's role changes on the daemon side: which notifications are
-//! kept, the QA arrival watcher, and the one quiet-sessions row. Plus the two
-//! feed fixes every role gets: questions resolve when the wait ends, and Clear
-//! all resolves the whole feed.
+//! kept, and the QA arrival watcher. Plus the two feed fixes every role gets:
+//! questions resolve when the wait ends, and Clear all resolves the whole feed.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use serde_json::json;
 
@@ -15,7 +14,6 @@ use crate::daemon::{EngineEvent, NewNotification, RefreshRequest};
 use crate::odoo::QaStageTask;
 use crate::types::{
     NotificationKind, NotificationLevel, NotificationPolicy, NotificationStatus, UserRole,
-    QUIET_SESSIONS_ID,
 };
 
 fn qa_engine() -> TestEngine {
@@ -48,10 +46,11 @@ fn the_policy_table_per_role_and_source() {
     let cases: &[(&str, NotificationKind, NotificationLevel, bool)] = &[
         ("await", Question, Warn, true),
         ("await", Info, Warn, true),
-        ("done", Info, Success, true),
+        ("done", Info, Success, false),
         ("blocked", Info, Warn, true),
         ("qa-new", Info, NotificationLevel::Info, true),
-        ("quiet", Info, Warn, true),
+        ("verdict", Verdict, Success, true),
+        ("verdict", Info, Warn, true),
         ("notify", Question, NotificationLevel::Info, true),
         ("notify", Verdict, NotificationLevel::Info, true),
         ("notify", Info, Warn, true),
@@ -151,7 +150,7 @@ fn a_role_edited_in_the_file_applies_on_the_next_tick() {
 
     fs::write(
         &harness.paths.config_path,
-        json!({ "role": "dev" }).to_string(),
+        announcing(json!({ "role": "dev" })).to_string(),
     )
     .unwrap();
     harness.engine.refresh(RefreshRequest::default());
@@ -245,11 +244,26 @@ fn qa_watcher(
     let queue = Arc::new(Mutex::new(tasks));
     let calls = Arc::new(AtomicUsize::new(0));
     let harness = engine_with(Setup {
-        config: Some(config),
+        config: Some(announcing(config)),
         qa_stage: Some(scripted(Arc::clone(&queue), Arc::clone(&calls))),
         ..Setup::default()
     });
     (harness, queue, calls)
+}
+
+/// The config with `qa.notifyNewInQa` switched on, which the arrival watcher
+/// needs before it announces anything. A config that sets it keeps its value.
+fn announcing(mut config: serde_json::Value) -> serde_json::Value {
+    let qa = config
+        .as_object_mut()
+        .expect("a config object")
+        .entry("qa")
+        .or_insert_with(|| json!({}));
+    qa.as_object_mut()
+        .expect("a qa block")
+        .entry("notifyNewInQa")
+        .or_insert(json!(true));
+    config
 }
 
 fn titles(harness: &TestEngine) -> Vec<String> {
@@ -397,7 +411,7 @@ fn other_roles_skip_the_query_and_switching_back_does_not_replay() {
 
     fs::write(
         &harness.paths.config_path,
-        json!({ "role": "qa" }).to_string(),
+        announcing(json!({ "role": "qa" })).to_string(),
     )
     .unwrap();
     harness.inner().sync_config();
@@ -409,228 +423,55 @@ fn other_roles_skip_the_query_and_switching_back_does_not_replay() {
     assert_eq!(titles(&harness), ["🧪 New in QA: #8602 task 8602"]);
 }
 
+/// Off by default: the QA board already lists every task in a QA stage. Off,
+/// the watcher does not query Odoo, and switching it on records what is
+/// already there silently.
+#[test]
+fn new_in_qa_is_off_by_default_and_switching_it_on_does_not_replay() {
+    let queue = Arc::new(Mutex::new(vec![entry(8701, "QA", "Aurora")]));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let harness = engine_with(Setup {
+        config: Some(json!({ "role": "qa" })),
+        qa_stage: Some(scripted(Arc::clone(&queue), Arc::clone(&calls))),
+        ..Setup::default()
+    });
+    harness.inner().notify_qa_arrivals();
+    queue.lock().unwrap().push(entry(8702, "QA", "Aurora"));
+    harness.inner().notify_qa_arrivals();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "Odoo was queried while off"
+    );
+    assert!(titles(&harness).is_empty());
+
+    fs::write(
+        &harness.paths.config_path,
+        announcing(json!({ "role": "qa" })).to_string(),
+    )
+    .unwrap();
+    harness.inner().sync_config();
+    harness.inner().notify_qa_arrivals();
+    assert!(
+        titles(&harness).is_empty(),
+        "switching it on replayed arrivals"
+    );
+
+    queue.lock().unwrap().push(entry(8703, "QA", "Aurora"));
+    harness.inner().notify_qa_arrivals();
+    assert_eq!(titles(&harness), ["🧪 New in QA: #8703 task 8703"]);
+}
+
 #[test]
 fn an_odoo_failure_in_the_qa_watcher_is_swallowed() {
     let harness = engine_with(Setup {
-        config: Some(json!({ "role": "qa" })),
+        config: Some(announcing(json!({ "role": "qa" }))),
         qa_stage: Some(Box::new(|_stages| Err("odoo down".to_string()))),
         ..Setup::default()
     });
     harness.inner().notify_qa_arrivals();
     assert!(harness.state().notifications.is_empty());
     assert!(!harness.engine.db().was_alerted("qa-new:bootstrapped"));
-}
-
-// --- the quiet-sessions row --------------------------------------------------
-
-fn quiet_sessions(count: usize, silent: Duration, now: SystemTime) -> Vec<Session> {
-    (0..count)
-        .map(|i| Session {
-            session_mtime: now - silent,
-            status: SessionStatus::Idle,
-            ..a_session(&format!("quiet-{i}"), &format!("/repo/project-{i}"))
-        })
-        .collect()
-}
-
-/// How many of the published events would have rung, and how many were
-/// silent in-place updates, for the quiet row only.
-fn quiet_events(events: &std::sync::mpsc::Receiver<EngineEvent>) -> (usize, usize) {
-    let mut rang = 0;
-    let mut updated = 0;
-    for event in events.try_iter() {
-        match event {
-            EngineEvent::Notification(n) if n.id == QUIET_SESSIONS_ID => rang += 1,
-            EngineEvent::NotificationUpdated(n) if n.id == QUIET_SESSIONS_ID => updated += 1,
-            _ => {}
-        }
-    }
-    (rang, updated)
-}
-
-fn quiet_rows(harness: &TestEngine) -> usize {
-    harness
-        .state()
-        .notifications
-        .iter()
-        .filter(|n| n.id == QUIET_SESSIONS_ID)
-        .count()
-}
-
-/// The acceptance case: ten sessions, the reviewer away for an hour. One row,
-/// one sound, however many ticks run.
-#[test]
-fn ten_quiet_sessions_over_an_hour_make_one_row_and_one_sound() {
-    let harness = qa_engine();
-    let events = harness.engine.subscribe();
-    let start = SystemTime::now();
-
-    for minute in 0..=60u64 {
-        let now = start + Duration::from_secs(minute * 60);
-        let sessions = index(quiet_sessions(10, Duration::from_secs(minute * 60), now));
-        harness.inner().update_quiet_sessions(&sessions, now);
-    }
-
-    assert_eq!(quiet_rows(&harness), 1);
-    assert_eq!(
-        harness.state().notifications.len(),
-        1,
-        "a second row appeared"
-    );
-    let (rang, updated) = quiet_events(&events);
-    assert_eq!(rang, 1, "the row rang more than once");
-    assert!(updated >= 40, "the row was not kept current ({updated})");
-
-    let row = harness.state().notifications[0].clone();
-    assert_eq!(
-        row.title,
-        format!(
-            "⏳ 10 sessions quiet 15m+ — longest: {} 1h 00m",
-            project_name("/repo/project-0")
-        )
-    );
-    assert_eq!(row.level, NotificationLevel::Warn);
-    assert!(row.message.contains("+5 more"), "{}", row.message);
-    // Rebuilt from live sessions every tick, so it is never persisted.
-    assert!(harness.engine.db().recent_notifications(50).is_empty());
-}
-
-#[test]
-fn sessions_below_the_threshold_compacting_or_starting_are_not_quiet() {
-    let harness = qa_engine();
-    let now = SystemTime::now();
-    let sessions = index(vec![
-        Session {
-            session_mtime: now - 5 * MINUTE,
-            ..a_session("fresh", "/repo/a")
-        },
-        Session {
-            session_mtime: now - 50 * MINUTE,
-            status: SessionStatus::Compacting,
-            ..a_session("compacting", "/repo/b")
-        },
-        Session {
-            session_mtime: now - 50 * MINUTE,
-            ..a_placeholder(99, "/repo/c")
-        },
-    ]);
-    harness.inner().update_quiet_sessions(&sessions, now);
-    assert_eq!(quiet_rows(&harness), 0);
-}
-
-#[test]
-fn the_row_goes_away_when_nothing_is_quiet() {
-    let harness = qa_engine();
-    let now = SystemTime::now();
-    harness
-        .inner()
-        .update_quiet_sessions(&index(quiet_sessions(3, 20 * MINUTE, now)), now);
-    assert_eq!(quiet_rows(&harness), 1);
-
-    let events = harness.engine.subscribe();
-    harness
-        .inner()
-        .update_quiet_sessions(&index(quiet_sessions(3, Duration::ZERO, now)), now);
-    assert_eq!(quiet_rows(&harness), 0);
-    assert!(events.try_iter().any(|event| matches!(
-        event,
-        EngineEvent::NotificationsChanged { ref ids, removed: true, .. }
-            if ids == &[QUIET_SESSIONS_ID.to_string()]
-    )));
-}
-
-/// Dismissed, it stays hidden while the same sessions stay quiet. A session
-/// that was not quiet at dismissal re-raises it, once, with a sound.
-#[test]
-fn a_dismissed_row_stays_hidden_until_a_new_session_goes_quiet() {
-    let harness = qa_engine();
-    let now = SystemTime::now();
-    let three = quiet_sessions(3, 20 * MINUTE, now);
-    harness
-        .inner()
-        .update_quiet_sessions(&index(three.clone()), now);
-    harness
-        .inner()
-        .dismiss_notifications(&[QUIET_SESSIONS_ID.to_string()]);
-    assert_eq!(quiet_rows(&harness), 0);
-
-    let events = harness.engine.subscribe();
-    for _ in 0..5 {
-        harness
-            .inner()
-            .update_quiet_sessions(&index(three.clone()), now);
-    }
-    assert_eq!(quiet_rows(&harness), 0, "the dismissed row came back");
-    assert_eq!(quiet_events(&events), (0, 0));
-
-    let four = quiet_sessions(4, 20 * MINUTE, now);
-    harness.inner().update_quiet_sessions(&index(four), now);
-    assert_eq!(quiet_rows(&harness), 1);
-    assert_eq!(quiet_events(&events).0, 1);
-}
-
-/// Resolving it from the menu is a dismissal too. A session that wrote again
-/// and then went quiet again counts as new.
-#[test]
-fn resolving_the_row_dismisses_it_and_a_fresh_silence_is_news() {
-    let harness = qa_engine();
-    let now = SystemTime::now();
-    let two = quiet_sessions(2, 20 * MINUTE, now);
-    harness
-        .inner()
-        .update_quiet_sessions(&index(two.clone()), now);
-    harness.inner().set_notification_status(
-        &[QUIET_SESSIONS_ID.to_string()],
-        NotificationStatus::Resolved,
-    );
-    harness
-        .inner()
-        .update_quiet_sessions(&index(two.clone()), now);
-    assert!(harness
-        .state()
-        .notifications
-        .iter()
-        .all(|n| n.status == NotificationStatus::Resolved));
-
-    // quiet-0 writes again, then goes quiet again.
-    let mut moving = two.clone();
-    moving[0].session_mtime = now;
-    harness.inner().update_quiet_sessions(&index(moving), now);
-    harness.inner().update_quiet_sessions(&index(two), now);
-    assert_eq!(
-        quiet_rows(&harness),
-        1,
-        "the resolved copy was not replaced"
-    );
-    assert_eq!(
-        harness.state().notifications[0].status,
-        NotificationStatus::Unread
-    );
-}
-
-#[test]
-fn the_dev_role_has_no_quiet_row_and_leaving_qa_removes_it() {
-    let dev = engine();
-    let now = SystemTime::now();
-    dev.inner()
-        .update_quiet_sessions(&index(quiet_sessions(10, 60 * MINUTE, now)), now);
-    assert_eq!(quiet_rows(&dev), 0);
-
-    let harness = qa_engine();
-    harness
-        .inner()
-        .update_quiet_sessions(&index(quiet_sessions(2, 60 * MINUTE, now)), now);
-    assert_eq!(quiet_rows(&harness), 1);
-    fs::write(
-        &harness.paths.config_path,
-        json!({ "role": "dev" }).to_string(),
-    )
-    .unwrap();
-    harness.inner().sync_config();
-    harness
-        .inner()
-        .update_quiet_sessions(&index(quiet_sessions(2, 60 * MINUTE, now)), now);
-    assert_eq!(quiet_rows(&harness), 0);
 }
 
 // --- questions resolve when the wait ends -------------------------------------
@@ -768,21 +609,6 @@ fn clear_all_through_the_route_resolves_everything_and_persists() {
         .all(|n| n.status == NotificationStatus::Resolved));
 }
 
-/// Clearing everything also counts as dismissing the quiet row.
-#[test]
-fn clear_all_dismisses_the_quiet_row_too() {
-    let harness = qa_engine();
-    let now = SystemTime::now();
-    let quiet = quiet_sessions(2, 20 * MINUTE, now);
-    harness
-        .inner()
-        .update_quiet_sessions(&index(quiet.clone()), now);
-    harness.inner().resolve_all_notifications();
-    let events = harness.engine.subscribe();
-    harness.inner().update_quiet_sessions(&index(quiet), now);
-    assert_eq!(quiet_events(&events), (0, 0));
-}
-
 // --- the dashboard's side of the wire ---------------------------------------
 
 /// A dashboard that connects late gets the backlog, hears changes made
@@ -823,13 +649,14 @@ fn a_remote_feed_loads_the_backlog_follows_changes_and_clears() {
         )
     });
 
-    served
-        .engine
-        .inner()
-        .update_quiet_row("⏳ quiet".to_string(), "m".to_string());
+    let silent = served.engine.push_notification(NewNotification {
+        id: Some("verdict-1-r1".to_string()),
+        silent: true,
+        ..NewNotification::new("verdict", "QA #1: CHECKPOINT", "")
+    });
     drain_until(
         "the silent update",
-        &|event| matches!(event, FeedEvent::NotificationUpdated(n) if n.id == QUIET_SESSIONS_ID),
+        &|event| matches!(event, FeedEvent::NotificationUpdated(n) if n.id == silent.id),
     );
 
     let late = served

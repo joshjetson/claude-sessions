@@ -16,7 +16,7 @@ use std::collections::HashSet;
 use std::time::{Duration, SystemTime};
 
 use super::*;
-use crate::daemon::{is_awaiting_user_decision, is_blocked_on_tool_call};
+use crate::daemon::{is_awaiting_user_decision, is_blocked_on_tool_call, EngineEvent};
 use crate::types::{EntryKind, NotificationLevel};
 
 /// A session whose newest conversational line is a pending `tool` call, made
@@ -189,14 +189,47 @@ fn a_malformed_session_does_not_panic() {
 
 // --- through the real engine ------------------------------------------------
 
+const DWELL: Duration = crate::daemon::PROMPT_DWELL;
+const REPEAT: Duration = crate::daemon::PROMPT_REPEAT;
+const SECOND: Duration = Duration::from_secs(1);
+
+/// A session a `PermissionRequest` hook has made `awaiting`.
+fn prompting(id: &str, now: SystemTime) -> Session {
+    Session {
+        status: SessionStatus::Awaiting,
+        session_mtime: now - SECOND,
+        last_entry: Some(tool_entry("Bash")),
+        ..a_session(id, "/repo/x")
+    }
+}
+
+fn asking(id: &str) -> Session {
+    Session {
+        last_entry: Some(tool_entry("AskUserQuestion")),
+        ..a_session(id, "/repo/x")
+    }
+}
+
+fn hooked(ids: &[&str]) -> HashSet<String> {
+    ids.iter().map(|id| id.to_string()).collect()
+}
+
+/// The rows that are not resolved, oldest last.
+fn open_rows(harness: &TestEngine) -> Vec<crate::types::Notification> {
+    harness
+        .state()
+        .notifications
+        .iter()
+        .filter(|n| n.status != crate::types::NotificationStatus::Resolved)
+        .cloned()
+        .collect()
+}
+
 #[test]
 fn a_question_is_announced_once_and_cleared_when_it_is_answered() {
     let harness = engine();
     let now = SystemTime::now();
-    let asking = index(vec![Session {
-        last_entry: Some(tool_entry("AskUserQuestion")),
-        ..a_session("ask-sess", "/repo/x")
-    }]);
+    let asking = index(vec![asking("ask-sess")]);
 
     harness
         .inner()
@@ -210,45 +243,55 @@ fn a_question_is_announced_once_and_cleared_when_it_is_answered() {
             state.notifications[0].title
         );
         assert_eq!(state.notifications[0].level, NotificationLevel::Warn);
-        assert!(state.await_notified.contains("ask-sess"));
+        assert!(state.awaits.contains_key("ask-sess"));
     }
 
-    // Still asking on the next tick: edge-triggered, so nothing new.
+    // Still asking on the next tick: one row, nothing new.
     harness
         .inner()
-        .notify_awaiting_decisions(&asking, &HashSet::new(), now);
+        .notify_awaiting_decisions(&asking, &HashSet::new(), now + REPEAT * 2);
     assert_eq!(harness.state().notifications.len(), 1);
 
-    // Answered: the flag clears so the next question is announced afresh.
+    // Answered: the row resolves, so the next question is announced afresh.
     let answered = index(vec![a_session("ask-sess", "/repo/x")]);
     harness
         .inner()
         .notify_awaiting_decisions(&answered, &HashSet::new(), now);
-    assert!(!harness.state().await_notified.contains("ask-sess"));
+    assert!(!harness.state().awaits.contains_key("ask-sess"));
+    assert!(open_rows(&harness).is_empty());
 
     harness
         .inner()
         .notify_awaiting_decisions(&asking, &HashSet::new(), now);
     assert_eq!(harness.state().notifications.len(), 2);
+    assert_eq!(open_rows(&harness).len(), 1);
 }
 
 #[test]
 fn a_permission_prompt_is_announced_as_a_maybe_rather_than_a_question() {
     // Without hooks: an ordinary tool call whose result never came, quiet for
-    // longer than the dwell. The status machine calls it working, which is
-    // what it said before this notification could ever fire.
+    // longer than the blocked-tool dwell. It is announced once it has also
+    // waited the prompt dwell.
     let harness = engine();
     let now = SystemTime::now();
-    let stuck = index(vec![Session {
-        status: SessionStatus::Working,
-        session_mtime: now - Duration::from_secs(150),
-        last_entry: Some(tool_entry("Bash")),
-        ..a_session("perm-sess", "/repo/x")
-    }]);
+    let stuck = |at: SystemTime| {
+        index(vec![Session {
+            status: SessionStatus::Working,
+            session_mtime: at - Duration::from_secs(150),
+            last_entry: Some(tool_entry("Bash")),
+            ..a_session("perm-sess", "/repo/x")
+        }])
+    };
 
     harness
         .inner()
-        .notify_awaiting_decisions(&stuck, &HashSet::new(), now);
+        .notify_awaiting_decisions(&stuck(now), &HashSet::new(), now);
+    assert!(harness.state().notifications.is_empty());
+
+    let later = now + DWELL;
+    harness
+        .inner()
+        .notify_awaiting_decisions(&stuck(later), &HashSet::new(), later);
     let state = harness.state();
     assert_eq!(state.notifications.len(), 1);
     assert!(
@@ -261,32 +304,56 @@ fn a_permission_prompt_is_announced_as_a_maybe_rather_than_a_question() {
     assert!(state.notifications[0].message.contains("permission prompt"));
 }
 
+/// The person at the keyboard answers most prompts at once. Those are not
+/// news, and a row and a sound for each was most of the noise.
 #[test]
-fn a_hook_reported_prompt_is_announced_at_once_and_cleared_when_it_ends() {
+fn a_prompt_answered_inside_the_dwell_is_never_announced() {
     let harness = engine();
     let now = SystemTime::now();
-    let hooked: HashSet<String> = ["hook-sess".to_string()].into();
-    // The fused status: a PermissionRequest hook one second ago.
-    let prompting = index(vec![Session {
-        status: SessionStatus::Awaiting,
-        session_mtime: now - Duration::from_secs(1),
-        last_entry: Some(tool_entry("Bash")),
-        ..a_session("hook-sess", "/repo/x")
-    }]);
+    let ids = hooked(&["hook-sess"]);
 
     harness
         .inner()
-        .notify_awaiting_decisions(&prompting, &hooked, now);
-    {
+        .notify_awaiting_decisions(&index(vec![prompting("hook-sess", now)]), &ids, now);
+    let answered = Session {
+        status: SessionStatus::Working,
+        ..prompting("hook-sess", now)
+    };
+    let soon = now + DWELL - SECOND;
+    harness
+        .inner()
+        .notify_awaiting_decisions(&index(vec![answered]), &ids, soon);
+
+    assert!(harness.state().notifications.is_empty());
+    assert!(harness.state().awaits.is_empty());
+}
+
+#[test]
+fn a_hook_reported_prompt_is_announced_after_the_dwell_and_deleted_when_it_ends() {
+    let harness = engine();
+    let now = SystemTime::now();
+    let ids = hooked(&["hook-sess"]);
+    let waiting = index(vec![prompting("hook-sess", now)]);
+
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now);
+    assert!(harness.state().notifications.is_empty());
+
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now + DWELL);
+    let row = {
         let state = harness.state();
         assert_eq!(state.notifications.len(), 1);
         assert!(state.notifications[0]
             .title
             .contains("may be waiting on a prompt"));
-        assert!(state.await_notified.contains("hook-sess"));
-    }
+        state.notifications[0].id.clone()
+    };
 
-    // Approved: PostToolUse makes it working, and the flag clears.
+    // Approved: PostToolUse makes it working, and the row is deleted, in the
+    // feed and in SQLite.
     let running = index(vec![Session {
         status: SessionStatus::Working,
         session_mtime: now - Duration::from_secs(600),
@@ -295,10 +362,181 @@ fn a_hook_reported_prompt_is_announced_at_once_and_cleared_when_it_ends() {
     }]);
     harness
         .inner()
-        .notify_awaiting_decisions(&running, &hooked, now);
+        .notify_awaiting_decisions(&running, &ids, now + DWELL + SECOND);
+    assert!(harness.state().notifications.is_empty());
+    assert!(!harness.state().awaits.contains_key("hook-sess"));
+    assert!(harness
+        .engine
+        .db()
+        .recent_notifications(10)
+        .iter()
+        .all(|n| n.id != row));
+}
+
+/// A prompt still waiting is announced again, as the only row: the old one is
+/// deleted first.
+#[test]
+fn a_prompt_still_waiting_is_raised_again_without_a_second_row() {
+    let harness = engine();
+    let now = SystemTime::now();
+    let ids = hooked(&["hook-sess"]);
+    let waiting = index(vec![prompting("hook-sess", now)]);
+
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now);
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now + DWELL);
+    let first = harness.state().notifications[0].id.clone();
+
+    // Not yet due: nothing changes.
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now + DWELL + REPEAT - SECOND);
+    assert_eq!(harness.state().notifications[0].id, first);
+
+    harness
+        .inner()
+        .notify_awaiting_decisions(&waiting, &ids, now + DWELL + REPEAT);
+    let rows = open_rows(&harness);
+    assert_eq!(rows.len(), 1, "the reminder stacked a second row");
+    assert_ne!(rows[0].id, first, "the reminder did not raise a new row");
+    let stored = harness.engine.db().recent_notifications(10);
+    assert_eq!(stored.len(), 1, "the old row stayed in SQLite");
+}
+
+/// A session that was killed, or went away, no longer waits on anyone. Its
+/// question used to stay unresolved and keep "asks you" up for good, because
+/// only a live session could end a wait.
+#[test]
+fn a_session_that_goes_away_resolves_its_question_and_deletes_its_prompt() {
+    let harness = engine();
+    let now = SystemTime::now();
+    let ids = hooked(&["prompt-sess"]);
+    let both = index(vec![asking("ask-sess"), prompting("prompt-sess", now)]);
+    harness.inner().notify_awaiting_decisions(&both, &ids, now);
+    harness
+        .inner()
+        .notify_awaiting_decisions(&both, &ids, now + DWELL);
+    assert_eq!(open_rows(&harness).len(), 2);
+
+    harness
+        .inner()
+        .notify_awaiting_decisions(&index(Vec::new()), &ids, now + DWELL + SECOND);
+
+    assert!(open_rows(&harness).is_empty());
     let state = harness.state();
-    assert_eq!(state.notifications.len(), 1);
-    assert!(!state.await_notified.contains("hook-sess"));
+    assert!(state.awaits.is_empty());
+    assert_eq!(
+        state.notifications.len(),
+        1,
+        "the prompt row was not deleted"
+    );
+    assert_eq!(
+        state.notifications[0].kind,
+        crate::types::NotificationKind::Question
+    );
+}
+
+/// A failed process read lists nothing. That is not every session going away:
+/// ending their waits would clear the rows, and the next good scan would raise
+/// them again, each with a sound.
+#[test]
+fn an_incomplete_scan_ends_no_wait() {
+    let harness = engine();
+    let now = SystemTime::now();
+    harness.inner().notify_awaiting_decisions(
+        &index(vec![asking("ask-sess")]),
+        &HashSet::new(),
+        now,
+    );
+
+    harness
+        .inner()
+        .notify_awaiting_decisions_in(&index(Vec::new()), &HashSet::new(), now, false);
+    assert_eq!(
+        open_rows(&harness).len(),
+        1,
+        "an outage cleared the question"
+    );
+    assert!(harness.state().awaits.contains_key("ask-sess"));
+
+    // A session the incomplete scan did see, and that stopped waiting, still
+    // ends its wait.
+    harness.inner().notify_awaiting_decisions_in(
+        &index(vec![a_session("ask-sess", "/repo/x")]),
+        &HashSet::new(),
+        now,
+        false,
+    );
+    assert!(open_rows(&harness).is_empty());
+}
+
+/// After a restart the feed comes back from SQLite with no record of which
+/// session each row was for. A row whose session still waits is adopted, so it
+/// does not ring again. A row whose session no longer waits is closed.
+#[test]
+fn after_a_restart_restored_rows_are_adopted_or_closed() {
+    let first = engine();
+    let now = SystemTime::now();
+    first.inner().notify_awaiting_decisions(
+        &index(vec![asking("still"), asking("done")]),
+        &HashSet::new(),
+        now,
+    );
+    let restored = first.engine.db().recent_notifications(10);
+    assert_eq!(restored.len(), 2);
+
+    let second = engine();
+    second.state().notifications = restored.into_iter().collect();
+    let events = second.engine.subscribe();
+    second
+        .inner()
+        .notify_awaiting_decisions(&index(vec![asking("still")]), &HashSet::new(), now);
+
+    let rows = open_rows(&second);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].session_id.as_deref(), Some("still"));
+    assert!(
+        !events
+            .try_iter()
+            .any(|event| matches!(event, EngineEvent::Notification(_))),
+        "a restored question rang again"
+    );
+    assert_eq!(
+        second.state().awaits["still"].row.as_deref(),
+        Some(rows[0].id.as_str())
+    );
+}
+
+/// A QA reviewer's sessions prompt on every edit and command, so a prompt row
+/// joins the feed without a sound. A question still rings.
+#[test]
+fn for_the_qa_role_a_prompt_is_silent_and_a_question_rings() {
+    let harness = engine_with(Setup {
+        config: Some(serde_json::json!({ "role": "qa" })),
+        ..Setup::default()
+    });
+    let now = SystemTime::now();
+    let ids = hooked(&["prompt-sess"]);
+    let both = index(vec![asking("ask-sess"), prompting("prompt-sess", now)]);
+    let events = harness.engine.subscribe();
+    harness.inner().notify_awaiting_decisions(&both, &ids, now);
+    harness
+        .inner()
+        .notify_awaiting_decisions(&both, &ids, now + DWELL);
+
+    let (mut rang, mut silent) = (Vec::new(), Vec::new());
+    for event in events.try_iter() {
+        match event {
+            EngineEvent::Notification(n) => rang.push(n.session_id.unwrap_or_default()),
+            EngineEvent::NotificationUpdated(n) => silent.push(n.session_id.unwrap_or_default()),
+            _ => {}
+        }
+    }
+    assert_eq!(rang, ["ask-sess"]);
+    assert_eq!(silent, ["prompt-sess"]);
 }
 
 // --- a numbered prompt is an answerable question -----------------------------
@@ -314,7 +552,7 @@ fn a_question_the_agent_asked_names_its_task_and_is_answerable() {
         last_entry: Some(crate::daemon::tests::tool_entry("AskUserQuestion")),
         ..a_session("s", "/repo")
     };
-    let notification = crate::daemon::watchers::awaiting_notification(&session, true);
+    let notification = crate::daemon::watchers::awaiting_notification(&session, true, true);
 
     assert_eq!(notification.kind, crate::types::NotificationKind::Question);
     assert_eq!(notification.task_id, Some(6660));
@@ -330,7 +568,7 @@ fn a_stalled_tool_call_stays_unanswerable() {
         task_id: Some(6660),
         ..a_session("s", "/repo")
     };
-    let notification = crate::daemon::watchers::awaiting_notification(&session, false);
+    let notification = crate::daemon::watchers::awaiting_notification(&session, false, true);
 
     assert_eq!(notification.kind, crate::types::NotificationKind::Info);
     assert!(notification

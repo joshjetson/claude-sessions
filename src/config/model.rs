@@ -506,6 +506,13 @@ pub struct QaBlock {
     /// ended up resident at once, about 405 MB each, on a 16 GB machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_refill: Option<bool>,
+    /// Announce a task that arrives in a QA stage (`🧪 New in QA`). Off
+    /// unless set to true.
+    ///
+    /// The QA board already lists every task in a QA stage, so a row and a
+    /// sound per arrival told a reviewer what they could already see.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_new_in_qa: Option<bool>,
     /// Stages that mean "waiting on QA", for the QA role's new-arrival alert.
     ///
     /// Absent or empty means the default list. A revision stage in this list

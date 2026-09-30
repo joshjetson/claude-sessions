@@ -3,7 +3,7 @@
 
 use crossterm::event::KeyCode;
 
-use crate::types::{NotificationStatus, UserRole, QUIET_SESSIONS_ID};
+use crate::types::{NotificationStatus, UserRole};
 use crate::ui::board;
 use crate::ui::dialogs::{Dialog, NotifMenu, TaskAction, TaskMenu};
 use crate::ui::state::Action;
@@ -258,17 +258,17 @@ fn a_change_from_the_daemon_applies_by_id() {
     assert!(state.notification("b").is_none());
 }
 
-/// The quiet row: raised once with a sound, then updated in place in silence,
-/// pinned to the top of the feed.
+/// A row with a fixed id, such as a task's verdict for a round: raised once
+/// with a sound, then rewritten in place in silence, and never shown twice.
 #[test]
-fn the_quiet_row_rings_once_updates_silently_and_is_pinned_first() {
+fn a_fixed_row_rings_once_updates_silently_and_never_shows_twice() {
+    const ROW: &str = "verdict-6391-r2";
     let (_dir, mut state) = board_state();
-    let quiet = |title: &str| crate::types::Notification {
-        id: QUIET_SESSIONS_ID.to_string(),
+    let verdict = |title: &str| crate::types::Notification {
         title: title.to_string(),
-        ..notification(QUIET_SESSIONS_ID, None)
+        ..notification(ROW, Some(6391))
     };
-    state.push_notification(quiet("⏳ 2 sessions quiet"));
+    state.push_notification(verdict("QA #6391: REVISION REQUIRED"));
     state.push_notification(notification("newer", None));
     let sounds = |state: &mut crate::ui::state::AppState| {
         actions(state)
@@ -278,36 +278,18 @@ fn the_quiet_row_rings_once_updates_silently_and_is_pinned_first() {
     };
     assert_eq!(sounds(&mut state), 2);
 
-    for n in 3..10 {
-        state.upsert_notification(quiet(&format!("⏳ {n} sessions quiet")));
+    for n in 1..4 {
+        state.upsert_notification(verdict(&format!("QA #6391: REVISION REQUIRED ({n})")));
     }
     assert_eq!(sounds(&mut state), 0, "an update rang");
-    assert_eq!(
-        state
-            .notifications
-            .iter()
-            .filter(|n| n.id == QUIET_SESSIONS_ID)
-            .count(),
-        1
-    );
-    let snapshot = board::snapshot(&state);
-    assert_eq!(
-        snapshot.keys.get(1).map(String::as_str),
-        Some(&*format!("n:{QUIET_SESSIONS_ID}")),
-        "the quiet row is not pinned first: {:?}",
-        snapshot.keys
-    );
+    let rows = |state: &crate::ui::state::AppState| {
+        state.notifications.iter().filter(|n| n.id == ROW).count()
+    };
+    assert_eq!(rows(&state), 1);
 
-    // Re-raised under the same id: one row, not two.
-    state.push_notification(quiet("⏳ again"));
-    assert_eq!(
-        state
-            .notifications
-            .iter()
-            .filter(|n| n.id == QUIET_SESSIONS_ID)
-            .count(),
-        1
-    );
+    // Raised again under the same id: one row, not two.
+    state.push_notification(verdict("QA #6391: PASS"));
+    assert_eq!(rows(&state), 1);
 }
 
 // --- the badges in the detail pane -------------------------------------------

@@ -254,9 +254,9 @@ pub struct EngineState {
     pub done_tasks: BTreeSet<i64>,
     pub blocked_tasks: BTreeMap<i64, BlockedTask>,
     pub archived_tasks: BTreeSet<i64>,
-    /// Sessions already announced as waiting on a decision — the edge that
-    /// keeps the notification from repeating every second.
-    pub await_notified: HashSet<String>,
+    /// Session id -> the wait the await watcher is tracking for it, and the
+    /// row that announced it. See [`AwaitWatch`].
+    pub awaits: HashMap<String, AwaitWatch>,
     pub pending: Vec<PendingLaunch>,
     /// Newest first, capped at [`super::NOTIFICATION_LIMIT`] (mandate #14: a
     /// deque, not `unshift` + `truncate`).
@@ -268,8 +268,6 @@ pub struct EngineState {
     /// session id -> the task it is working, as of the last tick. What makes
     /// archiving a session that VANISHED possible at all.
     pub seen_task_sessions: HashMap<String, SeenTaskSession>,
-    /// The QA role's one aggregated quiet-sessions row.
-    pub quiet: QuietSessions,
     /// Set when a slow tick skipped the QA arrival watcher because the role was
     /// not QA. The next QA tick then records what is in the stages silently,
     /// so switching role does not announce every task that arrived meanwhile.
@@ -296,87 +294,32 @@ pub struct EngineState {
     pub deploy_runs: BTreeMap<String, super::deploy::DeployRunState>,
 }
 
-/// Where the quiet-sessions row stands.
+/// A session waiting on a person, as the await watcher tracks it.
 ///
-/// The row is one notification with a fixed id, updated in place. What this
-/// tracks is the part that is not in the row itself: which sessions it
-/// describes, and what the user has already dismissed.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct QuietSessions {
-    /// The session ids quiet as of the last tick.
-    pub current: BTreeSet<String>,
-    /// Whether the row is in the feed and the daemon keeps it up to date.
-    pub shown: bool,
-    /// The quiet set at the moment the user dismissed, resolved or cleared the
-    /// row. While every quiet session is one of these, the row stays hidden. A
-    /// session that starts writing again leaves this set, so its next silence
-    /// counts as new.
-    pub dismissed: Option<BTreeSet<String>>,
+/// One per waiting session, so each wait has at most one row in the feed. The
+/// row is what the watcher resolves or deletes when the wait ends, whatever
+/// ended it: an answer, a kill, or the session going away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwaitWatch {
+    /// The agent asked a question or presented a plan. `false` is a
+    /// permission prompt.
+    pub asked: bool,
+    /// When the watcher first saw this wait.
+    pub since: SystemTime,
+    /// The id of the row that announced it, once one was raised.
+    pub row: Option<String>,
+    /// When that row was raised.
+    pub raised_at: Option<SystemTime>,
 }
 
-/// What the quiet-sessions row should do this tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuietStep {
-    /// Nothing to show, or the user dismissed everything that is quiet.
-    Stay,
-    /// First appearance, or a new session went quiet after a dismissal. The
-    /// only step that plays a sound.
-    Raise,
-    /// The row is up. Refresh its text in place, silently.
-    Update,
-    /// No session is quiet any more. Take the row away.
-    Remove,
-}
-
-impl QuietSessions {
-    /// Decide this tick's step from the sessions quiet right now, and record
-    /// them.
-    pub fn plan(&mut self, quiet: BTreeSet<String>) -> QuietStep {
-        if let Some(dismissed) = &mut self.dismissed {
-            dismissed.retain(|id| quiet.contains(id));
+impl AwaitWatch {
+    pub fn new(asked: bool, now: SystemTime) -> Self {
+        AwaitWatch {
+            asked,
+            since: now,
+            row: None,
+            raised_at: None,
         }
-        let step = if quiet.is_empty() {
-            self.dismissed = None;
-            if self.shown {
-                QuietStep::Remove
-            } else {
-                QuietStep::Stay
-            }
-        } else if let Some(dismissed) = &self.dismissed {
-            if quiet.is_subset(dismissed) {
-                QuietStep::Stay
-            } else {
-                QuietStep::Raise
-            }
-        } else if self.shown {
-            QuietStep::Update
-        } else {
-            QuietStep::Raise
-        };
-        match step {
-            QuietStep::Raise => {
-                self.dismissed = None;
-                self.shown = true;
-            }
-            QuietStep::Remove => self.shown = false,
-            QuietStep::Stay | QuietStep::Update => {}
-        }
-        self.current = quiet;
-        step
-    }
-
-    /// The user dismissed, resolved or cleared the row.
-    pub fn dismiss(&mut self) {
-        self.dismissed = Some(self.current.clone());
-        self.shown = false;
-    }
-
-    /// The role stopped wanting the row. Forget everything, so switching back
-    /// raises it fresh.
-    pub fn reset(&mut self) -> bool {
-        let was_shown = self.shown;
-        *self = QuietSessions::default();
-        was_shown
     }
 }
 

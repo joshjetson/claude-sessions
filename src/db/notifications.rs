@@ -69,6 +69,36 @@ impl Db {
         });
     }
 
+    /// Stores a notification, replacing every field of a row with the same id.
+    ///
+    /// For a row with a fixed id that later posts rewrite, such as a task's
+    /// verdict. [`Self::put_notification`] keeps the original text, which is
+    /// right for a replay and wrong for a rewrite.
+    pub fn replace_notification(&self, n: &Notification) {
+        self.exec("replace_notification", |conn| {
+            conn.prepare_cached(
+                "INSERT OR REPLACE INTO notifications
+                   (id, ts, title, message, cwd, project, session_id, task_id, level, status, kind, run_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            )?
+            .execute((
+                &n.id,
+                &n.ts,
+                &n.title,
+                &n.message,
+                &n.cwd,
+                &n.project,
+                n.session_id.as_deref().unwrap_or(""),
+                n.task_id,
+                n.level.as_str(),
+                n.status.as_str(),
+                n.kind.as_str(),
+                &n.run_id,
+            ))?;
+            Ok(())
+        });
+    }
+
     /// Newest first — the order the feed is read in.
     pub fn recent_notifications(&self, limit: i64) -> Vec<Notification> {
         self.rows(

@@ -83,19 +83,13 @@ fn a_hook_state_file_overrides_an_older_transcript() {
     let state = harness.state();
     let session = state.sessions.get(&written.session_id).expect("not listed");
     assert_eq!(session.status, SessionStatus::Awaiting);
-    // The watcher sees the hook and raises the prompt notification at once.
-    assert!(
-        state
-            .notifications
-            .iter()
-            .any(|n| n.title.contains("may be waiting on a prompt")),
-        "{:?}",
-        state
-            .notifications
-            .iter()
-            .map(|n| n.title.clone())
-            .collect::<Vec<_>>()
-    );
+    // The watcher sees the hook and starts timing the wait. The row comes
+    // after the prompt dwell, so a prompt answered at once raises nothing.
+    assert!(state.notifications.is_empty());
+    assert!(state
+        .awaits
+        .get(&written.session_id)
+        .is_some_and(|w| !w.asked));
 }
 
 #[test]

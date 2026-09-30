@@ -126,6 +126,15 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.raise_notification(notification)
     }
 
+    /// Raise a post from an agent. A verdict shares one row per task and
+    /// round, and rings once. See [`super::verdicts`].
+    pub fn raise_agent_post(
+        &self,
+        notification: NewNotification,
+    ) -> Option<crate::types::Notification> {
+        self.inner.raise_agent_post(notification)
+    }
+
     /// Resolve every notification in the feed. See
     /// [`super::notify`]'s `resolve_all_notifications`.
     pub fn resolve_all_notifications(&self) -> ActionResult {
