@@ -152,7 +152,7 @@ fn fold(lines: &[Value]) -> Option<LastEntry> {
 /// "now": bookkeeping writes keep it fresh, and it must not matter.
 fn status(lines: &[Value], now: SystemTime) -> SessionStatus {
     let last = fold(lines);
-    session_status(last.as_ref(), now, None, now)
+    session_status(last.as_ref(), now, None, None, now)
 }
 
 fn seq(parts: Vec<Vec<Value>>) -> Vec<Value> {
@@ -633,7 +633,11 @@ fn every_real_transcript_ends_on_a_conversational_entry() {
         );
         let active = last.activity_instant().expect("fixtures carry stamps");
         let now = active + Duration::from_secs(30);
-        assert_eq!(session_status(Some(&last), now, None, now), want, "{file}");
+        assert_eq!(
+            session_status(Some(&last), now, None, None, now),
+            want,
+            "{file}"
+        );
     }
 }
 

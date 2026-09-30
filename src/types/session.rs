@@ -60,6 +60,12 @@ pub struct RawSession {
     pub status: Option<SessionStatus>,
     #[serde(default)]
     pub starting: bool,
+    /// When the session's newest live Bash tool shell started, when it has one.
+    /// Read against a permission prompt: a tool shell newer than the prompt is
+    /// the approved call running. Never on the wire, because only the status
+    /// derived from it leaves this process.
+    #[serde(skip)]
+    pub tool_started: Option<SystemTime>,
 }
 
 /// A raw session enriched with everything parsed out of its transcript. The

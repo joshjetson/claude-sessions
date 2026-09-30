@@ -107,6 +107,12 @@ pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     /// The last tick saw everything it looked for. See
     /// [`Scanner::last_scan_complete`].
     complete: bool,
+    /// Child shell pid -> whether it is the shell Claude Code runs a Bash
+    /// tool call in. Asked once per pid, like the command lines above.
+    tool_shells: HashMap<u32, bool>,
+    /// Claude pid -> when its newest live tool shell started, as of the last
+    /// listing. See [`RawSession::tool_started`].
+    newest_tool: HashMap<u32, SystemTime>,
 }
 
 impl Scanner<PlatformProcessSource> {
@@ -136,6 +142,8 @@ impl<S: ProcessSource> Scanner<S> {
             task_refs: TaskRefCache::new(),
             session_cwds: SessionCwdCache::new(),
             complete: false,
+            tool_shells: HashMap::new(),
+            newest_tool: HashMap::new(),
         }
     }
 
@@ -199,6 +207,7 @@ impl<S: ProcessSource> Scanner<S> {
         // complete: an empty list from here is not evidence of anything.
         if listing.is_empty() {
             self.complete = false;
+            self.newest_tool.clear();
             return Vec::new();
         }
         // Set false below by every read that did not answer for a pid.
@@ -209,6 +218,7 @@ impl<S: ProcessSource> Scanner<S> {
         self.argv.retain(|pid, _| alive.contains(pid));
         self.launch_tasks.retain(|pid, _| alive.contains(pid));
         self.launch_runs.retain(|pid, _| alive.contains(pid));
+        self.tool_shells.retain(|pid, _| alive.contains(pid));
 
         // Two ways a row can be a session. Its own name settles it — a native
         // install, which is all the Node original ever handled — or its name is
@@ -216,8 +226,9 @@ impl<S: ProcessSource> Scanner<S> {
         // command line can say. The second group is why a machine with Claude
         // Code installed from npm showed an empty dashboard.
         let considered: Vec<ProcessRow> = listing
-            .into_iter()
+            .iter()
             .filter(|row| is_interactive_claude(&row.comm) || is_script_runtime(&row.comm))
+            .cloned()
             .collect();
 
         // ONE batched `ps -o command=` for both groups, and once per pid ever —
@@ -266,6 +277,7 @@ impl<S: ProcessSource> Scanner<S> {
             complete = false;
         }
         self.complete = complete;
+        self.find_tool_shells(&listing, &rows);
 
         let need_env = uncached(&rows, &self.launch_tasks);
         if !need_env.is_empty() {
@@ -306,6 +318,58 @@ impl<S: ProcessSource> Scanner<S> {
                 })
             })
             .collect()
+    }
+
+    /// Record when each Claude process's newest tool shell started.
+    ///
+    /// Claude Code runs every Bash tool call in a new shell, a direct child of
+    /// the `claude` process, whose command line sources a snapshot from
+    /// `~/.claude/shell-snapshots/`. Its other children are MCP servers, hook
+    /// commands and `caffeinate`, and none of those source a snapshot.
+    ///
+    /// The hook state cannot tell a permission prompt that is still up from
+    /// one that was approved: no hook fires on approval, and the transcript
+    /// writes nothing until the tool returns. A tool shell that started after
+    /// the prompt can only be the approved call running. See
+    /// [`crate::hook_state::fuse`].
+    ///
+    /// Only shells are asked about, in one batched `ps -o command=`, and each
+    /// pid once. A marker that stops matching after a Claude Code update
+    /// costs nothing but this signal: the status then waits for the tool to
+    /// return, as it did before.
+    fn find_tool_shells(&mut self, listing: &[ProcessRow], claude: &[ProcessRow]) {
+        let parents: HashSet<u32> = claude.iter().map(|row| row.pid).collect();
+        let children: Vec<&ProcessRow> = listing
+            .iter()
+            .filter(|row| row.ppid.is_some_and(|ppid| parents.contains(&ppid)))
+            .filter(|row| is_shell(&row.comm))
+            .collect();
+        let need: Vec<u32> = children
+            .iter()
+            .map(|row| row.pid)
+            .filter(|pid| !self.tool_shells.contains_key(pid))
+            .collect();
+        if !need.is_empty() {
+            let lines = self.source.argv(&need);
+            for pid in need {
+                // A shell that exited before its line was read is not cached,
+                // so a `ps` that failed is asked again next tick.
+                if let Some(line) = lines.get(&pid) {
+                    self.tool_shells.insert(pid, is_tool_shell(line));
+                }
+            }
+        }
+        self.newest_tool.clear();
+        for row in children {
+            if self.tool_shells.get(&row.pid) != Some(&true) {
+                continue;
+            }
+            let (Some(ppid), Some(started)) = (row.ppid, start_time_instant(&row.lstart)) else {
+                continue;
+            };
+            let newest = self.newest_tool.entry(ppid).or_insert(started);
+            *newest = (*newest).max(started);
+        }
     }
 
     /// One tick: every live session, however this platform can see them.
@@ -357,7 +421,10 @@ impl<S: ProcessSource> Scanner<S> {
                     .unwrap_or(&file.name)
                     .to_string();
                 if let Some(&index) = by_id.get(&session_id) {
-                    sessions[index].pids.push(proc.pid);
+                    let session = &mut sessions[index];
+                    session.pids.push(proc.pid);
+                    let tool = self.newest_tool.get(&proc.pid).copied();
+                    session.tool_started = session.tool_started.max(tool);
                     continue;
                 }
                 // Fresh stat: the cached listing is only rebuilt when the
@@ -380,6 +447,7 @@ impl<S: ProcessSource> Scanner<S> {
                     session_size: Some(size),
                     status: None,
                     starting: false,
+                    tool_started: self.newest_tool.get(&proc.pid).copied(),
                 });
             }
 
@@ -413,6 +481,7 @@ impl<S: ProcessSource> Scanner<S> {
                     session_size: None,
                     status: Some(SessionStatus::Starting),
                     starting: true,
+                    tool_started: None,
                 });
             }
         }
@@ -463,4 +532,21 @@ fn group_by_project(procs: Vec<ClaudeProcess>) -> Vec<ProjectGroup> {
 
 fn non_empty(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
+}
+
+/// A shell by its `comm`: the name, or the path to it. Claude Code starts a
+/// tool call in the user's login shell.
+fn is_shell(comm: &str) -> bool {
+    let name = comm
+        .rsplit('/')
+        .next()
+        .unwrap_or(comm)
+        .trim_start_matches('-');
+    matches!(name, "zsh" | "bash" | "sh" | "fish" | "dash" | "ksh")
+}
+
+/// The command line of the shell Claude Code runs a Bash tool call in: it
+/// sources a snapshot of the user's shell first.
+fn is_tool_shell(command: &str) -> bool {
+    command.contains("/shell-snapshots/snapshot-")
 }

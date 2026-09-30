@@ -582,8 +582,18 @@ the newer one wins. A denied prompt fires no hook, but the denial lands in the t
 the `PermissionRequest`, so the row goes back to idle. Compacting and starting keep precedence
 over both.
 
-One gap remains. No hook fires when you approve a permission prompt, so a session reads
-"awaiting" from the approval until the tool finishes and `PostToolUse` fires.
+No hook fires when you approve a permission prompt either, and the transcript writes nothing
+until the tool returns. For a Bash command, the process table fills that gap. Claude Code runs
+each Bash tool call in a new shell, a direct child of the `claude` process, and that shell
+sources a snapshot from `~/.claude/shell-snapshots/`. When such a shell started after the
+prompt, the prompt was approved and the command is running, so the row reads "working". A
+`permission_prompt` notification that arrives after the `PermissionRequest` is the same wait,
+and the state file keeps the time the wait began. `ps` gives start times to the whole second,
+so a prompt approved within the second it appeared still reads "awaiting" until the tool
+finishes.
+
+Other approved tools, such as an MCP tool, start no new shell. They read "awaiting" from the
+approval until the tool finishes and `PostToolUse` fires. Most of them finish in seconds.
 
 ## Architecture
 

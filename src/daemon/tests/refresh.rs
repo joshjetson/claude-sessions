@@ -400,3 +400,56 @@ fn a_tick_that_read_an_empty_listing_does_not_vouch_for_it() {
     assert!(announced.by_project.is_empty());
     assert!(!announced.scan_complete);
 }
+
+/// A permission prompt that was approved fires no hook, and the transcript
+/// writes nothing until the command returns. The command's own shell, started
+/// after the prompt, is what says it is running.
+#[test]
+fn an_approved_command_reads_working_while_it_runs() {
+    let mut harness = engine();
+    let session = harness.transcript(6137, "/repo/app");
+    harness.procs.add(501, "/repo/app").launched_for(501, 6137);
+    let action = crate::hook_state::parse_hook_input(
+        serde_json::json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": session.session_id,
+            "tool_name": "Bash",
+        })
+        .to_string()
+        .as_bytes(),
+        chrono::Utc::now(),
+    );
+    crate::hook_state::apply(&harness.paths, &action).expect("hook state written");
+    let status = |harness: &TestEngine| {
+        harness
+            .state()
+            .sessions
+            .get(&session.session_id)
+            .expect("listed")
+            .status
+    };
+
+    harness.engine.refresh(RefreshRequest::default());
+    assert_eq!(status(&harness), SessionStatus::Awaiting);
+
+    // A hook command starts with the prompt. It is not the approved command.
+    harness.procs.add_child(
+        601,
+        501,
+        "/bin/sh",
+        "/bin/sh -c claude-sessions hook 2>/dev/null || true",
+        2,
+    );
+    harness.engine.refresh(RefreshRequest::default());
+    assert_eq!(status(&harness), SessionStatus::Awaiting);
+
+    harness.procs.add_child(
+        602,
+        501,
+        "/bin/zsh",
+        "/bin/zsh -c source /Users/k/.claude/shell-snapshots/snapshot-zsh-1-ab.sh && eval 'make'",
+        2,
+    );
+    harness.engine.refresh(RefreshRequest::default());
+    assert_eq!(status(&harness), SessionStatus::Working);
+}
