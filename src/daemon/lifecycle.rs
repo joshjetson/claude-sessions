@@ -95,6 +95,7 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
         self.inner.refresh(true);
         self.inner.notify_new_assignments();
         self.inner.notify_qa_arrivals();
+        self.inner.watch_auto_qa();
         // Warmed, never awaited: the board is one Odoo round trip and `start`
         // is what a client waits on before its first snapshot. The Node
         // original did the same, for the same reason.
@@ -155,6 +156,7 @@ fn run_loop<S: ProcessSource + Send + 'static>(
             next_slow = now + SLOW_TICK;
             inner.notify_new_assignments();
             inner.notify_qa_arrivals();
+            inner.watch_auto_qa();
             inner.poll_board();
         }
         if let (Some(at), Some(interval)) = (next_usage, usage_interval) {

@@ -99,6 +99,11 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         // The feed's Clear all: every notification resolved, in memory and in
         // SQLite. No body, because "all" has nothing to name.
         ("POST", "/notifications/clear") => answer(engine.resolve_all_notifications()),
+        // The dashboard put these Auto QA arrivals in their runs.
+        ("POST", "/auto-qa/joined") => {
+            engine.auto_qa_joined(&id_list(&body(), "keys"));
+            (202, json!({ "ok": true }))
+        }
         ("POST", "/done") => {
             let body = body();
             engine.process_done(DoneMarker {

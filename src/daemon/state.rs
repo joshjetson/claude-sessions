@@ -272,6 +272,8 @@ pub struct EngineState {
     /// not QA. The next QA tick then records what is in the stages silently,
     /// so switching role does not announce every task that arrived meanwhile.
     pub qa_watch_paused: bool,
+    /// What the dashboard needs for Auto QA. See [`super::autoqa`].
+    pub auto_qa: super::autoqa::AutoQaFeed,
 
     // --- fed by later phases, carried by this one ---------------------------
     /// Phase 9b fills this; the engine only indexes it and hands it out.

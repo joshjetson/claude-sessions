@@ -21,6 +21,7 @@
 //! duplicate-start guard) can be tested with no machine that could run an agent
 //! against real task data.
 
+pub mod autoqa;
 pub mod controller;
 pub mod detail;
 pub mod keys;
@@ -31,6 +32,7 @@ pub mod spec;
 pub mod start;
 pub mod view;
 
+pub use autoqa::apply_auto_qa;
 pub use controller::{
     focus_task_terminal, go_to_task_session, match_session_by_cwd, resolve_notif_session,
     run_task_sessions, task_session, task_sessions, FocusTarget, SessionTarget,

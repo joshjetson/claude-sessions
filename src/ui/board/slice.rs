@@ -120,6 +120,11 @@ pub struct BoardSlice {
     /// a task that fails QA leaves the stage and stays in the run that found
     /// the problem, and "2 done of 7" needs a denominator that does not move.
     pub runs: Vec<QaRun>,
+    /// Every task in a QA stage of an Auto QA project, as the daemon last
+    /// published them. The board shows the reviewer's own tasks, and a task in
+    /// QA assigned to nobody is not on it, so a run looks here for what the
+    /// board does not carry. See [`Self::run_task`].
+    pub auto_qa_tasks: HashMap<i64, Task>,
     /// Derived when an update lands, because the row formatter wants a plain
     /// status per task and a set of gated ids — rebuilding either per row would
     /// be a map copy per frame.
@@ -207,6 +212,42 @@ impl BoardSlice {
                 })
             })
         })
+    }
+
+    /// The task a run works from: the board's row, or the Auto QA list's when
+    /// the board does not carry it.
+    pub fn run_task(&self, task_id: i64) -> Option<&Task> {
+        self.task(task_id)
+            .or_else(|| self.auto_qa_tasks.get(&task_id))
+    }
+
+    /// Put a task that arrived through Auto QA into the run for its stage, the
+    /// same run `R` makes, and return that run's id.
+    ///
+    /// A task already in the run is a task back for another round: it comes
+    /// out of `spawned`, so the run may start it again.
+    pub fn join_run(&mut self, project: &str, stage: &str, task_id: i64) -> String {
+        let id = QaRun::id_for(project, stage);
+        match self.runs.iter_mut().find(|run| run.id == id) {
+            Some(run) => {
+                if !run.task_ids.contains(&task_id) {
+                    run.task_ids.push(task_id);
+                }
+                run.spawned.retain(|spawned| *spawned != task_id);
+            }
+            None => self.runs.push(QaRun {
+                id: id.clone(),
+                project_name: project.to_string(),
+                stage_name: stage.to_string(),
+                task_ids: vec![task_id],
+                started_at: crate::util::iso_now(),
+                lane_limit: None,
+                spawned: Vec::new(),
+                mode: RunMode::default(),
+                coordinator_started: false,
+            }),
+        }
+        id
     }
 
     /// Task id -> stage name for everything the loaded board covers, subtasks
@@ -355,7 +396,7 @@ impl BoardSlice {
         task_ids
             .iter()
             .filter_map(|&id| {
-                let task = self.task(id)?;
+                let task = self.run_task(id)?;
                 Some((id, task.state.clone().unwrap_or_default()))
             })
             .collect()

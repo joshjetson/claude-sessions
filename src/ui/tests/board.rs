@@ -9,6 +9,7 @@
 //! - [`pickers`] — the folder pickers, the branch override, the flow viewer
 //! - [`view`] — rows, cursor, detail pane and key map
 
+mod autoqa;
 mod dialogs;
 mod extras;
 mod fixtures;

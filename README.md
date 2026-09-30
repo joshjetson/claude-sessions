@@ -316,6 +316,33 @@ Audited against the key maps themselves, not against this document.
 | `a` | Answer the selected question or verdict as yourself |
 | `]` | Jump to the next agent waiting on a decision |
 | `R` | Watch the selected stage as a QA run |
+| `A` | Switch Auto QA on or off for the selected row's project, on this machine |
+
+### Auto QA
+
+With Auto QA on for a project, a task that arrives in one of its QA stages
+(`qa.newTaskStages`) starts by itself. You still give the verdict and close the session.
+
+1. The daemon checks the project's QA stages every 45 seconds. A task that arrives joins
+   the QA run for its stage, the same run `R` makes.
+2. The run gets a coordinator if none is running. A running coordinator is told the task
+   joined.
+3. The run starts the task when a lane is free. The usual rules hold: no second session on
+   a task, the lane limit, and never a task Odoo marks Done, Complete, Changes Requested or
+   Cancelled.
+
+The details:
+
+- Switching a project on records what already sits in its QA stages. Auto QA starts what
+  arrives from then on, not the backlog.
+- A task that comes back to QA after a revision is a new round, and starts again.
+- A task assigned to another QA reviewer (`qa.otherQaUserIds`) and not to you is left out.
+- Sessions start only while the dashboard is open. An arrival while it is closed waits in
+  the daemon and starts when you open it.
+- Switching on needs exactly one repo folder for the project, because nobody is at the
+  keyboard to pick one.
+- Starting a session raises no notification. A session tells you when it needs you.
+- Auto QA needs the daemon. The dashboard without one has no Auto QA.
 
 With `"role": "qa"`, `s`, `v` and `C` start nothing and say so, the task menu drops
 **Start task**, **Add context & start** and the revision resumes, and the Deploy tab drops
@@ -438,8 +465,9 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | Key | Default | What it does |
 |---|---|---|
 | `role` | `dev` | `dev` \| `qa` \| `pm`. Anything else reads as `dev`. `qa` hides the development launches on the board and filters the notification feed (see below). `pm` behaves like `dev` for now. The daemon picks up an edit within a second |
+| `qa.autoQa[]` | `[]` | The projects with Auto QA on, on this machine. `A` on the board edits it. See [Auto QA](#auto-qa) |
 | `qa.notifyNewInQa` | `false` | QA role only: announce a task that lands in a QA stage (`🧪 New in QA`). Off because the QA board already lists those tasks. Switched on, the first run records what is already there silently |
-| `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | QA role only: the stages `qa.notifyNewInQa` watches. Revision stages never count |
+| `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | The stages `qa.notifyNewInQa` and Auto QA watch. Revision stages never count |
 | `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |
 | `qa.otherQaUserIds[]` | `[]` | QA role only: Odoo user ids of the other reviewers. A task one of them has is not announced unless you are assigned too |
 | `alerts.enabled` | `true` | The daemon's alerting as a whole |

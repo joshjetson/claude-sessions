@@ -111,6 +111,28 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             };
             crate::ui::board::watch_or_drop(state, &project, &stage, existing);
         }
+        // A switches Auto QA on or off for the selected row's project.
+        'A' => {
+            let project = match &snapshot.row {
+                BoardRow::Project { name } => name.clone(),
+                BoardRow::Stage { project, .. } | BoardRow::QaRun { project, .. } => {
+                    project.clone()
+                }
+                BoardRow::Task { task, .. } | BoardRow::Subtask { task, .. } => {
+                    task.project_name.clone()
+                }
+                BoardRow::QaRunTask {
+                    task: Some(task), ..
+                } => task.project_name.clone(),
+                _ => {
+                    state
+                        .flash("Select a project, or a row in one, to switch Auto QA.".to_string());
+                    state.dirty = true;
+                    return;
+                }
+            };
+            toggle_auto_qa(state, &project);
+        }
         // ] walks to the next agent waiting on a decision, across every run.
         ']' => crate::ui::board::jump_to_next_ask(state, &snapshot.keys),
         'P' => pipeline_view(state, snapshot),
@@ -481,4 +503,34 @@ fn ssh(state: &mut AppState, snapshot: &BoardSnapshot) {
     if let Some(project) = snapshot.row.project_name().map(str::to_string) {
         state.enqueue(Action::Ssh { project });
     }
+}
+
+/// Switch Auto QA for a project, on this machine.
+///
+/// Switching on needs exactly one repo folder for the project. An Auto QA start
+/// happens with nobody at the keyboard, and with no folder or several the start
+/// would stop at a folder picker.
+fn toggle_auto_qa(state: &mut AppState, project: &str) {
+    let on = !state.config.qa_auto(project);
+    if on {
+        let folders = state.config.odoo_project_dir_list(project).len();
+        if folders != 1 {
+            state.flash(format!(
+                "Auto QA needs exactly one repo folder for {project}, and it has {folders}. \
+                 Set it with \"Repo folders…\" in a task's menu first."
+            ));
+            state.dirty = true;
+            return;
+        }
+    }
+    let message = match state.config.set_auto_qa(project, on) {
+        Ok(()) if on => format!(
+            "Auto QA is on for {project}. A task that arrives in its QA stages from now on \
+             joins that stage's QA run and starts."
+        ),
+        Ok(()) => format!("Auto QA is off for {project}. Running sessions are untouched."),
+        Err(error) => format!("Could not save Auto QA for {project}: {error}"),
+    };
+    state.flash(message);
+    state.dirty = true;
 }
