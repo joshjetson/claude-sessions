@@ -309,6 +309,7 @@ fn event_loop(
                     state.deploy.set_run(*run);
                     crate::ui::deploy::redraw(state, &project);
                 }
+                FeedEvent::AutoQa(feed) => crate::ui::board::apply_auto_qa(state, *feed),
                 FeedEvent::DeployOutput { project, line } => {
                     state.deploy.push_line(&project, line);
                     crate::ui::deploy::redraw(state, &project);
@@ -397,6 +398,7 @@ fn event_loop(
                 Action::Notifications { ref ids, status }
                     if feed.feed().update_notifications(ids.clone(), status) => {}
                 Action::ClearNotifications if feed.feed().clear_notifications() => {}
+                Action::AutoQaJoined(ref keys) if feed.feed().auto_qa_joined(keys.clone()) => {}
                 other => {
                     // A task launch has to be registered with the pending queue
                     // BEFORE the terminal opens, or nothing will claim the

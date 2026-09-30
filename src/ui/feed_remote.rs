@@ -105,6 +105,8 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
                 // reconnect it is the only list that knows what was resolved
                 // in between.
                 let _ = sender.send(FeedEvent::Notifications(snapshot.notifications));
+                // Arrivals that waited for a dashboard to open.
+                let _ = sender.send(FeedEvent::AutoQa(Box::new(snapshot.auto_qa)));
                 let _ = sender.send(sessions(snapshot.sessions));
                 let _ = sender.send(board);
                 let _ = sender.send(deploy);
@@ -187,6 +189,11 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
                 if !project.is_empty() {
                     let _ = sender.send(FeedEvent::DeployOutput { project, line });
                 }
+            }
+        }
+        "auto-qa" => {
+            if let Ok(feed) = serde_json::from_str::<crate::daemon::AutoQaFeed>(&event.data) {
+                let _ = sender.send(FeedEvent::AutoQa(Box::new(feed)));
             }
         }
         // The link events belong to a phase that has not landed; an unknown
@@ -363,6 +370,13 @@ impl SessionFeed for RemoteFeed {
     fn clear_notifications(&self) -> bool {
         self.act(|client| {
             client.clear_notifications();
+        });
+        true
+    }
+
+    fn auto_qa_joined(&self, keys: Vec<String>) -> bool {
+        self.act(move |client| {
+            client.auto_qa_joined(&keys);
         });
         true
     }

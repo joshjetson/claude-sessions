@@ -72,6 +72,9 @@ pub enum FeedEvent {
     DeployRun(Box<crate::types::DeployRun>),
     /// One line of a deploy's output.
     DeployOutput { project: String, line: String },
+    /// The daemon's Auto QA feed: the tasks in the Auto QA projects' QA stages,
+    /// and the arrivals to put in their runs.
+    AutoQa(Box<crate::daemon::AutoQaFeed>),
     /// Something to say that arrived asynchronously — a deploy the daemon
     /// refused, say. The feed has no other way back to the pane.
     Flash(String),
@@ -121,6 +124,12 @@ pub trait SessionFeed: Send {
     }
     /// The same for Clear all.
     fn clear_notifications(&self) -> bool {
+        false
+    }
+    /// Tell the daemon these Auto QA arrivals joined their runs. `false` when
+    /// there is no daemon, which also means no Auto QA feed to answer.
+    fn auto_qa_joined(&self, keys: Vec<String>) -> bool {
+        let _ = keys;
         false
     }
     /// Stop the engine behind this feed, for Shift-Q. Only the remote

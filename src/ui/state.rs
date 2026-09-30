@@ -227,6 +227,10 @@ pub struct AppState {
     /// session is not in the live set until it appears in a scan — and until
     /// then its lane still reads free.
     pub last_run_launch: Option<std::time::SystemTime>,
+    /// Run id -> when Auto QA last launched its coordinator. A coordinator
+    /// takes seconds to appear in a scan, and Auto QA must not launch a second
+    /// one in the meantime.
+    pub auto_coordinator_at: HashMap<String, std::time::SystemTime>,
     /// The last scan returned nothing and the tree kept its previous list. Shown
     /// on screen, because a list that is quietly out of date is worse than one
     /// that says so.
@@ -303,6 +307,7 @@ impl AppState {
             runs_db: db,
             feed_went_quiet: false,
             last_run_launch: None,
+            auto_coordinator_at: HashMap::new(),
             deploy: DeploySlice::default(),
             dialog: None,
             flash: None,

@@ -513,6 +513,12 @@ pub struct QaBlock {
     /// sound per arrival told a reviewer what they could already see.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify_new_in_qa: Option<bool>,
+    /// The Odoo projects with Auto QA on, on this machine: a task that arrives
+    /// in one of their QA stages joins that stage's QA run, and the run starts
+    /// it. `A` on the board switches a project on or off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub auto_qa: Option<Vec<String>>,
     /// Stages that mean "waiting on QA", for the QA role's new-arrival alert.
     ///
     /// Absent or empty means the default list. A revision stage in this list

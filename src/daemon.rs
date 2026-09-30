@@ -43,6 +43,7 @@
 
 mod actions;
 mod alerts;
+mod autoqa;
 mod backend;
 mod caches;
 mod completion;
@@ -70,6 +71,7 @@ pub use alerts::{
     detect_new_assignments, detect_qa_arrivals, detect_stalls, human_duration, normalise_stage,
     NewAssignment, QaArrival, Stall, StallOptions,
 };
+pub use autoqa::{arrival_key, auto_tasks, AutoArrival, AutoQaFeed};
 pub use backend::{
     resolve_target_branch, MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove,
     StageMoveRequest, TaskBackend, TaskDetail, MOVE_IN_PROGRESS_STEP, MOVE_QA_STEP,

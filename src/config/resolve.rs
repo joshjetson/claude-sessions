@@ -217,6 +217,27 @@ impl ConfigHandle {
             .unwrap_or(false)
     }
 
+    /// The projects with Auto QA on, as the config spells them.
+    pub fn qa_auto_projects(&self) -> Vec<String> {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.auto_qa.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|project| !project.trim().is_empty())
+            .collect()
+    }
+
+    /// Whether Auto QA is on for this project. Names match ignoring case and
+    /// surrounding space, like every other project name in the config.
+    pub fn qa_auto(&self, project: &str) -> bool {
+        let wanted = project.trim().to_lowercase();
+        self.qa_auto_projects()
+            .iter()
+            .any(|name| name.trim().to_lowercase() == wanted)
+    }
+
     /// The mode every new coordinator starts in.
     ///
     /// Anything other than `"shadow"` — including an absent block and a typo —

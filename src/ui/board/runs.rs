@@ -126,7 +126,7 @@ fn fill_lanes(state: &mut AppState, run_id: &str) {
 /// Start whatever lanes are free, without saying anything when there is nothing
 /// to start. Used by the automatic refill, which runs on a timer: "Nothing to
 /// start: every task is finished" is true and correct once, and noise forever.
-fn fill_lanes_quiet(state: &mut AppState, run_id: &str) {
+pub(super) fn fill_lanes_quiet(state: &mut AppState, run_id: &str) {
     fill_lanes_inner(state, run_id, false)
 }
 
@@ -189,7 +189,7 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     let mut started = Vec::new();
     let mut failed = Vec::new();
     for task_id in plan {
-        let Some(task) = state.board.task(task_id).cloned() else {
+        let Some(task) = state.board.run_task(task_id).cloned() else {
             // The board no longer knows this task, so nothing was launched.
             failed.push(task_id);
             continue;
@@ -242,7 +242,7 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
 ///
 /// It watches. It does not spawn — admission lives outside any model — and in
 /// shadow mode it answers nothing.
-fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
+pub(super) fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
     let Some(run) = state
         .board
         .runs
@@ -257,7 +257,7 @@ fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
     let Some(task) = run
         .task_ids
         .first()
-        .and_then(|id| state.board.task(*id))
+        .and_then(|id| state.board.run_task(*id))
         .cloned()
     else {
         state.flash(

@@ -15,6 +15,7 @@
 
 mod alerts;
 mod archive;
+mod autoqa;
 mod awaiting;
 mod backend;
 mod board;

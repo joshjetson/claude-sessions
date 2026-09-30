@@ -135,6 +135,16 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.raise_agent_post(notification)
     }
 
+    /// Refresh the Auto QA feed now. See [`super::autoqa`].
+    pub fn watch_auto_qa(&self) {
+        self.inner.watch_auto_qa();
+    }
+
+    /// The dashboard put these Auto QA arrivals in their runs.
+    pub fn auto_qa_joined(&self, keys: &[String]) {
+        self.inner.auto_qa_joined(keys);
+    }
+
     /// Resolve every notification in the feed. See
     /// [`super::notify`]'s `resolve_all_notifications`.
     pub fn resolve_all_notifications(&self) -> ActionResult {

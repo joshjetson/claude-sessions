@@ -96,6 +96,10 @@ pub struct Snapshot {
     /// output window rather than its whole log.
     #[serde(default)]
     pub deploy_runs: BTreeMap<String, DeployRun>,
+    /// Auto QA's tasks and pending arrivals, so a dashboard that opens late
+    /// still starts what arrived while it was closed.
+    #[serde(default)]
+    pub auto_qa: super::autoqa::AutoQaFeed,
 }
 
 impl Snapshot {
@@ -120,6 +124,7 @@ impl Snapshot {
             deploy: state.deploy.clone(),
             deploy_error: state.deploy_error.clone(),
             deploy_runs: super::deploy::wire_runs(&state.deploy_runs),
+            auto_qa: state.auto_qa.clone(),
         }
     }
 }
@@ -213,6 +218,9 @@ pub enum EngineEvent {
         project: String,
         line: String,
     },
+    /// The Auto QA feed changed: the tasks in the Auto QA projects' QA stages,
+    /// and the arrivals the dashboard has not confirmed yet.
+    AutoQa(Box<super::autoqa::AutoQaFeed>),
 }
 
 impl EngineEvent {
@@ -234,6 +242,7 @@ impl EngineEvent {
             EngineEvent::Deploy { .. } => "deploy",
             EngineEvent::DeployRun { .. } => "deploy-run",
             EngineEvent::DeployOutput { .. } => "deploy-output",
+            EngineEvent::AutoQa(_) => "auto-qa",
         }
     }
 }

@@ -68,6 +68,19 @@ impl ConfigHandle {
         self.save()
     }
 
+    /// Switch Auto QA on or off for a project.
+    pub fn set_auto_qa(&mut self, project: &str, on: bool) -> io::Result<()> {
+        let qa = self.config.qa.get_or_insert_with(Default::default);
+        let mut projects = qa.auto_qa.take().unwrap_or_default();
+        let wanted = project.trim().to_lowercase();
+        projects.retain(|name| name.trim().to_lowercase() != wanted);
+        if on {
+            projects.push(project.trim().to_string());
+        }
+        qa.auto_qa = (!projects.is_empty()).then_some(projects);
+        self.save()
+    }
+
     /// An empty branch clears the override.
     pub fn set_target_branch(&mut self, project: &str, branch: &str) -> io::Result<()> {
         remove_ci(&mut self.config.target_branches, project);

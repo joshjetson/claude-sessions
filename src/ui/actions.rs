@@ -356,6 +356,9 @@ fn run(
         Action::ClearNotifications => {
             crate::db::Db::open(&services.paths).resolve_all_notifications();
         }
+        // Only reached without a daemon, which also means no Auto QA feed and
+        // nothing to confirm.
+        Action::AutoQaJoined(_) => {}
 
         Action::Refresh | Action::RefreshBurst | Action::SelectSession { .. } => {}
     }
