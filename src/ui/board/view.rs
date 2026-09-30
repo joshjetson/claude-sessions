@@ -332,13 +332,11 @@ pub fn label(board: &BoardSlice) -> String {
 fn run_sessions(state: &AppState) -> std::collections::HashMap<i64, &crate::types::Session> {
     let mut out = std::collections::HashMap::new();
     for run in &state.board.runs {
-        for &task_id in &run.task_ids {
-            if let Some(session) =
-                crate::ui::board::task_session(state.sessions(), task_id, state.board.link(task_id))
-            {
-                out.insert(task_id, session);
-            }
-        }
+        out.extend(crate::ui::board::run_task_sessions(
+            state.sessions(),
+            &run.task_ids,
+            |task_id| state.board.link(task_id),
+        ));
     }
     out
 }

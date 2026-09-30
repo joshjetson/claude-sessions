@@ -591,6 +591,80 @@ fn a_run_with_no_coordinator_still_kills_its_agents() {
     );
 }
 
+/// Put the cursor on the run's row for `task_id`, with the run expanded.
+fn on_the_agent_row(state: &mut AppState, task_id: i64) {
+    let run_id = state.board.runs[0].id.clone();
+    state.expanded_projects.insert(format!("r:{run_id}"));
+    let snapshot = tree_snapshot(state);
+    let key = format!("ra:{run_id}:{task_id}");
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|k| *k == key)
+        .expect("an agent row");
+    state.tree_sel.set(&snapshot.keys, index);
+}
+
+#[test]
+fn killing_a_runs_agent_takes_its_task_out_of_the_run() {
+    // The row used to stay, with "This run already started task N" under it,
+    // and the run would never start that task again.
+    let mut state = with_a_run(true);
+    on_the_agent_row(&mut state, 4101);
+    press(&mut state, KeyCode::Char('x'));
+
+    let confirm = kill_dialog(&state);
+    assert_eq!(confirm.pids, vec![101]);
+    assert!(
+        confirm.label.contains("take task #4101 out of its QA run"),
+        "the dialog does not say the task leaves the run: {:?}",
+        confirm.label
+    );
+
+    press(&mut state, KeyCode::Enter);
+    assert!(state.board.runs[0].task_ids.is_empty(), "the task stayed");
+    assert!(state
+        .take_actions()
+        .iter()
+        .any(|action| matches!(action, Action::Kill { pids, .. } if pids == &vec![101])));
+}
+
+#[test]
+fn a_session_outside_any_run_is_killed_without_touching_a_run() {
+    let mut state = with_a_run(true);
+    let mut other = session("other", "/Users/x/dev/alpha", SessionStatus::Working);
+    other.pids = vec![9999];
+    let mut sessions = state.by_project.get("x/alpha").cloned().unwrap_or_default();
+    sessions.push(other);
+    with_sessions(&mut state, sessions);
+    let snapshot = tree_snapshot(&state);
+    let index = snapshot
+        .keys
+        .iter()
+        .position(|key| key.ends_with("other"))
+        .expect("the other session's row");
+    state.tree_sel.set(&snapshot.keys, index);
+    press(&mut state, KeyCode::Char('x'));
+
+    assert_eq!(kill_dialog(&state).leaves_run, None);
+    press(&mut state, KeyCode::Enter);
+    assert_eq!(state.board.runs[0].task_ids, vec![4101]);
+}
+
+#[test]
+fn a_run_with_nothing_running_still_ends_when_its_row_is_killed() {
+    // The dialog closed and the run stayed: a run nothing on screen could
+    // remove.
+    let mut state = with_a_run(true);
+    with_sessions(&mut state, Vec::new());
+    on_the_run_row(&mut state);
+    press(&mut state, KeyCode::Char('x'));
+    assert!(kill_dialog(&state).pids.is_empty());
+
+    press(&mut state, KeyCode::Enter);
+    assert!(state.board.runs.is_empty(), "the run stayed");
+}
+
 #[test]
 fn killing_a_run_does_not_touch_sessions_outside_it() {
     // The whole risk of a bulk kill. A session in the same folder that the run

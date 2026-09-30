@@ -11,7 +11,7 @@
 
 use rusqlite::Row;
 
-use crate::qarun::{QaRun, RunMode};
+use crate::qarun::{unique_task_ids, QaRun, RunMode};
 
 use super::Db;
 
@@ -35,8 +35,10 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<QaRun> {
         id: row.get("id")?,
         project_name: row.get("project_name")?,
         stage_name: row.get("stage_name")?,
-        task_ids: ids_from_text(&row.get::<_, String>("task_ids")?),
-        spawned: ids_from_text(&row.get::<_, String>("spawned")?),
+        // Saved by builds that could list a task twice. Read once each, so a
+        // run restored from one of them draws one row per task.
+        task_ids: unique_task_ids(ids_from_text(&row.get::<_, String>("task_ids")?)),
+        spawned: unique_task_ids(ids_from_text(&row.get::<_, String>("spawned")?)),
         started_at: row.get("started_at")?,
         // 0 is stored as NULL, because 0 means "no cap" everywhere else and a
         // stored 0 would read as a cap of zero lanes.

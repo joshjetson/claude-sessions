@@ -284,6 +284,21 @@ fn a_saved_run_comes_back_whole() {
     assert_eq!(back[0], run);
 }
 
+/// A build that could list a task twice saved it that way. Read back, each
+/// task is there once, so a restored run draws one row per task.
+#[test]
+fn a_saved_run_with_a_task_listed_twice_comes_back_with_it_once() {
+    let t = open();
+    let mut run = a_run("x/alpha::Quality Assurance");
+    run.task_ids = vec![4101, 4102, 4101, 4103, 4102];
+    run.spawned = vec![4101, 4101];
+    t.db.save_qa_runs(std::slice::from_ref(&run));
+
+    let back = t.db.qa_runs();
+    assert_eq!(back[0].task_ids, vec![4101, 4102, 4103]);
+    assert_eq!(back[0].spawned, vec![4101]);
+}
+
 #[test]
 fn saving_replaces_rather_than_accumulates() {
     // Stopping a run has to REMOVE its row. An upsert would leave it behind and

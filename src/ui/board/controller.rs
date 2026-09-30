@@ -14,6 +14,7 @@
 //! The in-memory `task_sessions` link is only a fallback: relying on it alone is
 //! why the board reported "no live session" for tasks that plainly had one.
 
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use crate::daemon::TaskLink;
@@ -24,12 +25,17 @@ use crate::util::{parse_timestamp, same_dir, trim_trailing_separators};
 ///
 /// Several can race on one task — four did on one real board — so this returns
 /// all of them and callers that want "the" session take the head.
+///
+/// A QA run's coordinator is never a task's session. It launches against the
+/// run's first task only to find a folder, so its transcript names that task.
+/// Counted as the task's session, it made the task read as running, and a
+/// launch for that task could claim it.
 pub fn task_sessions<'a>(
     sessions: impl Iterator<Item = &'a Session>,
     task_id: i64,
 ) -> Vec<&'a Session> {
     let mut found: Vec<&Session> = sessions
-        .filter(|session| session.task_id == Some(task_id))
+        .filter(|session| session.task_id == Some(task_id) && session.run_id.is_none())
         .collect();
     found.sort_by_key(|session| std::cmp::Reverse(activity_at(session)));
     found
@@ -48,10 +54,60 @@ pub fn task_session<'a>(
         return Some(newest);
     }
     let link = link?;
-    sessions.into_iter().find(|session| {
-        (!link.session_id.is_empty() && session.session_id == link.session_id)
-            || (link.session_file.is_some() && session.session_file == link.session_file)
-    })
+    sessions
+        .into_iter()
+        .find(|session| linked(session, task_id, link))
+}
+
+/// Whether a launch link points at this session, and the session can be the
+/// task's at all.
+///
+/// A link can be wrong. Several launches in one folder race for the fresh
+/// sessions, and one could claim another task's session before its transcript
+/// named its task. Once the transcript names a different task, the transcript
+/// wins: followed blindly, the link drew that other task's session on this
+/// task's row, and a run showed one session twice.
+fn linked(session: &Session, task_id: i64, link: &TaskLink) -> bool {
+    let points_here = (!link.session_id.is_empty() && session.session_id == link.session_id)
+        || (link.session_file.is_some() && session.session_file == link.session_file);
+    points_here && session.run_id.is_none() && session.task_id.is_none_or(|named| named == task_id)
+}
+
+/// The session for each task in a run, each session used at most once.
+///
+/// Per task this is [`task_session`], with one more rule: a session already
+/// drawn on one row is never drawn on another. Sessions whose transcript names
+/// their task are placed first, and the launch links fill in after, so a link
+/// can never take a session from the task it really belongs to.
+pub fn run_task_sessions<'a, 'l>(
+    sessions: impl Iterator<Item = &'a Session> + Clone,
+    task_ids: &[i64],
+    link: impl Fn(i64) -> Option<&'l TaskLink>,
+) -> HashMap<i64, &'a Session> {
+    let mut out: HashMap<i64, &'a Session> = HashMap::new();
+    let mut used: HashSet<&str> = HashSet::new();
+    for &task_id in task_ids {
+        if let Some(session) = task_sessions(sessions.clone(), task_id).into_iter().next() {
+            used.insert(session.session_id.as_str());
+            out.insert(task_id, session);
+        }
+    }
+    for &task_id in task_ids {
+        if out.contains_key(&task_id) {
+            continue;
+        }
+        let Some(link) = link(task_id) else {
+            continue;
+        };
+        let found = sessions.clone().find(|session| {
+            !used.contains(session.session_id.as_str()) && linked(session, task_id, link)
+        });
+        if let Some(session) = found {
+            used.insert(session.session_id.as_str());
+            out.insert(task_id, session);
+        }
+    }
+    out
 }
 
 /// When a session was last doing something.

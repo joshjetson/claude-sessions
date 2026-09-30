@@ -29,6 +29,10 @@ pub struct KillConfirm {
     /// The run this kill ends, when the row was a run. Confirming it removes
     /// the run as well as the processes.
     pub stops_run: Option<String>,
+    /// The run and task this kill takes out of the run, when the session was
+    /// that task's agent. Left in, the row stayed with "This run already
+    /// started task N" under it, and the run could never start it again.
+    pub leaves_run: Option<(String, i64)>,
 }
 
 impl KillConfirm {
@@ -43,6 +47,7 @@ impl KillConfirm {
         match row {
             Some(SelectedRow::Session { session_id, pids }) => KillConfirm {
                 stops_run: None,
+                leaves_run: None,
                 pids: pids.clone(),
                 label: match config.session_nickname(session_id) {
                     Some(nickname) => nickname.to_string(),
@@ -53,6 +58,7 @@ impl KillConfirm {
                 let sessions = by_project.get(name).map(Vec::as_slice).unwrap_or(&[]);
                 KillConfirm {
                     stops_run: None,
+                    leaves_run: None,
                     pids: sessions
                         .iter()
                         .flat_map(|s| s.pids.iter().copied())
@@ -62,6 +68,7 @@ impl KillConfirm {
             }
             _ => KillConfirm {
                 stops_run: None,
+                leaves_run: None,
                 pids: Vec::new(),
                 label: String::new(),
             },
@@ -101,7 +108,16 @@ impl KillConfirm {
             // Killing a run ends it. Leaving the row behind with every session
             // gone would be a run you cannot act on and cannot get rid of.
             stops_run: Some(run_id.to_string()),
+            leaves_run: None,
         }
+    }
+
+    /// The same session, and the run it is an agent of: confirming takes that
+    /// task out of the run as well.
+    pub fn leaving_run(mut self, run_id: &str, task_id: i64) -> Self {
+        self.label = format!("{}, and take task #{task_id} out of its QA run", self.label);
+        self.leaves_run = Some((run_id.to_string(), task_id));
+        self
     }
 
     pub fn handle_key(&mut self, key: KeyEvent, _ctx: &mut DialogCtx<'_>) -> DialogOutcome {
@@ -110,13 +126,24 @@ impl KillConfirm {
                 pids: self.pids.clone(),
                 label: self.label.clone(),
             }),
+            // A run with nothing live still ends. Closing the dialog instead
+            // left a run that nothing on screen could remove.
+            KeyCode::Enter if self.stops_run.is_some() => {
+                DialogOutcome::Run(Box::new(crate::ui::dialogs::RunCommand {
+                    run_id: self.stops_run.clone().unwrap_or_default(),
+                    action: crate::ui::dialogs::RunAction::StopWatching,
+                    context: String::new(),
+                }))
+            }
             KeyCode::Enter | KeyCode::Esc => DialogOutcome::Close,
             _ => DialogOutcome::Stay,
         }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
-        let body = if self.pids.is_empty() {
+        let body = if self.pids.is_empty() && self.stops_run.is_some() {
+            hint("Nothing in this run is running. Enter stops watching it.")
+        } else if self.pids.is_empty() {
             hint("No running processes to kill.")
         } else {
             Line::from(Span::styled(

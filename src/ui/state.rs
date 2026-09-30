@@ -715,31 +715,15 @@ impl AppState {
                 // Resolved live, never cached: a coordinator that has died
                 // stops being reported the moment its process goes.
                 let coordinator = crate::qarun::coordinator_of(&run.id, self.sessions());
-                // A coordinator is never an agent. It is excluded by identity
-                // rather than by hoping nothing links it to a task: it launches
-                // against the run's first task to resolve a folder, and any
-                // path that turns that into a task link would otherwise put the
-                // watcher in a reviewer's row and push the real agent out of
-                // the run entirely.
-                let is_coordinator = |session: &&crate::types::Session| session.run_id.is_some();
-                // Ask the scheduler why each task has no session, once per
-                // run, against the same live set the rows are drawn from.
-                // The tasks this run has a live session for, computed the same
-                // way the agent rows below resolve one — a coordinator is never
-                // an agent, so it is excluded from both.
-                let live: std::collections::HashSet<i64> = run
-                    .task_ids
-                    .iter()
-                    .copied()
-                    .filter(|&task_id| {
-                        crate::ui::board::task_session(
-                            self.sessions().filter(|s| !is_coordinator(s)),
-                            task_id,
-                            self.board.link(task_id),
-                        )
-                        .is_some()
-                    })
-                    .collect();
+                // One session per row, and never the coordinator: see
+                // `run_task_sessions`. Resolved once per run, so the scheduler
+                // below and the rows judge the same live set.
+                let rows = crate::ui::board::run_task_sessions(
+                    self.sessions(),
+                    &run.task_ids,
+                    |task_id| self.board.link(task_id),
+                );
+                let live: std::collections::HashSet<i64> = rows.keys().copied().collect();
                 let paths = self.paths.clone();
                 let state_of =
                     move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
@@ -754,11 +738,7 @@ impl AppState {
                     .iter()
                     .map(|&task_id| crate::ui::tree::RunAgentRow {
                         task_id,
-                        session: crate::ui::board::task_session(
-                            self.sessions().filter(|s| !is_coordinator(s)),
-                            task_id,
-                            self.board.link(task_id),
-                        ),
+                        session: rows.get(&task_id).copied(),
                         asking: self.notifications.iter().any(|n| {
                             n.task_id == Some(task_id)
                                 && n.kind == crate::types::NotificationKind::Question

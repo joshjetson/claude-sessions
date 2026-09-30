@@ -278,6 +278,22 @@ fn kill_run_confirm(state: &AppState, run_id: &str) -> KillConfirm {
     KillConfirm::for_run(run_id, &label, section.coordinator, &agents)
 }
 
+/// The run and task a session row is the agent of: the session a run draws on
+/// that task's row. `None` for any other session, including a second session
+/// on the same task, whose kill leaves the run's own agent running.
+fn run_agent_of(state: &AppState, row: &SelectedRow) -> Option<(String, i64)> {
+    let SelectedRow::Session { session_id, .. } = row else {
+        return None;
+    };
+    state.run_sections().into_iter().find_map(|section| {
+        section
+            .agents
+            .iter()
+            .find(|agent| agent.session.is_some_and(|s| &s.session_id == session_id))
+            .map(|agent| (section.run_id.to_string(), agent.task_id))
+    })
+}
+
 /// The session coordinating a run, if one is running right now.
 fn coordinator_id(state: &AppState, run_id: &str) -> Option<String> {
     crate::qarun::coordinator_of(run_id, state.sessions()).map(|s| s.session_id.clone())
@@ -313,7 +329,14 @@ fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
             // nobody asks for.
             let dialog = match &snapshot.row {
                 Some(SelectedRow::Run { run_id }) => kill_run_confirm(state, run_id),
-                row => KillConfirm::for_row(row.as_ref(), &state.by_project, &state.config),
+                row => {
+                    let confirm =
+                        KillConfirm::for_row(row.as_ref(), &state.by_project, &state.config);
+                    match row.as_ref().and_then(|row| run_agent_of(state, row)) {
+                        Some((run_id, task_id)) => confirm.leaving_run(&run_id, task_id),
+                        None => confirm,
+                    }
+                }
             };
             state.dialog = Some(Dialog::Kill(dialog));
         }
