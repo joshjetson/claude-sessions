@@ -1,8 +1,7 @@
 //! The things the engine notices on your behalf.
 //!
 //! - a session waiting on a decision you have not been told about;
-//! - a running session that has gone quiet (per task, or for the QA role one
-//!   aggregated row for every live session);
+//! - a running task session that has gone quiet (not for the QA role);
 //! - a task landing in a stage that means it is yours now (for the QA role, a
 //!   task landing in a QA stage).
 //!
@@ -10,20 +9,23 @@
 //! `vanished` module, because archiving is a different kind of work from
 //! raising a notification.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, SystemTime};
 
 use crate::scan::ProcessSource;
-use crate::types::{EntryKind, LastEntry, NotificationLevel, Session, SessionStatus};
+use crate::types::{
+    EntryKind, LastEntry, Notification, NotificationKind, NotificationLevel, NotificationStatus,
+    Session, SessionStatus,
+};
 use crate::util::project_name;
 
 use super::alerts::{
-    detect_new_assignments, detect_qa_arrivals, detect_quiet_sessions, detect_stalls,
-    human_duration, last_write, quiet_sessions_text, StallOptions,
+    detect_new_assignments, detect_qa_arrivals, detect_stalls, human_duration, last_write,
+    StallOptions,
 };
 use super::engine::EngineInner;
 use super::notify::NewNotification;
-use super::state::{QuietStep, SessionIndex};
+use super::state::{AwaitWatch, SessionIndex};
 
 /// Marks that the assignment watcher has seen the board at least once.
 const BOOTSTRAP_KEY: &str = "alerts:bootstrapped";
@@ -47,6 +49,14 @@ const QA_BOOTSTRAP_KEY: &str = "qa-new:bootstrapped";
 /// cheap; a real block nobody hears is not. With the hooks installed there is
 /// no guess and no dwell: see [`is_blocked_on_tool_call`].
 pub const BLOCKED_TOOL_DWELL: Duration = Duration::from_secs(120);
+
+/// How long a permission prompt must wait before it is announced. The person
+/// who is at the keyboard answers most prompts well inside this.
+pub const PROMPT_DWELL: Duration = Duration::from_secs(30);
+
+/// How often a prompt that is still waiting is announced again. The old row is
+/// deleted first, so a long wait never stacks rows.
+pub const PROMPT_REPEAT: Duration = Duration::from_secs(10 * 60);
 
 /// A session is awaiting a user decision when its newest transcript entry is
 /// the agent asking a question or presenting a plan, with no answer yet.
@@ -101,50 +111,150 @@ pub fn is_blocked_on_tool_call(session: &Session, hooked: bool, now: SystemTime)
 }
 
 impl<S: ProcessSource> EngineInner<S> {
-    /// Alert when a session is waiting on YOU to choose. Agents do not run the
-    /// notify hook for these, so without this they wait silently.
+    /// Alert when a session is waiting on YOU: a question it asked, or a
+    /// permission prompt.
     ///
-    /// Edge-triggered per session: raised when the wait starts, cleared when it
-    /// ends, so a session sitting on a question does not notify once a second.
+    /// Each waiting session has at most one row, tracked in
+    /// [`EngineState::awaits`](super::EngineState::awaits):
+    ///
+    /// - A question is announced at once, and resolved when the session moves
+    ///   past it.
+    /// - A permission prompt is announced once it has waited [`PROMPT_DWELL`].
+    ///   A prompt the person at the keyboard answers at once is not news, and
+    ///   one sound per prompt was most of the noise. While it keeps waiting,
+    ///   the row is deleted and raised again every [`PROMPT_REPEAT`], so the
+    ///   reminder is new without a second row. It is deleted when the prompt
+    ///   ends.
+    ///
+    /// The rows are reconciled against what is waiting now on every tick, not
+    /// only on the edges. A session that was killed or went away, and a row
+    /// restored from SQLite after a restart, both used to leave "asks you" up
+    /// forever, because no edge ever came for them. A restored row whose
+    /// session is still waiting is adopted instead of raised again.
     ///
     /// `hooked` names the sessions that have a hook state file. See
-    /// [`is_blocked_on_tool_call`].
+    /// [`is_blocked_on_tool_call`]. The refresh loop calls
+    /// [`Self::notify_awaiting_decisions_in`], which also takes whether the
+    /// scan was complete. This form assumes it was, and exists for the tests.
+    #[cfg(test)]
     pub(crate) fn notify_awaiting_decisions(
         &self,
         sessions: &SessionIndex,
         hooked: &HashSet<String>,
         now: SystemTime,
     ) {
-        let mut raise = Vec::new();
-        let mut ended = Vec::new();
-        {
-            let mut state = self.state();
-            for session in sessions.iter() {
-                if session.session_id.is_empty() {
-                    continue;
-                }
+        self.notify_awaiting_decisions_in(sessions, hooked, now, true);
+    }
+
+    /// The await watcher, told whether the scan behind `sessions` saw
+    /// everything it looked for. See `notify_awaiting_decisions` for what it
+    /// raises and clears.
+    ///
+    /// After an incomplete scan, a session missing from `sessions` may still
+    /// be there, so no wait is ended for its absence. Ending it would clear
+    /// its row, and the next complete scan would raise it again with a sound.
+    pub(crate) fn notify_awaiting_decisions_in(
+        &self,
+        sessions: &SessionIndex,
+        hooked: &HashSet<String>,
+        now: SystemTime,
+        complete: bool,
+    ) {
+        let rings = self.config().role().notification_policy().prompt_rings();
+        let waiting: HashMap<&str, (&Session, bool)> = sessions
+            .iter()
+            .filter(|session| !session.session_id.is_empty())
+            .filter_map(|session| {
                 let asked = is_awaiting_user_decision(session.last_entry.as_ref());
                 let blocked = !asked
                     && is_blocked_on_tool_call(session, hooked.contains(&session.session_id), now);
-                let already = state.await_notified.contains(&session.session_id);
-                match (asked || blocked, already) {
-                    (true, false) => {
-                        state.await_notified.insert(session.session_id.clone());
-                        raise.push(awaiting_notification(session, asked));
+                (asked || blocked).then_some((session.session_id.as_str(), (session, asked)))
+            })
+            .collect();
+
+        let mut ended = EndedRows::default();
+        let mut raise: Vec<(String, NewNotification)> = Vec::new();
+        {
+            let mut guard = self.state();
+            let state = &mut *guard;
+
+            let gone: Vec<String> = state
+                .awaits
+                .keys()
+                .filter(|id| !waiting.contains_key(id.as_str()))
+                .filter(|id| complete || sessions.get(id).is_some())
+                .cloned()
+                .collect();
+            for id in gone {
+                if let Some(watch) = state.awaits.remove(&id) {
+                    ended.end(watch);
+                }
+            }
+
+            for (&id, &(session, asked)) in &waiting {
+                if !state.awaits.contains_key(id) {
+                    let mut watch = AwaitWatch::new(asked, now);
+                    if let Some(row) = restored_row(&state.notifications, id, asked) {
+                        watch.row = Some(row);
+                        watch.raised_at = Some(now);
                     }
-                    (false, true) => {
-                        state.await_notified.remove(&session.session_id);
-                        ended.push(session.session_id.clone());
+                    state.awaits.insert(id.to_string(), watch);
+                }
+                let Some(watch) = state.awaits.get_mut(id) else {
+                    continue;
+                };
+                // A prompt that became a question, or the other way round, is
+                // a new wait with a different row.
+                if watch.asked != asked {
+                    ended.end(std::mem::replace(watch, AwaitWatch::new(asked, now)));
+                }
+                let waited = |since: SystemTime| now.duration_since(since).unwrap_or_default();
+                let due = match (&watch.row, asked) {
+                    (None, true) => true,
+                    (None, false) => waited(watch.since) >= PROMPT_DWELL,
+                    (Some(_), true) => false,
+                    (Some(_), false) => watch
+                        .raised_at
+                        .is_none_or(|raised| waited(raised) >= PROMPT_REPEAT),
+                };
+                if due {
+                    if let Some(old) = watch.row.take() {
+                        ended.removed.push(old);
                     }
-                    _ => {}
+                    raise.push((id.to_string(), awaiting_notification(session, asked, rings)));
+                }
+            }
+
+            // Rows nothing tracks: restored after a restart for a session that
+            // is no longer waiting, or left by a session that went away.
+            let tracked: HashSet<&str> = state
+                .awaits
+                .values()
+                .filter_map(|watch| watch.row.as_deref())
+                .collect();
+            for notification in state.notifications.iter().filter(|_| complete) {
+                let orphan = notification.id.starts_with("await-")
+                    && notification.status != NotificationStatus::Resolved
+                    && !tracked.contains(notification.id.as_str())
+                    && !ended.contains(&notification.id);
+                if orphan {
+                    ended.end_row(notification.id.clone(), notification.kind);
                 }
             }
         }
-        // The wait ended, so the question was answered, wherever that
-        // happened. Clearing it here is what takes "← asks you" off the board.
-        self.resolve_answered_questions(&ended);
-        for notification in raise {
-            self.raise_notification(notification);
+
+        if !ended.resolved.is_empty() {
+            self.set_notification_status(&ended.resolved, NotificationStatus::Resolved);
+        }
+        if !ended.removed.is_empty() {
+            self.dismiss_notifications(&ended.removed);
+        }
+        for (session_id, notification) in raise {
+            let row = self.raise_notification(notification).map(|n| n.id);
+            if let Some(watch) = self.state().awaits.get_mut(&session_id) {
+                watch.raised_at = row.is_some().then_some(now);
+                watch.row = row;
+            }
         }
     }
 
@@ -159,8 +269,8 @@ impl<S: ProcessSource> EngineInner<S> {
         if !alerts.enabled || alerts.stuck_after.is_zero() {
             return;
         }
-        // The QA role gets one aggregated row instead. See
-        // [`Self::update_quiet_sessions`].
+        // A QA reviewer leaves each session open after its verdict, so a quiet
+        // session is the normal end of a pass and not news.
         if !self
             .config()
             .role()
@@ -244,47 +354,6 @@ impl<S: ProcessSource> EngineInner<S> {
         }
     }
 
-    /// Keep the QA role's one quiet-sessions row current.
-    ///
-    /// The per-task stall alert raises one notification per task and repeats
-    /// it every reminder interval. A reviewer with ten sessions who steps away
-    /// for an hour came back to dozens of rows and as many sounds. This is one
-    /// row with a fixed id, updated in place: "4 sessions quiet 15m+", plus the
-    /// longest. It rings once, when it first appears, and it goes away by
-    /// itself when every session is writing again.
-    ///
-    /// It covers every live session, not only the ones linked to a task,
-    /// because a reviewer starts most QA sessions by hand.
-    pub(crate) fn update_quiet_sessions(&self, sessions: &SessionIndex, now: SystemTime) {
-        let (policy, alerts) = {
-            let config = self.config();
-            (config.role().notification_policy(), config.alerts())
-        };
-        if !policy.quiet_sessions_row() || !alerts.enabled || alerts.stuck_after.is_zero() {
-            // The role changed, or alerts were switched off: take the row away
-            // and forget any dismissal, so turning it back on starts clean.
-            if self.state().quiet.reset() {
-                self.remove_quiet_row();
-            }
-            return;
-        }
-        let quiet = detect_quiet_sessions(sessions.iter(), now, alerts.stuck_after);
-        let ids = quiet.iter().map(|q| q.session_id.clone()).collect();
-        let step = self.state().quiet.plan(ids);
-        match step {
-            QuietStep::Stay => {}
-            QuietStep::Remove => self.remove_quiet_row(),
-            QuietStep::Raise | QuietStep::Update => {
-                let (title, message) = quiet_sessions_text(&quiet, alerts.stuck_after);
-                if step == QuietStep::Raise {
-                    self.raise_quiet_row(title, message);
-                } else {
-                    self.update_quiet_row(title, message);
-                }
-            }
-        }
-    }
-
     /// Tell me when something lands in my queue, without me refreshing the
     /// board.
     ///
@@ -346,20 +415,25 @@ impl<S: ProcessSource> EngineInner<S> {
     /// in SQLite like the assignment watcher's, so a restart announces what
     /// arrived while the daemon was down, and nothing twice.
     ///
-    /// It runs only for the QA role, because it costs an Odoo query every slow
-    /// tick. When it has been skipped for another role, the next QA tick
-    /// records the stages silently, exactly like the first run ever: switching
-    /// role must not replay a week of arrivals.
+    /// It runs only for the QA role, and only when `qa.notifyNewInQa` is on,
+    /// because it costs an Odoo query every slow tick. When it has been
+    /// skipped, the next tick that runs records the stages silently, exactly
+    /// like the first run ever: switching role or the setting must not replay
+    /// a week of arrivals.
     pub(crate) fn notify_qa_arrivals(&self) {
-        let (policy, enabled, rule) = {
+        let (policy, enabled, wanted, rule) = {
             let config = self.config();
             (
                 config.role().notification_policy(),
                 config.alerts().enabled,
+                config.qa_notify_new_in_qa(),
                 config.qa_alerts(),
             )
         };
-        if !policy.watches_qa_arrivals() {
+        // Switched off, it is paused like a role that does not watch, so
+        // switching it on records the stages silently rather than announcing
+        // everything that arrived meanwhile.
+        if !policy.watches_qa_arrivals() || !wanted {
             self.state().qa_watch_paused = true;
             return;
         }
@@ -414,6 +488,62 @@ impl<S: ProcessSource> EngineInner<S> {
     }
 }
 
+/// The rows of waits that ended this tick.
+///
+/// A question is resolved, because a QA run reads a resolved question as
+/// answered, and the history keeps it. A prompt row is deleted: it was a
+/// reminder, and it says nothing once the prompt is gone.
+#[derive(Debug, Default)]
+struct EndedRows {
+    resolved: Vec<String>,
+    removed: Vec<String>,
+}
+
+impl EndedRows {
+    fn end(&mut self, watch: AwaitWatch) {
+        if let Some(row) = watch.row {
+            if watch.asked {
+                self.resolved.push(row);
+            } else {
+                self.removed.push(row);
+            }
+        }
+    }
+
+    fn end_row(&mut self, row: String, kind: NotificationKind) {
+        if kind == NotificationKind::Question {
+            self.resolved.push(row);
+        } else {
+            self.removed.push(row);
+        }
+    }
+
+    fn contains(&self, row: &str) -> bool {
+        self.resolved
+            .iter()
+            .chain(&self.removed)
+            .any(|id| id == row)
+    }
+}
+
+/// An unresolved `await` row for this session and this kind of wait, as a
+/// restart restores them from SQLite.
+fn restored_row(
+    notifications: &VecDeque<Notification>,
+    session_id: &str,
+    asked: bool,
+) -> Option<String> {
+    notifications
+        .iter()
+        .find(|n| {
+            n.id.starts_with("await-")
+                && n.status != NotificationStatus::Resolved
+                && n.session_id.as_deref() == Some(session_id)
+                && (n.kind == NotificationKind::Question) == asked
+        })
+        .map(|n| n.id.clone())
+}
+
 /// The notification for a session that has stopped and is waiting on a person.
 ///
 /// `asked` separates two states that look alike on the board and are not alike
@@ -432,7 +562,14 @@ impl<S: ProcessSource> EngineInner<S> {
 ///    in the transcript, nothing can answer it remotely, and only the person at
 ///    the keyboard can clear it. It stays `info`, because marking it answerable
 ///    would invite the coordinator to try and be refused.
-pub(crate) fn awaiting_notification(session: &Session, asked: bool) -> NewNotification {
+///
+/// `prompt_rings` is the role's answer to whether a prompt plays a sound. A
+/// question always rings.
+pub(crate) fn awaiting_notification(
+    session: &Session,
+    asked: bool,
+    prompt_rings: bool,
+) -> NewNotification {
     let project = project_name(&session.cwd);
     if asked {
         let title = format!("🔔 {project}: Claude needs your decision");
@@ -462,6 +599,7 @@ pub(crate) fn awaiting_notification(session: &Session, asked: bool) -> NewNotifi
         project: Some(project),
         session_id: Some(session.session_id.clone()),
         level: NotificationLevel::Warn,
+        silent: !prompt_rings,
         ..NewNotification::new("await", title, message)
     }
 }

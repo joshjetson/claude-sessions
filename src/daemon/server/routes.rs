@@ -58,7 +58,7 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
         // A post the user's role does not want is still a success: the sender
         // did nothing wrong, and an error would make an agent retry it. `id`
         // is null and `filtered` says why.
-        ("POST", "/notify") => match engine.raise_notification(notification(&body())) {
+        ("POST", "/notify") => match engine.raise_agent_post(notification(&body())) {
             Some(raised) => (200, json!({ "ok": true, "id": raised.id })),
             None => (200, json!({ "ok": true, "id": null, "filtered": true })),
         },
@@ -248,6 +248,8 @@ fn notification(body: &Value) -> NewNotification {
         // command inside an agent's transcript.
         run_id: clamp(&text(body, "runId", ""), 200),
         level: NotificationLevel::from_label(&text(body, "level", "info")),
+        id: None,
+        silent: false,
     }
 }
 

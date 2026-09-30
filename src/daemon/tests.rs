@@ -33,6 +33,7 @@ mod roles;
 mod routes;
 mod server;
 mod transcripts;
+mod verdicts;
 mod watchers;
 mod wire;
 

@@ -82,18 +82,20 @@ impl UserRole {
 pub enum NotificationPolicy {
     /// Every source, exactly as before roles existed.
     Everything,
-    /// Only what a QA reviewer acts on.
+    /// Only what needs a QA reviewer.
     ///
-    /// Kept: a session that needs a decision (`await`), a coordinator or agent
-    /// post that is a question or a verdict, any post at warn or error level,
-    /// a task that finished or was blocked (`done`, `blocked`), a task that
-    /// arrived in a QA stage (`qa-new`), and the one aggregated quiet-sessions
-    /// row (`quiet`).
+    /// Kept: a session that asked a question or waits on a prompt (`await`),
+    /// the verdict a QA session parks (`verdict`), a coordinator or agent post
+    /// that is a question, any post at warn or error level, a task that was
+    /// blocked (`blocked`), and a task that arrived in a QA stage (`qa-new`),
+    /// which the arrival watcher raises only when `qa.notifyNewInQa` is on.
     ///
     /// Dropped: "Approved to Start" arrivals (`assigned`), which are a
-    /// developer's queue, the per-task stall alerts (`stalled`), which the
-    /// quiet-sessions row replaces, and informational `notify` posts at info or
-    /// success level, which are progress chatter from agents.
+    /// developer's queue, the per-task stall alerts (`stalled`), because a
+    /// reviewer leaves each session open after its verdict and a quiet session
+    /// is the normal end of a pass, a finished development task (`done`), and
+    /// informational `notify` posts at info or success level, which are
+    /// progress chatter from agents.
     QaFocused,
 }
 
@@ -107,7 +109,7 @@ impl NotificationPolicy {
         match self {
             NotificationPolicy::Everything => true,
             NotificationPolicy::QaFocused => match source {
-                "assigned" | "stalled" => false,
+                "assigned" | "stalled" | "done" => false,
                 "notify" => {
                     kind != NotificationKind::Info
                         || matches!(level, NotificationLevel::Warn | NotificationLevel::Error)
@@ -117,15 +119,18 @@ impl NotificationPolicy {
         }
     }
 
-    /// Whether each quiet task session gets its own `stalled` alert. The QA
-    /// policy replaces those with one aggregated row for every live session.
+    /// Whether each quiet task session gets its own `stalled` alert.
     pub fn per_task_stall_alerts(self) -> bool {
         matches!(self, NotificationPolicy::Everything)
     }
 
-    /// Whether the daemon keeps the aggregated quiet-sessions row.
-    pub fn quiet_sessions_row(self) -> bool {
-        matches!(self, NotificationPolicy::QaFocused)
+    /// Whether a permission prompt rings when it is announced.
+    ///
+    /// A reviewer's QA sessions ask for permission on every edit and command
+    /// they run, so a sound per prompt was most of the noise. The row still
+    /// appears, and the session's status still says it is waiting.
+    pub fn prompt_rings(self) -> bool {
+        matches!(self, NotificationPolicy::Everything)
     }
 
     /// Whether the daemon watches QA stages for new arrivals.

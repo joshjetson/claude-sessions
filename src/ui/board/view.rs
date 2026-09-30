@@ -14,7 +14,7 @@ use crate::board::{
     subtask_key, BoardCtx, BoardItem,
 };
 use crate::qarun::{QaRun, RunCtx};
-use crate::types::{Notification, NotificationStatus, Task, QUIET_SESSIONS_ID};
+use crate::types::{Notification, NotificationStatus, Task};
 use crate::ui::spans::row_line;
 use crate::ui::state::AppState;
 
@@ -23,16 +23,11 @@ use super::slice::{live_task_ids, BoardSlice};
 /// The feed rows: a header, the unresolved notifications, and a blank line
 /// separating them from the tree. Resolved notifications are gone, not dimmed —
 /// resolving one is how you make it go away.
-///
-/// The quiet-sessions row is pinned first. It is one row that stands for every
-/// quiet session, so it would sink below newer rows while it still matters.
 fn notification_items(notifications: &VecDeque<Notification>) -> Vec<BoardItem<'_>> {
-    let mut active: Vec<&Notification> = notifications
+    let active: Vec<&Notification> = notifications
         .iter()
         .filter(|n| n.status != NotificationStatus::Resolved)
         .collect();
-    // Stable, so every other row keeps its newest-first order.
-    active.sort_by_key(|n| n.id != QUIET_SESSIONS_ID);
     if active.is_empty() {
         return Vec::new();
     }

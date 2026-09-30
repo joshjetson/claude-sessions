@@ -80,6 +80,7 @@
   },
 
   "qa": {
+    "notifyNewInQa": false,
     "newTaskStages": ["QA", "Quality Assurance", "Tech Debt Work"],
     "projects": ["Your Odoo Project"],
     "otherQaUserIds": []

@@ -58,6 +58,7 @@ mod refresh;
 mod state;
 mod summary;
 mod vanished;
+mod verdicts;
 mod watchers;
 
 /// The wire: how a client finds the daemon, talks to it, and follows it.
@@ -66,9 +67,8 @@ pub mod protocol;
 pub mod server;
 
 pub use alerts::{
-    detect_new_assignments, detect_qa_arrivals, detect_quiet_sessions, detect_stalls,
-    human_duration, normalise_stage, quiet_sessions_text, short_duration, NewAssignment, QaArrival,
-    QuietSession, Stall, StallOptions,
+    detect_new_assignments, detect_qa_arrivals, detect_stalls, human_duration, normalise_stage,
+    NewAssignment, QaArrival, Stall, StallOptions,
 };
 pub use backend::{
     resolve_target_branch, MergeRequestRequest, NullBackend, OdooTaskBackend, StageMove,
@@ -93,11 +93,15 @@ pub use pending::PendingRequest;
 pub use protocol::{DaemonInfo, DEFAULT_PORT};
 pub use server::ServerHandle;
 pub use state::{
-    BlockedTask, BoardFilter, EngineState, PendingLaunch, QuietSessions, QuietStep, SessionIndex,
-    TaskLink, TaskLinkPatch, TaskLinkStatus,
+    AwaitWatch, BlockedTask, BoardFilter, EngineState, PendingLaunch, SessionIndex, TaskLink,
+    TaskLinkPatch, TaskLinkStatus,
 };
 pub use summary::summary_to_html;
-pub use watchers::{is_awaiting_user_decision, is_blocked_on_tool_call, BLOCKED_TOOL_DWELL};
+pub use verdicts::{classify_post, title_task_id, AgentPost};
+pub use watchers::{
+    is_awaiting_user_decision, is_blocked_on_tool_call, BLOCKED_TOOL_DWELL, PROMPT_DWELL,
+    PROMPT_REPEAT,
+};
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 

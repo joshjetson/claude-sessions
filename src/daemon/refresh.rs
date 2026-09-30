@@ -120,9 +120,8 @@ impl<S: ProcessSource> EngineInner<S> {
         // Node's order, kept: the stall watcher reads the links as they were
         // before this tick's linking, so a session linked a moment ago is not
         // immediately judged for silence.
-        self.notify_awaiting_decisions(&sessions, &hooked, now);
+        self.notify_awaiting_decisions_in(&sessions, &hooked, now, complete);
         self.notify_stalled_sessions(&sessions, now);
-        self.update_quiet_sessions(&sessions, now);
         self.auto_archive_vanished_sessions(&sessions, scanner.task_refs());
         self.link_pending_sessions(&sessions, now);
         drop(scan);

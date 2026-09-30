@@ -158,10 +158,9 @@ pub enum EngineEvent {
     /// A notification already in the feed changed its text in place.
     ///
     /// Its own event, not a second `notification`, because a client plays a
-    /// sound for every `notification`. The quiet-sessions row is refreshed
-    /// once a minute while sessions stay quiet, and one sound per refresh is
-    /// the storm the row exists to prevent. A client that does not hold the
-    /// row yet inserts it, silently.
+    /// sound for every `notification`. A later post about the same verdict,
+    /// for example, updates its row and must not ring again. A client that
+    /// does not hold the row yet inserts it, silently.
     NotificationUpdated(Box<Notification>),
     NotificationsChanged {
         ids: Vec<String>,

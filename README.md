@@ -214,8 +214,8 @@ with the tmux driver.
   pipeline result. Merge one (`m`), merge every ready MR in a project (`M`), or run the
   project's deploy command (`d`) and watch its output stream in. When an MR is blocked by
   conflicts, `R` resumes *the session that wrote that branch* and hands it the conflict
-- **Alerts** — sound and notification when a session asks a question, goes quiet, finishes,
-  or when a new task lands in your queue. The daemon raises them whether a dashboard is open
+- **Alerts** — sound and notification when a session asks a question, waits on a prompt,
+  goes quiet, finishes, parks a QA verdict, or when a new task lands in your queue. The daemon raises them whether a dashboard is open
   or not
 - **Completion flow** — an agent that reports done gets its merge request opened, its task
   moved to your QA stage, an HTML summary posted to the Odoo chatter, its transcript archived
@@ -438,7 +438,8 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | Key | Default | What it does |
 |---|---|---|
 | `role` | `dev` | `dev` \| `qa` \| `pm`. Anything else reads as `dev`. `qa` hides the development launches on the board and filters the notification feed (see below). `pm` behaves like `dev` for now. The daemon picks up an edit within a second |
-| `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | QA role only: tell me when a task lands in one of these. Revision stages never count. The first run records what is already there silently |
+| `qa.notifyNewInQa` | `false` | QA role only: announce a task that lands in a QA stage (`🧪 New in QA`). Off because the QA board already lists those tasks. Switched on, the first run records what is already there silently |
+| `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | QA role only: the stages `qa.notifyNewInQa` watches. Revision stages never count |
 | `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |
 | `qa.otherQaUserIds[]` | `[]` | QA role only: Odoo user ids of the other reviewers. A task one of them has is not announced unless you are assigned too |
 | `alerts.enabled` | `true` | The daemon's alerting as a whole |
@@ -464,17 +465,31 @@ never rings.
 
 | Source | `dev` / `pm` | `qa` |
 |---|---|---|
-| A session needs your decision, or waits on a prompt | ✓ | ✓ |
-| A task finished or was blocked | ✓ | ✓ |
-| `notify` posts that are a question or a verdict, or at warn or error level | ✓ | ✓ |
+| A session asked you a question | ✓ | ✓ |
+| A session waits on a permission prompt | ✓ | ✓, with no sound |
+| A QA verdict (`QA #N: PASS` or `REVISION REQUIRED`), once per task and round | ✓ | ✓ |
+| A task was blocked | ✓ | ✓ |
+| A task finished | ✓ | — |
+| `notify` posts that are a question, or at warn or error level | ✓ | ✓ |
 | `notify` posts at info or success level | ✓ | — |
 | A task landed in `alerts.newTaskStages` (Approved to Start) | ✓ | — |
 | One alert per quiet task session | ✓ | — |
-| A task landed in a QA stage (`🧪 New in QA`) | — | ✓ |
-| One `⏳ N sessions quiet` row for every live session, updated in place, pinned first, one sound when it appears | — | ✓ |
+| A task landed in a QA stage (`🧪 New in QA`), when `qa.notifyNewInQa` is on | — | ✓ |
 
-A dismissed quiet row stays hidden until a session that was not quiet at the time goes
-quiet. A question clears itself when its session stops waiting.
+Every role gets these rules:
+
+- **Questions.** A question clears itself when its session stops waiting. That includes a
+  session that was killed or went away.
+- **Permission prompts.** A prompt is announced only after it has waited 30 seconds, so a
+  prompt you answer at the keyboard makes no noise. While it keeps waiting, its row is
+  deleted and raised again every 10 minutes, so it never shows twice. The row is deleted
+  when the prompt ends.
+- **Verdicts.** A session's `QA #N: ...` posts share one row per task and QA round. The first
+  PASS or REVISION REQUIRED of a round rings. Later posts, such as a revised note, rewrite the
+  row in silence. A `CHECKPOINT` never rings. The next round, read from QAden's `run.json`,
+  gets a new row.
+- **Restarts.** After a daemon restart, a row for a session that is still waiting is kept and
+  does not ring again. A row for a session that stopped waiting is cleared.
 
 ## Environment
 
@@ -531,7 +546,8 @@ transcript so `claude --resume` still works months later, and writes the day's s
 With no setup, a session's status comes from its transcript. The transcript cannot tell a
 permission prompt from a slow tool: both are a tool call with no result yet. So without hooks
 a session on a permission prompt reads "working", and the daemon raises a "may be waiting on
-a prompt" notification after two minutes of silence.
+a prompt" notification after two and a half minutes of silence: two minutes before it counts
+as blocked, and the 30-second prompt wait.
 
 `claude-sessions hook` makes the status exact. Claude Code runs it on each event below and
 passes the event as JSON on stdin. The command records the newest event per session in
