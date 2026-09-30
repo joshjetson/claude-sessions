@@ -110,6 +110,8 @@ pub(super) fn transcript_sessions(
                 session_size: Some(size),
                 status: None,
                 starting: false,
+                // No process, so no children to read.
+                tool_started: None,
             });
         }
     }

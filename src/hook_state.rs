@@ -74,6 +74,13 @@ pub struct HookState {
     pub notification_type: Option<String>,
     /// When the hook ran, in the same ISO-8601 form the transcripts use.
     pub timestamp: String,
+    /// On a permission wait, when the wait began: the timestamp of the first
+    /// permission event of this wait. Claude Code can follow a
+    /// `PermissionRequest` with a `permission_prompt` notification, which
+    /// replaces the file, and the wait must keep its start. See
+    /// [`Self::permission_since`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_since: Option<String>,
 }
 
 impl HookState {
@@ -90,6 +97,23 @@ impl HookState {
     /// [`Self::timestamp`] as an instant.
     pub fn instant(&self) -> Option<SystemTime> {
         parse_timestamp(&self.timestamp).map(SystemTime::from)
+    }
+
+    /// A permission prompt: a `PermissionRequest`, or a `permission_prompt`
+    /// notification. Not a question, and not an MCP elicitation.
+    pub fn is_permission_wait(&self) -> bool {
+        self.event == "PermissionRequest"
+            || (self.event == "Notification"
+                && self.notification_type.as_deref() == Some("permission_prompt"))
+    }
+
+    /// When this permission wait began, or `None` when this is not one.
+    pub fn permission_since(&self) -> Option<SystemTime> {
+        if !self.is_permission_wait() {
+            return None;
+        }
+        let since = self.awaiting_since.as_deref().unwrap_or(&self.timestamp);
+        parse_timestamp(since).map(SystemTime::from)
     }
 }
 
@@ -185,6 +209,7 @@ pub fn parse_hook_input(input: &[u8], now: DateTime<Utc>) -> HookAction {
         tool_name: text("tool_name"),
         notification_type: text("notification_type"),
         timestamp: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        awaiting_since: None,
     };
     // An event with no say is not recorded at all. Recording it would replace
     // a state that does have a say, and the session would lose it.
@@ -238,7 +263,17 @@ pub fn apply(paths: &Paths, action: &HookAction) -> io::Result<()> {
             if state.event == "SessionStart" {
                 sweep_stale(&dir, SystemTime::now());
             }
-            write_atomic(&path, &serde_json::to_vec(state).map_err(io::Error::other)?)
+            // Only a permission event needs the previous state, and the hook
+            // runs on every tool call.
+            let previous = state
+                .is_permission_wait()
+                .then(|| read_state(&path))
+                .flatten();
+            let state = continue_wait(state, previous.as_ref());
+            write_atomic(
+                &path,
+                &serde_json::to_vec(&state).map_err(io::Error::other)?,
+            )
         }
     }
 }
@@ -262,6 +297,27 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temp);
     }
     result
+}
+
+/// The state to write, with the start of its permission wait carried over.
+///
+/// A permission event right after another one is the same wait, so it keeps
+/// the first one's start. Any other event in between, such as the next tool
+/// call's `PreToolUse`, means a new wait begins here.
+pub fn continue_wait(state: &HookState, previous: Option<&HookState>) -> HookState {
+    let mut state = state.clone();
+    if state.is_permission_wait() {
+        let carried = previous
+            .filter(|previous| previous.is_permission_wait())
+            .map(|previous| {
+                previous
+                    .awaiting_since
+                    .clone()
+                    .unwrap_or_else(|| previous.timestamp.clone())
+            });
+        state.awaiting_since = Some(carried.unwrap_or_else(|| state.timestamp.clone()));
+    }
+    state
 }
 
 /// Delete state files (and leftover temporary files) older than
@@ -397,6 +453,12 @@ impl HookStateCache {
 ///   the transcript's "idle" wins.
 /// - An answered question lands as a tool result after the `PreToolUse`, so
 ///   the transcript's "working" wins until `PostToolUse` arrives.
+/// - An APPROVED permission prompt fires nothing either, and the transcript
+///   writes nothing until the tool returns, so a long command read "awaiting"
+///   for as long as it ran. `tool_started` is when the session's newest Bash
+///   tool shell started (see [`crate::types::RawSession::tool_started`]). A
+///   tool shell newer than the prompt is the approved call running, so the
+///   session is working.
 ///
 /// The transcript side is its conversational activity only, never the file's
 /// mtime. Bookkeeping lines (the hook results themselves among them) touch the
@@ -405,6 +467,7 @@ pub fn fuse(
     transcript: SessionStatus,
     transcript_at: Option<SystemTime>,
     hook: Option<&HookState>,
+    tool_started: Option<SystemTime>,
 ) -> SessionStatus {
     let Some(hook) = hook else {
         return transcript;
@@ -412,15 +475,36 @@ pub fn fuse(
     let (Some(status), Some(hook_at)) = (hook.status(), hook.instant()) else {
         return transcript;
     };
-    match transcript_at {
-        Some(at) if hook_at < at => transcript,
-        _ => status,
+    if transcript_at.is_some_and(|at| hook_at < at) {
+        return transcript;
+    }
+    let approved = hook
+        .permission_since()
+        .zip(tool_started)
+        .is_some_and(|(since, started)| started_after(started, since));
+    if approved {
+        SessionStatus::Working
+    } else {
+        status
     }
 }
 
+/// Whether a process started after `since`. `ps` gives a start time to the
+/// whole second, so it counts only from the second after the one `since` is
+/// in: a prompt approved within its own second reads as still waiting, which
+/// is what it read as before this signal existed.
+fn started_after(started: SystemTime, since: SystemTime) -> bool {
+    let whole_seconds = |at: SystemTime| {
+        at.duration_since(SystemTime::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default()
+    };
+    whole_seconds(started) > whole_seconds(since)
+}
+
 /// A session's status from everything known about it: the transcript's newest
-/// conversational entry, the file's mtime as the fallback clock, and the hook
-/// state when the hooks are installed.
+/// conversational entry, the file's mtime as the fallback clock, the hook state
+/// when the hooks are installed, and when its newest Bash tool shell started.
 ///
 /// The daemon and the embedded scan both call this, so they cannot disagree.
 /// Compacting and starting are decided by the callers before this, and keep
@@ -429,6 +513,7 @@ pub fn session_status(
     last_entry: Option<&LastEntry>,
     session_mtime: SystemTime,
     hook: Option<&HookState>,
+    tool_started: Option<SystemTime>,
     now: SystemTime,
 ) -> SessionStatus {
     let transcript =
@@ -437,6 +522,7 @@ pub fn session_status(
         transcript,
         last_entry.and_then(LastEntry::activity_instant),
         hook,
+        tool_started,
     )
 }
 

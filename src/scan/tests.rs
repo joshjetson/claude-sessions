@@ -137,6 +137,7 @@ impl FakeProcesses {
         let mut state = self.state.borrow_mut();
         state.rows.push(ProcessRow {
             pid,
+            ppid: None,
             tty: Some(format!("ttys{pid:03}")),
             lstart: lstart_at(start_secs),
             comm: comm.to_string(),
@@ -152,6 +153,16 @@ impl FakeProcesses {
 
     pub(crate) fn with_argv(&self, pid: u32, argv: &str) -> &Self {
         self.state.borrow_mut().argv.insert(pid, argv.to_string());
+        self
+    }
+
+    /// Make `ppid` the process's parent, as the listing's PPID column says.
+    pub(crate) fn with_parent(&self, pid: u32, ppid: u32) -> &Self {
+        let mut state = self.state.borrow_mut();
+        if let Some(row) = state.rows.iter_mut().find(|row| row.pid == pid) {
+            row.ppid = Some(ppid);
+        }
+        drop(state);
         self
     }
 

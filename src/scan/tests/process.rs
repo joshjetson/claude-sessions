@@ -3,11 +3,11 @@
 use crate::scan::{parse_lsof_cwd, parse_pid_prefixed, parse_ps_listing, parse_ps_row};
 use crate::util::start_time_instant;
 
-const LISTING: &str = "  PID TTY      STARTED                      COMM
-    1 ??       Thu Jun  4 09:40:01 2026     /sbin/launchd
- 9379 ??       Fri Aug 28 09:24:49 2026     /Users/k/.local/bin/claude
-47207 ??       Tue Sep  1 12:51:21 2026     claude bg-pty-host
-26085 ttys000  Tue Aug 11 10:45:19 2026     claude
+const LISTING: &str = "  PID  PPID TTY      STARTED                      COMM
+    1     0 ??       Thu Jun  4 09:40:01 2026     /sbin/launchd
+ 9379     1 ??       Fri Aug 28 09:24:49 2026     /Users/k/.local/bin/claude
+47207  9379 ??       Tue Sep  1 12:51:21 2026     claude bg-pty-host
+26085   812 ttys000  Tue Aug 11 10:45:19 2026     claude
 ";
 
 #[test]
@@ -18,9 +18,11 @@ fn the_header_row_is_not_a_process() {
 }
 
 #[test]
-fn a_row_splits_into_pid_tty_start_time_and_command() {
-    let row = parse_ps_row(" 26085 ttys000  Tue Aug 11 10:45:19 2026     claude").expect("row");
+fn a_row_splits_into_pid_parent_tty_start_time_and_command() {
+    let row =
+        parse_ps_row(" 26085   812 ttys000  Tue Aug 11 10:45:19 2026     claude").expect("row");
     assert_eq!(row.pid, 26085);
+    assert_eq!(row.ppid, Some(812));
     assert_eq!(row.tty.as_deref(), Some("ttys000"));
     // Kept verbatim, because the session row renders it through
     // util::format_start_time.
@@ -32,8 +34,8 @@ fn a_row_splits_into_pid_tty_start_time_and_command() {
 #[test]
 fn a_space_padded_day_is_still_a_start_time() {
     // BSD `lstart` pads single-digit days, so the field holds a double space.
-    let row =
-        parse_ps_row("    1 ??       Thu Jun  4 09:40:01 2026     /sbin/launchd").expect("row");
+    let row = parse_ps_row("    1     0 ??       Thu Jun  4 09:40:01 2026     /sbin/launchd")
+        .expect("row");
     assert_eq!(row.lstart, "Thu Jun  4 09:40:01 2026");
     assert_eq!(row.comm, "/sbin/launchd");
     assert!(start_time_instant(&row.lstart).is_some());
@@ -41,7 +43,8 @@ fn a_space_padded_day_is_still_a_start_time() {
 
 #[test]
 fn no_controlling_terminal_is_none_rather_than_the_string_ps_prints() {
-    let row = parse_ps_row(" 9379 ??       Fri Aug 28 09:24:49 2026     /bin/claude").expect("row");
+    let row =
+        parse_ps_row(" 9379     1 ??       Fri Aug 28 09:24:49 2026     /bin/claude").expect("row");
     assert_eq!(row.tty, None);
 }
 
@@ -49,8 +52,9 @@ fn no_controlling_terminal_is_none_rather_than_the_string_ps_prints() {
 fn a_command_containing_four_digits_does_not_eat_the_start_time() {
     // Node's greedy `(.*\d{4})` reached into the command whenever it held four
     // digits before a space.
-    let row = parse_ps_row("  501 ttys004  Wed Sep 16 14:10:37 2026     claude --port 8787 x")
-        .expect("row");
+    let row =
+        parse_ps_row("  501   300 ttys004  Wed Sep 16 14:10:37 2026     claude --port 8787 x")
+            .expect("row");
     assert_eq!(row.lstart, "Wed Sep 16 14:10:37 2026");
     assert_eq!(row.comm, "claude --port 8787 x");
 }
@@ -61,6 +65,8 @@ fn junk_is_skipped_rather_than_guessed_at() {
     assert!(parse_ps_row("  PID TTY      STARTED    COMM").is_none());
     assert!(parse_ps_row("123").is_none());
     assert!(parse_ps_row("123 ttys000 no year here claude").is_none());
+    // No parent pid: the listing is not the shape this parser reads.
+    assert!(parse_ps_row("123 ttys000 Tue Aug 11 10:45:19 2026 claude").is_none());
 }
 
 #[test]

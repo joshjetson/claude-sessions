@@ -20,10 +20,14 @@ mod system;
 #[cfg(unix)]
 pub use system::SystemProcessSource;
 
-/// One row of `ps -eo pid,tty,lstart,comm`, before anything is decided about it.
+/// One row of `ps -eo pid,ppid,tty,lstart,comm`, before anything is decided
+/// about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessRow {
     pub pid: u32,
+    /// The parent. `None` when the listing did not carry one. What finds the
+    /// shell a Claude session runs a Bash tool call in: it is a direct child.
+    pub ppid: Option<u32>,
     /// `None` where `ps` printed `??` — no controlling terminal, so nothing for
     /// the terminal drivers to join on.
     pub tty: Option<String>,
@@ -60,7 +64,7 @@ pub struct ClaudeProcess {
 /// parsing rules live in one tested place instead of inside the command
 /// wrapper.
 pub trait ProcessSource {
-    /// Every process on the machine: `ps -eo pid,tty,lstart,comm`.
+    /// Every process on the machine: `ps -eo pid,ppid,tty,lstart,comm`.
     fn list(&self) -> Vec<ProcessRow>;
 
     /// Working directories: one `lsof -a -p <pid> -d cwd -Fn` per pid.
@@ -134,12 +138,12 @@ pub type PlatformProcessSource = SystemProcessSource;
 #[cfg(not(unix))]
 pub type PlatformProcessSource = UnsupportedProcessSource;
 
-/// `ps -eo pid,tty,lstart,comm` output into rows, header and junk skipped.
+/// `ps -eo pid,ppid,tty,lstart,comm` output into rows, header and junk skipped.
 pub fn parse_ps_listing(out: &str) -> Vec<ProcessRow> {
     out.lines().filter_map(parse_ps_row).collect()
 }
 
-/// One listing row: `  9379 ??       Fri Aug 28 09:24:49 2026     /path/claude`.
+/// One listing row: `  9379   812 ??       Fri Aug 28 09:24:49 2026     /path/claude`.
 ///
 /// Node matched `/^(\d+)\s+(\S+)\s+(.*\d{4})\s+(.*)$/`. Reproduced by fields
 /// rather than by a greedy regex, because greedy `.*\d{4}` reaches into the
@@ -157,6 +161,9 @@ pub fn parse_ps_row(line: &str) -> Option<ProcessRow> {
     if rest.len() == line.len() - digits {
         return None; // no whitespace after the pid
     }
+    let ppid_len = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let ppid: u32 = rest[..ppid_len].parse().ok()?;
+    let rest = rest[ppid_len..].trim_start();
     let tty_len = rest.find(char::is_whitespace)?;
     let tty = &rest[..tty_len];
     let started = rest[tty_len..].trim_start();
@@ -178,6 +185,7 @@ pub fn parse_ps_row(line: &str) -> Option<ProcessRow> {
 
     Some(ProcessRow {
         pid,
+        ppid: Some(ppid),
         tty: normalise_tty(tty),
         lstart,
         comm,

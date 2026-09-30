@@ -138,6 +138,7 @@ fn a_recorded_state_keeps_the_raw_facts() {
             tool_name: None,
             notification_type: Some("permission_prompt".to_string()),
             timestamp: "2026-09-22T16:00:00.000Z".to_string(),
+            awaiting_since: None,
         }
     );
 }
@@ -325,6 +326,7 @@ fn hook(
         tool_name: tool.map(str::to_string),
         notification_type: notification.map(str::to_string),
         timestamp: iso(when),
+        awaiting_since: None,
     }
 }
 
@@ -351,7 +353,7 @@ fn pending_tool(at: SystemTime) -> LastEntry {
 fn with_no_hook_state_the_transcript_decides() {
     let entry = pending_tool(secs(0));
     assert_eq!(
-        session_status(Some(&entry), secs(0), None, secs(300)),
+        session_status(Some(&entry), secs(0), None, None, secs(300)),
         SessionStatus::Working
     );
 }
@@ -363,12 +365,12 @@ fn a_permission_request_newer_than_the_transcript_is_awaiting() {
     let entry = pending_tool(secs(0));
     let prompt = hook("PermissionRequest", Some("Bash"), None, secs(1));
     assert_eq!(
-        session_status(Some(&entry), secs(1), Some(&prompt), secs(300)),
+        session_status(Some(&entry), secs(1), Some(&prompt), None, secs(300)),
         SessionStatus::Awaiting
     );
     let notified = hook("Notification", None, Some("permission_prompt"), secs(7));
     assert_eq!(
-        session_status(Some(&entry), secs(7), Some(&notified), secs(300)),
+        session_status(Some(&entry), secs(7), Some(&notified), None, secs(300)),
         SessionStatus::Awaiting
     );
 }
@@ -378,7 +380,7 @@ fn a_tie_goes_to_the_hook() {
     let entry = pending_tool(secs(5));
     let prompt = hook("PermissionRequest", Some("Bash"), None, secs(5));
     assert_eq!(
-        session_status(Some(&entry), secs(5), Some(&prompt), secs(6)),
+        session_status(Some(&entry), secs(5), Some(&prompt), None, secs(6)),
         SessionStatus::Awaiting
     );
 }
@@ -397,7 +399,7 @@ fn a_denial_supersedes_the_permission_request_without_any_hook() {
         ..LastEntry::default()
     };
     assert_eq!(
-        session_status(Some(&denied), secs(20), Some(&prompt), secs(21)),
+        session_status(Some(&denied), secs(20), Some(&prompt), None, secs(21)),
         SessionStatus::Idle
     );
 }
@@ -414,7 +416,7 @@ fn a_new_prompt_supersedes_a_stale_stop() {
         ..LastEntry::default()
     };
     assert_eq!(
-        session_status(Some(&typed), secs(60), Some(&stopped), secs(70)),
+        session_status(Some(&typed), secs(60), Some(&stopped), None, secs(70)),
         SessionStatus::Working
     );
 }
@@ -424,8 +426,130 @@ fn an_approved_tool_is_working_again_on_post_tool_use() {
     let entry = pending_tool(secs(0));
     let done = hook("PostToolUse", Some("Bash"), None, secs(90));
     assert_eq!(
-        session_status(Some(&entry), secs(90), Some(&done), secs(95)),
+        session_status(Some(&entry), secs(90), Some(&done), None, secs(95)),
         SessionStatus::Working
+    );
+}
+
+/// An approved prompt fires no hook, and the transcript writes nothing until
+/// the tool returns, so a long command read "awaiting" for as long as it ran.
+/// A Bash tool shell that started after the prompt is that command running.
+#[test]
+fn an_approved_command_is_working_while_it_runs() {
+    let entry = pending_tool(secs(0));
+    let prompt = hook("PermissionRequest", Some("Bash"), None, secs(1));
+    let status = |tool_started| {
+        session_status(
+            Some(&entry),
+            secs(1),
+            Some(&prompt),
+            tool_started,
+            secs(300),
+        )
+    };
+    assert_eq!(status(Some(secs(12))), SessionStatus::Working);
+    // A shell from before the prompt is some other command.
+    assert_eq!(status(Some(secs(0))), SessionStatus::Awaiting);
+    // `ps` gives whole seconds, so the prompt's own second cannot tell.
+    assert_eq!(status(Some(secs(1))), SessionStatus::Awaiting);
+    assert_eq!(status(None), SessionStatus::Awaiting);
+}
+
+/// A question is not answered by a shell starting: only a permission prompt
+/// is.
+#[test]
+fn a_new_tool_shell_does_not_answer_a_question() {
+    let entry = pending_tool(secs(0));
+    let asked = hook("PreToolUse", Some("AskUserQuestion"), None, secs(1));
+    assert_eq!(
+        session_status(
+            Some(&entry),
+            secs(1),
+            Some(&asked),
+            Some(secs(12)),
+            secs(300)
+        ),
+        SessionStatus::Awaiting
+    );
+}
+
+/// Claude Code can follow a `PermissionRequest` with a `permission_prompt`
+/// notification. It replaces the file, but it is the same wait, and a command
+/// approved between the two must still read as running.
+#[test]
+fn a_late_prompt_notification_keeps_the_start_of_the_wait() {
+    let request = continue_wait(
+        &hook("PermissionRequest", Some("Bash"), None, secs(1)),
+        None,
+    );
+    assert_eq!(
+        request.awaiting_since.as_deref(),
+        Some(iso(secs(1)).as_str())
+    );
+
+    let notified = continue_wait(
+        &hook("Notification", None, Some("permission_prompt"), secs(6)),
+        Some(&request),
+    );
+    assert_eq!(
+        notified.awaiting_since.as_deref(),
+        Some(iso(secs(1)).as_str())
+    );
+
+    let entry = pending_tool(secs(0));
+    assert_eq!(
+        session_status(
+            Some(&entry),
+            secs(6),
+            Some(&notified),
+            Some(secs(3)),
+            secs(300)
+        ),
+        SessionStatus::Working
+    );
+}
+
+/// Any other event between two permission events means the second is a new
+/// wait. Every tool call has a `PreToolUse` before its prompt.
+#[test]
+fn a_new_prompt_after_another_event_is_a_new_wait() {
+    let first = continue_wait(
+        &hook("PermissionRequest", Some("Bash"), None, secs(1)),
+        None,
+    );
+    let next_call = continue_wait(
+        &hook("PreToolUse", Some("Bash"), None, secs(40)),
+        Some(&first),
+    );
+    assert_eq!(next_call.awaiting_since, None);
+    let second = continue_wait(
+        &hook("PermissionRequest", Some("Bash"), None, secs(41)),
+        Some(&next_call),
+    );
+    assert_eq!(
+        second.awaiting_since.as_deref(),
+        Some(iso(secs(41)).as_str())
+    );
+}
+
+/// The same, through the files the hook command writes.
+#[test]
+fn the_hook_command_keeps_the_start_of_the_wait_on_disk() {
+    let (_dir, paths) = temp_paths();
+    let record = |event: &str, extra: serde_json::Value, at: DateTime<Utc>| {
+        apply(&paths, &parse_hook_input(&payload(event, extra), at)).expect("recorded");
+    };
+    record("PermissionRequest", json!({ "tool_name": "Bash" }), now());
+    record(
+        "Notification",
+        json!({ "notification_type": "permission_prompt" }),
+        now() + chrono::Duration::seconds(6),
+    );
+    let state = read_state(&state_path(&paths, SESSION).unwrap()).expect("state file");
+    assert_eq!(state.event, "Notification");
+    assert_eq!(
+        state.awaiting_since.as_deref(),
+        Some("2026-09-22T16:00:00.000Z")
     );
 }
 
@@ -438,7 +562,7 @@ fn stop_and_idle_notifications_read_idle() {
         hook("Notification", None, Some("idle_prompt"), secs(10)),
     ] {
         assert_eq!(
-            session_status(Some(&entry), secs(10), Some(&state), secs(11)),
+            session_status(Some(&entry), secs(10), Some(&state), None, secs(11)),
             SessionStatus::Idle,
             "{}",
             state.event
@@ -454,7 +578,13 @@ fn the_file_mtime_never_hides_a_hook_state() {
     let prompt = hook("PermissionRequest", Some("Bash"), None, secs(1));
     let mtime_after_the_hook = secs(2);
     assert_eq!(
-        session_status(Some(&entry), mtime_after_the_hook, Some(&prompt), secs(3)),
+        session_status(
+            Some(&entry),
+            mtime_after_the_hook,
+            Some(&prompt),
+            None,
+            secs(3)
+        ),
         SessionStatus::Awaiting
     );
 }
@@ -467,7 +597,7 @@ fn a_hook_state_with_no_say_or_no_readable_time_is_ignored() {
     garbled.timestamp = "yesterday".to_string();
     for state in [unknown, garbled] {
         assert_eq!(
-            session_status(Some(&entry), secs(5), Some(&state), secs(6)),
+            session_status(Some(&entry), secs(5), Some(&state), None, secs(6)),
             SessionStatus::Working
         );
     }
@@ -477,7 +607,7 @@ fn a_hook_state_with_no_say_or_no_readable_time_is_ignored() {
 fn a_hook_state_speaks_for_a_transcript_with_no_conversation_yet() {
     let prompt = hook("UserPromptSubmit", None, None, secs(1));
     assert_eq!(
-        session_status(None, secs(1), Some(&prompt), secs(2)),
+        session_status(None, secs(1), Some(&prompt), None, secs(2)),
         SessionStatus::Working
     );
 }

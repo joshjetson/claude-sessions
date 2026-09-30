@@ -17,6 +17,7 @@ use crate::scan::{ProcessRow, ProcessSource};
 pub(crate) struct FakeProcesses {
     rows: Arc<Mutex<Vec<ProcessRow>>>,
     cwds: Arc<Mutex<HashMap<u32, String>>>,
+    argv: Arc<Mutex<HashMap<u32, String>>>,
     environ: Arc<Mutex<HashMap<u32, String>>>,
     delay: Arc<Mutex<Duration>>,
     explode: Arc<AtomicBool>,
@@ -34,6 +35,7 @@ impl FakeProcesses {
         let started = chrono::Local::now() - chrono::Duration::seconds(60);
         self.rows.lock().unwrap().push(ProcessRow {
             pid,
+            ppid: None,
             tty: Some(format!("ttys{pid:03}")),
             lstart: started.format("%a %b %e %H:%M:%S %Y").to_string(),
             comm: "claude".to_string(),
@@ -53,12 +55,35 @@ impl FakeProcesses {
         self
     }
 
+    /// A child process of `ppid`, started `offset_secs` from now, with this
+    /// command line. A Claude session's Bash tool call is one of these.
+    pub(crate) fn add_child(
+        &self,
+        pid: u32,
+        ppid: u32,
+        comm: &str,
+        command: &str,
+        offset_secs: i64,
+    ) -> &Self {
+        let started = chrono::Local::now() + chrono::Duration::seconds(offset_secs);
+        self.rows.lock().unwrap().push(ProcessRow {
+            pid,
+            ppid: Some(ppid),
+            tty: None,
+            lstart: started.format("%a %b %e %H:%M:%S %Y").to_string(),
+            comm: comm.to_string(),
+        });
+        self.argv.lock().unwrap().insert(pid, command.to_string());
+        self
+    }
+
     /// A process that is not Claude, such as the daemon itself. Every real
     /// listing has one, which is what makes a listing with no `claude` rows a
     /// readable answer rather than a failed `ps`.
     pub(crate) fn add_bystander(&self, pid: u32) -> &Self {
         self.rows.lock().unwrap().push(ProcessRow {
             pid,
+            ppid: None,
             tty: None,
             lstart: String::new(),
             comm: "claude-sessions".to_string(),
@@ -111,8 +136,12 @@ impl ProcessSource for FakeProcesses {
     }
 
     fn argv(&self, pids: &[u32]) -> HashMap<u32, String> {
+        let argv = self.argv.lock().unwrap();
         pids.iter()
-            .map(|pid| (*pid, "claude".to_string()))
+            .map(|pid| {
+                let line = argv.get(pid).cloned();
+                (*pid, line.unwrap_or_else(|| "claude".to_string()))
+            })
             .collect()
     }
 

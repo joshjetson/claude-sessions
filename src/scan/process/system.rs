@@ -90,7 +90,7 @@ impl ProcessSource for SystemProcessSource {
     fn list(&self) -> Vec<ProcessRow> {
         parse_ps_listing(&exec(
             ps_program(),
-            &["-eo", "pid,tty,lstart,comm"],
+            &["-eo", "pid,ppid,tty,lstart,comm"],
             self.timeout,
         ))
     }

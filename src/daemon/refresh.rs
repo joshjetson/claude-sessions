@@ -213,7 +213,13 @@ fn enrich(
         // Aged from when the CONVERSATION last moved, never from bookkeeping
         // writes, and combined with the hook state. The embedded scan calls the
         // same function, so the two paths cannot disagree.
-        (false, None) => session_status(last_entry.as_ref(), raw.session_mtime, hook.as_ref(), now),
+        (false, None) => session_status(
+            last_entry.as_ref(),
+            raw.session_mtime,
+            hook.as_ref(),
+            raw.tool_started,
+            now,
+        ),
     };
     let activity_detail = if compacting {
         "compacting".to_string()

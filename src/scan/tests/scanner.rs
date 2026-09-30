@@ -550,3 +550,87 @@ fn a_transcript_scan_is_complete_only_when_the_store_can_be_read() {
     assert!(scanner.scan_sessions(SystemTime::now()).is_empty());
     assert!(scanner.last_scan_complete());
 }
+
+// --- the shell a Bash tool call runs in ---------------------------------------
+
+const SNAPSHOT: &str = "/bin/zsh -c source /Users/k/.claude/shell-snapshots/snapshot-zsh-1-ab.sh \
+                        2>/dev/null || true && eval 'cargo test'";
+
+/// A session in `CWD` with its `claude` process, pid 501.
+fn a_session_process(env: &Env) -> FakeProcesses {
+    env.transcript(CWD, UUID);
+    let procs = FakeProcesses::new();
+    procs.add(501, "claude", Some(CWD), 0);
+    procs.with_argv(501, &format!("claude --resume {UUID}"));
+    procs
+}
+
+/// Only a shell that sources a Claude Code snapshot is a Bash tool call. MCP
+/// servers, hook commands and `caffeinate` are children too, and hook
+/// commands start at the very moment a permission prompt appears.
+#[test]
+fn a_sessions_tool_shell_is_told_apart_from_its_other_children() {
+    let env = Env::new();
+    let procs = a_session_process(&env);
+    procs.add(601, "/bin/zsh", None, 100).with_parent(601, 501);
+    procs.with_argv(601, SNAPSHOT);
+    procs.add(602, "/bin/sh", None, 200).with_parent(602, 501);
+    procs.with_argv(602, "/bin/sh -c claude-sessions hook 2>/dev/null || true");
+    procs
+        .add(603, "caffeinate", None, 300)
+        .with_parent(603, 501);
+    procs
+        .add(604, "npm exec @playwright/mcp", None, 300)
+        .with_parent(604, 501);
+    // Another process's tool shell, however new, is not this session's.
+    procs.add(700, "/bin/zsh", None, 400).with_parent(700, 999);
+    procs.with_argv(700, SNAPSHOT);
+
+    let sessions = env.scanner(procs).scan_sessions(SystemTime::now());
+    assert_eq!(
+        sessions[0].tool_started,
+        crate::util::start_time_instant(&super::lstart_at(100))
+    );
+}
+
+#[test]
+fn the_newest_tool_shell_counts_and_one_that_exited_does_not() {
+    let env = Env::new();
+    let procs = a_session_process(&env);
+    for (pid, start) in [(601, 100), (602, 250)] {
+        procs
+            .add(pid, "/bin/zsh", None, start)
+            .with_parent(pid, 501);
+        procs.with_argv(pid, SNAPSHOT);
+    }
+    let mut scanner = env.scanner(procs.clone());
+    let sessions = scanner.scan_sessions(SystemTime::now());
+    assert_eq!(
+        sessions[0].tool_started,
+        crate::util::start_time_instant(&super::lstart_at(250))
+    );
+
+    procs.remove(601).remove(602);
+    let sessions = scanner.scan_sessions(SystemTime::now());
+    assert_eq!(sessions[0].tool_started, None);
+}
+
+/// One batched command-line read for the shells, and each pid once, however
+/// many ticks it stays alive. Non-shell children are never asked about.
+#[test]
+fn a_child_shell_is_only_ever_asked_about_once() {
+    let env = Env::new();
+    let procs = a_session_process(&env);
+    procs.add(601, "/bin/zsh", None, 100).with_parent(601, 501);
+    procs.with_argv(601, SNAPSHOT);
+    procs
+        .add(603, "caffeinate", None, 300)
+        .with_parent(603, 501);
+    let mut scanner = env.scanner(procs.clone());
+
+    for _ in 0..5 {
+        scanner.scan_sessions(SystemTime::now());
+    }
+    // One for the claude process, one for its shell.
+    assert_eq!(procs.calls().argv, 2);
+}

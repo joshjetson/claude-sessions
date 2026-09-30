@@ -344,6 +344,7 @@ fn enrich(
             parsed.last_entry.as_ref(),
             raw.session_mtime,
             hook.as_ref(),
+            raw.tool_started,
             now,
         )
     };
