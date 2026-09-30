@@ -43,6 +43,23 @@ pub mod task_state {
     pub const DONE: &str = "1_done";
     pub const CANCELLED: &str = "1_canceled";
     pub const WAITING: &str = "04_waiting_normal";
+
+    /// Why a task in this state is never started on its own for QA, as the
+    /// state's name in Odoo, or `None` when nothing stops it.
+    ///
+    /// Odoo moves the state and the stage independently. A developer marks a
+    /// task Complete, or a reviewer sets Changes Requested, and the stage can
+    /// still say QA. A pass started on it tests work that is finished or was
+    /// sent back. A person may still start one by hand.
+    pub fn refuses_auto_start(state: &str) -> Option<&'static str> {
+        match state {
+            DONE => Some("Done"),
+            COMPLETE => Some("Complete"),
+            CHANGES_REQUESTED => Some("Changes Requested"),
+            CANCELLED => Some("Cancelled"),
+            _ => None,
+        }
+    }
 }
 
 /// "Closed" in Odoo's dependency sense: a blocker in one of these states has

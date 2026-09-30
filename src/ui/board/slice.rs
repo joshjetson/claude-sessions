@@ -347,6 +347,20 @@ impl BoardSlice {
         Some(covered)
     }
 
+    /// The Odoo `state` of each of these tasks the board lists now, with `""`
+    /// for a listed task that has none. A task the board does not list is
+    /// absent. Taken as a snapshot, so run admission can hold it while the
+    /// state it came from changes.
+    pub fn odoo_states(&self, task_ids: &[i64]) -> HashMap<i64, String> {
+        task_ids
+            .iter()
+            .filter_map(|&id| {
+                let task = self.task(id)?;
+                Some((id, task.state.clone().unwrap_or_default()))
+            })
+            .collect()
+    }
+
     /// Stop watching. The QA sessions themselves are untouched — a run is a
     /// view over work that is happening anyway.
     pub fn stop_watching(&mut self, run_id: &str) -> bool {

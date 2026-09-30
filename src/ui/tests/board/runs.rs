@@ -1098,3 +1098,55 @@ fn a_stage_that_lists_a_task_twice_makes_one_row_for_it() {
     state.board.watch_stage(&project, &stage);
     assert_eq!(state.board.runs[0].task_ids, vec![4101, 4102]);
 }
+
+// --- a task Odoo has closed is never started by the run -----------------------
+
+#[test]
+fn a_task_marked_complete_in_odoo_says_why_and_is_skipped() {
+    let (_dir, mut state) = board_state();
+    state.view = View::Board;
+    let mut complete = task(4101, "Summary row shows the wrong total");
+    complete.state = Some(crate::odoo::task_state::COMPLETE.to_string());
+    with_tasks(
+        &mut state,
+        vec![
+            complete,
+            task(4102, "Description field ignores its length cap"),
+        ],
+    );
+    let (project, stage) = {
+        let task = state.board.task(4101).expect("task").clone();
+        (task.project_name, task.stage_name)
+    };
+    state.board.watch_stage(&project, &stage);
+    let run_id = state.board.runs[0].id.clone();
+    state.board.runs[0].coordinator_started = true;
+    state.board.runs[0].lane_limit = Some(1);
+
+    let sections = state.run_sections();
+    let reason = sections[0]
+        .agents
+        .iter()
+        .find(|agent| agent.task_id == 4101)
+        .and_then(|agent| agent.idle_reason.clone())
+        .expect("a reason on the Complete task's row");
+    assert!(reason.contains("marked Complete in Odoo"), "{reason}");
+
+    board::run_command(
+        &mut state,
+        crate::ui::dialogs::RunCommand {
+            run_id,
+            action: crate::ui::dialogs::RunAction::StartRun,
+            context: String::new(),
+        },
+    );
+    // The fixture maps the project to no folder, so a start opens the folder
+    // picker for the task it is starting.
+    let started = match &state.dialog {
+        Some(crate::ui::dialogs::Dialog::DirPicker(picker)) => {
+            picker.request.as_ref().map(|request| request.task.id)
+        }
+        other => panic!("nothing was started: {other:?}"),
+    };
+    assert_eq!(started, Some(4102), "the run started the Complete task");
+}
