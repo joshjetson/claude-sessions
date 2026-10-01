@@ -26,6 +26,10 @@ const FAST_TICK: Duration = Duration::from_millis(500);
 /// The slow cadence: the board poll, the new-assignment watcher and the QA
 /// arrival watcher.
 const SLOW_TICK: Duration = Duration::from_secs(45);
+/// How often the machine's health is read while `qa.healthGate` is on. About
+/// 20 ms of four small commands, so often enough that the queue reacts within
+/// a lane's start, and cheap enough not to matter.
+pub const HEALTH_TICK: Duration = Duration::from_secs(30);
 
 /// A stop flag with a condition variable, so a sleeping loop wakes the instant
 /// [`Engine::stop`] is called instead of at the end of its interval.
@@ -145,6 +149,7 @@ fn run_loop<S: ProcessSource + Send + 'static>(
     usage_interval: Option<Duration>,
 ) {
     let mut next_slow = Instant::now() + SLOW_TICK;
+    let mut next_health = Instant::now();
     let mut next_usage = usage_interval.map(|interval| Instant::now() + interval);
 
     while inner.shutdown.sleep(inner.tick_interval()) {
@@ -158,6 +163,10 @@ fn run_loop<S: ProcessSource + Send + 'static>(
             inner.notify_qa_arrivals();
             inner.watch_auto_qa();
             inner.poll_board();
+        }
+        if now >= next_health {
+            next_health = now + HEALTH_TICK;
+            inner.read_health();
         }
         if let (Some(at), Some(interval)) = (next_usage, usage_interval) {
             if now >= at {
@@ -173,6 +182,21 @@ fn run_loop<S: ProcessSource + Send + 'static>(
 }
 
 impl<S: ProcessSource> EngineInner<S> {
+    /// Read the machine's health, while the gate is on. Switched off, the last
+    /// reading is dropped, so a dashboard never waits on an old one.
+    pub(crate) fn read_health(&self) {
+        if !self.config().qa_health_gate() {
+            self.state().health = None;
+            return;
+        }
+        let Some(hook) = &self.health else {
+            return;
+        };
+        let vitals = hook();
+        self.state().health = Some(vitals.clone());
+        self.publish(EngineEvent::Health(Box::new(vitals)));
+    }
+
     /// One board fetch, best-effort. Shared by the slow tick and the warm-up so
     /// "a failed fetch keeps the previous board" is written once.
     pub(crate) fn poll_board(&self) {

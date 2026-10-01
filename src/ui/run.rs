@@ -310,6 +310,10 @@ fn event_loop(
                     crate::ui::deploy::redraw(state, &project);
                 }
                 FeedEvent::AutoQa(feed) => crate::ui::board::apply_auto_qa(state, *feed),
+                FeedEvent::Health(vitals) => {
+                    state.health = Some(*vitals);
+                    state.dirty = true;
+                }
                 FeedEvent::DeployOutput { project, line } => {
                     state.deploy.push_line(&project, line);
                     crate::ui::deploy::redraw(state, &project);

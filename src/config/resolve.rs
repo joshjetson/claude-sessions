@@ -217,6 +217,15 @@ impl ConfigHandle {
             .unwrap_or(false)
     }
 
+    /// Whether QA starts wait on the machine's health. Default off.
+    pub fn qa_health_gate(&self) -> bool {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.health_gate)
+            .unwrap_or(false)
+    }
+
     /// The projects with Auto QA on, as the config spells them.
     pub fn qa_auto_projects(&self) -> Vec<String> {
         self.config

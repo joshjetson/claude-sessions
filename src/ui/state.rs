@@ -231,6 +231,9 @@ pub struct AppState {
     /// takes seconds to appear in a scan, and Auto QA must not launch a second
     /// one in the meantime.
     pub auto_coordinator_at: HashMap<String, std::time::SystemTime>,
+    /// The daemon's newest machine-health reading, while `qa.healthGate` is
+    /// on. What the QA queue waits on. See [`crate::health`].
+    pub health: Option<crate::health::Vitals>,
     /// The last scan returned nothing and the tree kept its previous list. Shown
     /// on screen, because a list that is quietly out of date is worse than one
     /// that says so.
@@ -308,6 +311,7 @@ impl AppState {
             feed_went_quiet: false,
             last_run_launch: None,
             auto_coordinator_at: HashMap::new(),
+            health: None,
             deploy: DeploySlice::default(),
             dialog: None,
             flash: None,
@@ -732,6 +736,7 @@ impl AppState {
                 let paths = self.paths.clone();
                 let state_of =
                     move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
+                let hold = crate::ui::board::runs::queue_hold(self);
                 let odoo_states = self.board.odoo_states(&run.task_ids);
                 let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
                 let ctx = crate::qarun::AdmitCtx {
@@ -739,6 +744,7 @@ impl AppState {
                     state_of: &state_of,
                     odoo_state_of: &odoo_state_of,
                     lane_limit: self.config.qa_lane_limit(),
+                    hold: hold.as_deref(),
                 };
 
                 let agents = run

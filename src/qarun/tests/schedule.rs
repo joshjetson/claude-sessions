@@ -26,6 +26,7 @@ fn ctx<'a>(live: &'a HashSet<i64>, limit: Option<usize>) -> AdmitCtx<'a> {
         state_of: &nothing_recorded,
         odoo_state_of: &in_progress,
         lane_limit: limit,
+        hold: None,
     }
 }
 
@@ -86,6 +87,7 @@ fn a_verdict_on_the_current_code_still_refuses() {
         state_of: &finished,
         odoo_state_of: &in_progress,
         lane_limit: None,
+        hold: None,
     };
     assert_eq!(
         admit(&run(vec![1]), 1, &ctx),
@@ -189,6 +191,7 @@ fn a_finished_task_is_skipped_without_spending_a_lane() {
         state_of: &done_first_two,
         odoo_state_of: &in_progress,
         lane_limit: Some(2),
+        hold: None,
     };
     assert_eq!(plan_spawns(&run(vec![50, 51, 52, 53]), &ctx), vec![52, 53]);
 }
@@ -251,6 +254,7 @@ fn a_stale_verdict_does_not_refuse_a_fresh_pass() {
         state_of: &moved_on,
         odoo_state_of: &in_progress,
         lane_limit: None,
+        hold: None,
     };
     assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
 }
@@ -278,6 +282,7 @@ fn a_verdict_that_cannot_be_judged_does_not_refuse_either() {
         state_of: &unjudgeable,
         odoo_state_of: &in_progress,
         lane_limit: None,
+        hold: None,
     };
     assert_eq!(admit(&run(vec![1]), 1, &ctx), Ok(()));
 }
@@ -355,4 +360,31 @@ fn the_plan_skips_a_closed_task_and_starts_the_next() {
         ..ctx(&live, Some(1))
     };
     assert_eq!(plan_spawns(&run(vec![1, 2, 3]), &ctx), vec![2]);
+}
+
+// --- the machine-health gate ----------------------------------------------------
+
+/// The gate holds the queue, and says why, but only for a task that would
+/// otherwise start: a task with a reason of its own keeps it.
+#[test]
+fn the_health_gate_holds_a_task_that_would_otherwise_start() {
+    let live = HashSet::from([2]);
+    let ctx = AdmitCtx {
+        hold: Some("Waiting: the machine is busy (memory 8% free)."),
+        ..ctx(&live, None)
+    };
+    let refused = admit(&run(vec![1, 2]), 1, &ctx).unwrap_err();
+    assert_eq!(
+        refused,
+        Refusal::MachineBusy("Waiting: the machine is busy (memory 8% free).".to_string())
+    );
+    assert_eq!(
+        refused.detail(),
+        "Waiting: the machine is busy (memory 8% free)."
+    );
+    assert_eq!(
+        admit(&run(vec![1, 2]), 2, &ctx),
+        Err(Refusal::AlreadyRunning(2))
+    );
+    assert!(plan_spawns(&run(vec![1, 2]), &ctx).is_empty());
 }

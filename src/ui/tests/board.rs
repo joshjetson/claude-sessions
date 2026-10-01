@@ -14,6 +14,7 @@ mod dialogs;
 mod extras;
 mod fixtures;
 mod gates;
+mod health;
 mod launch;
 mod linking;
 mod pickers;
