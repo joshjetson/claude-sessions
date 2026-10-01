@@ -17,6 +17,32 @@ pub struct DeployProjectPatch {
 }
 
 impl ConfigHandle {
+    /// Change the QA block and save, for the settings dialog's QA page.
+    pub fn update_qa(&mut self, change: impl FnOnce(&mut super::QaBlock)) -> io::Result<()> {
+        change(self.config.qa.get_or_insert_with(Default::default));
+        self.save()
+    }
+
+    /// Set the role, `dev`, `qa` or `pm`.
+    pub fn set_role(&mut self, role: crate::types::UserRole) -> io::Result<()> {
+        self.config.role = Some(role.as_str().to_string());
+        self.save()
+    }
+
+    /// Switch the daemon's alerting as a whole.
+    pub fn set_alerts_enabled(&mut self, enabled: bool) -> io::Result<()> {
+        self.config
+            .alerts
+            .get_or_insert_with(Default::default)
+            .enabled = Some(enabled);
+        self.save()
+    }
+
+    /// The peer secret as written, for the settings page. `None` when unset.
+    pub fn qa_peer_secret_raw(&self) -> Option<&str> {
+        self.config.qa.as_ref()?.peer_secret.as_deref()
+    }
+
     /// Replaces the whole chat block, as the settings dialog does.
     pub fn save_chat_config(&mut self, chat: ChatConfig) -> io::Result<()> {
         self.config.chat = chat;

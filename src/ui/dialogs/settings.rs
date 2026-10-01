@@ -1,4 +1,4 @@
-//! The chat settings grid.
+//! The settings dialog: the chat grid, and the QA page `Tab` switches to.
 //!
 //! Ported from `SETTINGS` + `SettingsMenu` in the Node app's
 //! `src/tui/dialogs.js`: the same rows in the same order, `←→` cycling enum and
@@ -210,14 +210,41 @@ pub fn editable() -> Vec<Field> {
         .collect()
 }
 
+/// Which page the dialog shows. `Tab` switches.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Page {
+    #[default]
+    Chat,
+    Qa,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SettingsDialog {
+    pub page: Page,
     pub row: usize,
     pub editing: Option<String>,
+    /// A line under the page: why a change was refused, or what one did.
+    pub notice: Option<String>,
 }
 
 impl SettingsDialog {
     pub fn handle_key(&mut self, key: KeyEvent, ctx: &mut DialogCtx<'_>) -> DialogOutcome {
+        if self.editing.is_none() && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            self.page = match self.page {
+                Page::Chat => Page::Qa,
+                Page::Qa => Page::Chat,
+            };
+            self.row = 0;
+            self.notice = None;
+            return DialogOutcome::Stay;
+        }
+        match self.page {
+            Page::Chat => self.chat_key(key, ctx),
+            Page::Qa => self.qa_key(key, ctx),
+        }
+    }
+
+    fn chat_key(&mut self, key: KeyEvent, ctx: &mut DialogCtx<'_>) -> DialogOutcome {
         let fields = editable();
         let field = fields[self.row.min(fields.len() - 1)];
 
@@ -266,7 +293,135 @@ impl SettingsDialog {
         DialogOutcome::Stay
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, chat: &ChatConfig) {
+    fn qa_key(&mut self, key: KeyEvent, ctx: &mut DialogCtx<'_>) -> DialogOutcome {
+        use super::qa_settings::{fields, generate_secret, QaField};
+        let fields = fields(ctx.config);
+        let Some(field) = fields
+            .get(self.row.min(fields.len().saturating_sub(1)))
+            .cloned()
+        else {
+            return DialogOutcome::Close;
+        };
+
+        if let Some(buffer) = self.editing.as_mut() {
+            match key.code {
+                KeyCode::Enter => {
+                    let value = buffer.clone();
+                    self.notice = field.set_text(ctx.config, &value).err();
+                    self.editing = None;
+                }
+                KeyCode::Esc => self.editing = None,
+                KeyCode::Backspace | KeyCode::Delete => {
+                    buffer.pop();
+                }
+                KeyCode::Char(ch) if !key.modifiers.intersects(CTRL_ALT) => buffer.push(ch),
+                _ => {}
+            }
+            return DialogOutcome::Stay;
+        }
+
+        let mut change = |dir: i32| field.cycle(ctx.config, dir).err();
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => self.row = self.row.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.row = (self.row + 1).min(fields.len() - 1);
+            }
+            KeyCode::Right | KeyCode::Char('l') => self.notice = change(1),
+            KeyCode::Left | KeyCode::Char('h') => self.notice = change(-1),
+            KeyCode::Char('g') if field == QaField::PeerSecret => {
+                self.notice = match generate_secret() {
+                    Some(secret) => match field.set_text(ctx.config, &secret) {
+                        Ok(()) => Some(format!(
+                            "New secret: {secret} — put the same one on your other machines."
+                        )),
+                        Err(error) => Some(error),
+                    },
+                    None => Some("Could not read a random source. Type a secret instead.".into()),
+                };
+            }
+            KeyCode::Enter => {
+                if field.is_text() {
+                    self.editing = Some(field.raw_text(ctx.config));
+                } else {
+                    self.notice = change(1);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('q') => return DialogOutcome::Close,
+            _ => {}
+        }
+        DialogOutcome::Stay
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect, config: &crate::config::ConfigHandle) {
+        let (title, mut lines) = match self.page {
+            Page::Chat => (" Settings · Chat ", self.chat_lines(config.chat())),
+            Page::Qa => (" Settings · QA ", self.qa_lines(config)),
+        };
+        if let Some(notice) = &self.notice {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::styled(
+                notice.clone(),
+                Style::default().fg(color_from_name("yellow")),
+            )));
+        }
+        lines.push(Line::default());
+        lines.push(hint(if self.editing.is_some() {
+            "Type to edit  Enter save  Esc cancel"
+        } else if self.page == Page::Qa {
+            "↑↓ move  ←→ change  Enter edit  g new secret  Tab chat  Esc close"
+        } else {
+            "↑↓ move  ←→ change  Enter edit text  Tab QA  Esc close"
+        }));
+        let width = match self.page {
+            Page::Chat => 48,
+            Page::Qa => 72,
+        };
+        render_modal(
+            frame,
+            area,
+            title,
+            color_from_name("cyan"),
+            lines,
+            width.min(area.width),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn row_line(
+        &self,
+        selected: bool,
+        label: &str,
+        width: usize,
+        value: String,
+        text: bool,
+        swatch: Option<String>,
+    ) -> Line<'static> {
+        let value = match (&self.editing, selected && text) {
+            (Some(buffer), true) => format!("{buffer}█"),
+            _ => value,
+        };
+        let arrows = if text { "" } else { " ◄►" };
+        let mut spans = vec![Span::styled(
+            if selected { "› " } else { "  " }.to_string(),
+            Style::default().fg(color_from_name("cyan")),
+        )];
+        let body_style = if selected {
+            Style::default().add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        spans.push(Span::styled(format!("{label:<width$} "), body_style));
+        if let Some(color) = swatch {
+            spans.push(Span::styled(
+                "● ",
+                Style::default().fg(color_from_name(&color)),
+            ));
+        }
+        spans.push(Span::styled(format!("[{value}]{arrows}"), body_style));
+        Line::from(spans)
+    }
+
+    fn chat_lines(&self, chat: &ChatConfig) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::with_capacity(ROWS.len() + 2);
         let mut editable_index = 0usize;
         for row in ROWS {
@@ -274,47 +429,56 @@ impl SettingsDialog {
                 Row::Separator(label) => lines.push(hint(label)),
                 Row::Field(field) => {
                     let selected = editable_index == self.row;
-                    let value = match (&self.editing, selected && field.is_text()) {
-                        (Some(buffer), true) => format!("{buffer}█"),
-                        _ => field.display(chat),
-                    };
-                    let arrows = if field.is_text() { "" } else { " ◄►" };
-                    let mut spans = vec![Span::styled(
-                        if selected { "› " } else { "  " }.to_string(),
-                        Style::default().fg(color_from_name("cyan")),
-                    )];
-                    let body_style = if selected {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
-                    spans.push(Span::styled(format!("{:<16}", field.label()), body_style));
-                    if field.is_color() {
-                        spans.push(Span::styled(
-                            "● ",
-                            Style::default().fg(color_from_name(&field.display(chat))),
-                        ));
-                    }
-                    spans.push(Span::styled(format!("[{value}]{arrows}"), body_style));
-                    lines.push(Line::from(spans));
+                    let swatch = field.is_color().then(|| field.display(chat));
+                    lines.push(self.row_line(
+                        selected,
+                        field.label(),
+                        15,
+                        field.display(chat),
+                        field.is_text(),
+                        swatch,
+                    ));
                     editable_index += 1;
                 }
             }
         }
-        lines.push(Line::default());
-        lines.push(hint(if self.editing.is_some() {
-            "Type to edit  Enter save  Esc cancel"
-        } else {
-            "↑↓ move  ←→ change  Enter edit text  Esc close"
-        }));
-        render_modal(
-            frame,
-            area,
-            " Chat Settings ",
-            color_from_name("cyan"),
-            lines,
-            48.min(area.width),
-        );
+        lines
+    }
+
+    fn qa_lines(&self, config: &crate::config::ConfigHandle) -> Vec<Line<'static>> {
+        use super::qa_settings::{rows, QaRow};
+        let mut lines = Vec::new();
+        let mut index = 0usize;
+        let rows = rows(config);
+        // Project names are the labels in the Auto QA section, and some run
+        // past the chat page's 15 columns.
+        let width = rows
+            .iter()
+            .filter_map(|row| match row {
+                QaRow::Field(field) => Some(field.label().chars().count()),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0)
+            .clamp(15, 32);
+        for row in rows {
+            match row {
+                QaRow::Separator(label) => lines.push(hint(label)),
+                QaRow::Note(text) => lines.push(hint(&format!("  {text}"))),
+                QaRow::Field(field) => {
+                    lines.push(self.row_line(
+                        index == self.row,
+                        &field.label(),
+                        width,
+                        field.display(config),
+                        field.is_text(),
+                        None,
+                    ));
+                    index += 1;
+                }
+            }
+        }
+        lines
     }
 }
 

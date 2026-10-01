@@ -83,6 +83,9 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
             };
             dialog.handle_key(key, area, &mut ctx)
         };
+        // The settings page can change the role, and the board reads it from
+        // the state rather than the config on every key.
+        state.role = state.config.role();
         apply_dialog_outcome(state, dialog, outcome);
         return;
     }
