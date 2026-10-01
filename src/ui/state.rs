@@ -363,6 +363,12 @@ impl AppState {
         &self.pending
     }
 
+    /// The keys as this person has them, for their role. Any text that names
+    /// a key reads it from here, so a remapped key is never named wrong.
+    pub fn keymap(&self) -> crate::ui::keymap::Keymap {
+        crate::ui::keymap::Keymap::new(self.role, self.config.key_overrides())
+    }
+
     pub fn flash(&mut self, message: impl Into<String>) {
         self.flash = Some(message.into());
         self.dirty = true;

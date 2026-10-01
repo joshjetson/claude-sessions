@@ -172,7 +172,13 @@ impl<S: ProcessSource> EngineInner<S> {
                     false => format!("✅ Task #{task_id} complete: {}", detail.name),
                 },
                 // What actually happened, not what was attempted.
-                completion_message(&detail.project_name, mr_url.as_deref(), &moved, archived),
+                completion_message(
+                    &detail.project_name,
+                    mr_url.as_deref(),
+                    &moved,
+                    archived,
+                    &self.keymap().key("board.revise"),
+                ),
             )
         });
         // Phase 9b refreshes the board here, so the moved task shows in its new
@@ -270,11 +276,13 @@ fn completion_comment(mr_url: Option<&str>, summary: &str, cwd: &str) -> String 
 
 /// What the completion notification says — every clause of it is something that
 /// either happened or did not.
+/// `revise` is the revision key as the person has it.
 fn completion_message(
     project: &str,
     mr_url: Option<&str>,
     moved: &Result<StageMove, String>,
     archived: bool,
+    revise: &str,
 ) -> String {
     let mr = match mr_url {
         Some(url) => format!("MR opened: {url}"),
@@ -288,9 +296,9 @@ fn completion_message(
         Err(error) => format!("NOT moved ({error}). "),
     };
     let archive = if archived {
-        "Transcript archived; press v on the task to resume for a revision."
+        format!("Transcript archived; press {revise} on the task to resume for a revision.")
     } else {
-        "No transcript archived — v will start a fresh session rather than resume."
+        format!("No transcript archived — {revise} will start a fresh session rather than resume.")
     };
     format!("{}{mr}. {stage}{archive}", prefix(project))
 }

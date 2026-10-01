@@ -13,10 +13,9 @@ use crate::ui::state::AppState;
 
 use super::slice::DeploySlice;
 
-/// Messages that stand in for the tree. The Deploy tab refreshes ONLY when
-/// asked, so "press r" is not a nag — it is the whole interface.
+/// Messages that stand in for the tree. The ones that name the refresh key
+/// are drawn with it as the person has it: see [`crate::board::DEPLOY_LOAD`].
 const LOADING: &str = "Loading the deploy board…";
-const RETRY: &str = "Press r to retry";
 
 pub fn build_items(deploy: &DeploySlice) -> Vec<DeployItem<'_>> {
     match (&deploy.board, &deploy.error) {
@@ -26,7 +25,7 @@ pub fn build_items(deploy: &DeploySlice) -> Vec<DeployItem<'_>> {
                 project_name: "",
             },
             DeployItem::Info {
-                name: RETRY,
+                name: crate::board::DEPLOY_RETRY,
                 project_name: "",
             },
         ],
@@ -35,7 +34,7 @@ pub fn build_items(deploy: &DeploySlice) -> Vec<DeployItem<'_>> {
             project_name: "",
         }],
         (None, None) => vec![DeployItem::Info {
-            name: "Press r to load the deploy board.",
+            name: crate::board::DEPLOY_LOAD,
             project_name: "",
         }],
         (Some(board), None) => build_deploy_tree(board, &deploy.expanded, &deploy.runs),
@@ -132,6 +131,11 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize) -> DeployWindo
     let selected = state.deploy_sel.resolve(&keys);
     let top = crate::ui::components::keep_visible(selected, scroll_top, height, items.len());
     let now = chrono::Local::now();
+    let keymap = state.keymap();
+    let keys = crate::board::DeployKeys {
+        refresh: keymap.char_of("global.refresh"),
+        configure: keymap.char_of("deploy.config"),
+    };
     DeployWindow {
         total: items.len(),
         selected,
@@ -140,7 +144,7 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize) -> DeployWindo
             .iter()
             .skip(top)
             .take(height)
-            .map(|item| row_line(&format_deploy_item(item, now)))
+            .map(|item| row_line(&format_deploy_item(item, now, keys)))
             .collect(),
     }
 }

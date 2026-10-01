@@ -431,10 +431,16 @@ fn panel_key(state: &mut AppState, key: KeyEvent, snapshot: &TreeSnapshot) {
         // back, so it sticks.
         KeyCode::Char('F') => match state.config.toggle_inactive_folders() {
             Ok(true) => {
-                state.flash("Showing every folder in each group. F hides them again.".to_string())
+                let key = state.keymap().key("sessions.folders");
+                state.flash(format!(
+                    "Showing every folder in each group. {key} hides them again."
+                ))
             }
             Ok(false) => {
-                state.flash("Hiding folders with no live session. F shows them.".to_string())
+                let key = state.keymap().key("sessions.folders");
+                state.flash(format!(
+                    "Hiding folders with no live session. {key} shows them."
+                ))
             }
             Err(error) => state.flash(format!("Could not save that: {error}")),
         },

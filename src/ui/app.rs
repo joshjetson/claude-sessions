@@ -80,7 +80,10 @@ pub(crate) fn board_hints(keymap: &Keymap) -> Vec<String> {
         lines.push("Enter → QA / QA dry run / brief".to_string());
     }
     lines.extend(crate::ui::keymap::key_lines(keymap, Scope::Board, 5));
-    lines.push("x on the 🔔 header: clear all   ? every key".to_string());
+    lines.push(format!(
+        "{} on the 🔔 header: clear all   ? every key",
+        keymap.key("board.dismiss")
+    ));
     lines
 }
 
@@ -283,7 +286,10 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
             None => {
                 let keymap = Keymap::new(state.role, state.config.key_overrides());
                 let mut text = vec![
-                    "Press r to load the deploy board — it never refreshes on its own,".to_string(),
+                    format!(
+                        "Press {} to load the deploy board — it never refreshes on its own,",
+                        keymap.key("global.refresh")
+                    ),
                     "because every refresh costs a GitLab call per open merge request.".to_string(),
                     String::new(),
                     "→ preview   Enter menu".to_string(),

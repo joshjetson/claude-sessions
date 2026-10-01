@@ -83,7 +83,7 @@ impl DeployConfirm {
                 "No deploy command configured for this project.",
                 "red",
             ));
-            lines.push(coloured("Press c on the project row to set one.", "gray"));
+            lines.push(coloured("Pick Configure… below to set one.", "gray"));
             return lines;
         }
         // The literal command, not a summary of it: this is the last chance to

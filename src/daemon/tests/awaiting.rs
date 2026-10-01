@@ -552,7 +552,8 @@ fn a_question_the_agent_asked_names_its_task_and_is_answerable() {
         last_entry: Some(crate::daemon::tests::tool_entry("AskUserQuestion")),
         ..a_session("s", "/repo")
     };
-    let notification = crate::daemon::watchers::awaiting_notification(&session, true, true);
+    let notification =
+        crate::daemon::watchers::awaiting_notification(&session, true, true, &Default::default());
 
     assert_eq!(notification.kind, crate::types::NotificationKind::Question);
     assert_eq!(notification.task_id, Some(6660));
@@ -568,10 +569,40 @@ fn a_stalled_tool_call_stays_unanswerable() {
         task_id: Some(6660),
         ..a_session("s", "/repo")
     };
-    let notification = crate::daemon::watchers::awaiting_notification(&session, false, true);
+    let notification =
+        crate::daemon::watchers::awaiting_notification(&session, false, true, &Default::default());
 
     assert_eq!(notification.kind, crate::types::NotificationKind::Info);
     assert!(notification
         .message
         .contains("Nothing can answer one of those remotely"));
+}
+
+/// A notification that names a key names it as the person has it.
+#[test]
+fn an_awaiting_notification_names_the_person_s_keys() {
+    let overrides = [("board.answer", "w"), ("sessions.terminal", "y")]
+        .into_iter()
+        .map(|(id, key)| (id.to_string(), key.to_string()))
+        .collect();
+    let keys = crate::ui::keymap::Keymap::new(crate::types::UserRole::Qa, &overrides);
+    let session = Session {
+        task_id: Some(6660),
+        last_entry: Some(crate::daemon::tests::tool_entry("AskUserQuestion")),
+        ..a_session("s", "/repo")
+    };
+    let asked = crate::daemon::watchers::awaiting_notification(&session, true, true, &keys);
+    assert!(
+        asked
+            .message
+            .contains("Press w to answer it from here, or y to open its terminal"),
+        "{}",
+        asked.message
+    );
+    let prompt = crate::daemon::watchers::awaiting_notification(&session, false, true, &keys);
+    assert!(
+        prompt.message.contains("press y on the session"),
+        "{}",
+        prompt.message
+    );
 }

@@ -72,7 +72,7 @@ impl Fixture {
     }
 
     fn row(&self, index: usize) -> Row {
-        format_deploy_item(&self.items()[index], now())
+        format_deploy_item(&self.items()[index], now(), Default::default())
     }
 }
 
@@ -121,7 +121,7 @@ fn nothing_configured_is_its_own_row() {
     let items = build_deploy_tree(&empty, &expanded, &runs);
     assert_eq!(items.len(), 1);
     assert_eq!(
-        text(&format_deploy_item(&items[0], now())),
+        text(&format_deploy_item(&items[0], now(), Default::default())),
         "  No projects configured for deploy. Press c to add one."
     );
 }

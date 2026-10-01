@@ -80,7 +80,7 @@ pub(super) fn purge(
             entries.len()
         )
     } else {
-        format!("Purged {closed} session(s). Transcripts are archived; v reopens any of them.")
+        format!("Purged {closed} session(s). Transcripts are archived; Resume conversation in a task's menu reopens any of them.")
     }));
     // SIGTERM is not instant and a closed tab takes a beat to leave `ps`.
     for delay in PURGE_REFRESH_DELAYS {

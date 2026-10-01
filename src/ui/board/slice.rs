@@ -328,6 +328,8 @@ impl BoardSlice {
             // The built-in QA stages. The board window passes the configured
             // list; see [`crate::ui::board::view::window`].
             qa_stages: None,
+            // The default keys. The board window passes the person's.
+            info_keys: crate::board::InfoKeys::default(),
         }
     }
 }

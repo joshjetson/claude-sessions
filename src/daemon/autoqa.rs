@@ -290,8 +290,11 @@ impl<S: ProcessSource> EngineInner<S> {
                     format!("Auto QA for {} is on at two machines", conflict.project),
                     format!(
                         "{} has Auto QA on for {} too, and keeps it. This machine paused it so \
-                         no task starts twice. Switch it off at one of them with A on the board.",
-                        conflict.peer, conflict.project
+                         no task starts twice. Switch it off at one of them with {} on the \
+                         board.",
+                        conflict.peer,
+                        conflict.project,
+                        self.keymap().key("board.auto_qa")
                     ),
                 )
             });

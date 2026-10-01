@@ -9,6 +9,7 @@ use crate::board::{Role, Row, RowBuilder, Style};
 use crate::deploy::{has_conflicts, merge_readiness};
 use crate::types::{DeployRun, DeployRunStatus, DeployTask};
 use crate::ui::board::BoardDetail;
+use crate::ui::keymap::Keymap;
 use crate::ui::state::AppState;
 use crate::util::truncate;
 
@@ -42,9 +43,10 @@ fn blank() -> Row {
 
 /// One task, with everything known about its merge request and — the point of
 /// the pane — exactly why it can or cannot be merged.
-/// `dev_actions` is false for the QA role, which is not offered conflict
-/// resolution, so neither is the pane.
-pub fn task_rows(task: &DeployTask, resumable: bool, dev_actions: bool) -> Vec<Row> {
+/// The QA role is not offered conflict resolution, so neither is the pane.
+/// Every key it names comes from `keymap`.
+pub fn task_rows(task: &DeployTask, resumable: bool, keymap: &Keymap) -> Vec<Row> {
+    let dev_actions = keymap.role().shows_dev_actions();
     let mut rows = vec![
         bold(task.name.clone()),
         line(format!("#{}  ·  {}", task.id, task.project_name), Role::Dim),
@@ -111,7 +113,10 @@ pub fn task_rows(task: &DeployTask, resumable: bool, dev_actions: bool) -> Vec<R
     rows.push(blank());
     let readiness = merge_readiness(task);
     rows.push(if readiness.ready {
-        line("✓ Ready to merge — press m", Role::Ready)
+        line(
+            format!("✓ Ready to merge — press {}", keymap.key("deploy.merge")),
+            Role::Ready,
+        )
     } else {
         line(format!("Cannot merge: {}", readiness.reason), Role::Warn)
     });
@@ -120,11 +125,12 @@ pub fn task_rows(task: &DeployTask, resumable: bool, dev_actions: bool) -> Vec<R
     // offer sits right under the verdict.
     if has_conflicts(task) && dev_actions {
         rows.push(blank());
+        let key = keymap.key("deploy.conflicts");
         rows.push(line(
             if resumable {
-                "🔀 Press R to resume this task's original session and resolve the conflicts."
+                format!("🔀 Press {key} to resume this task's original session and resolve the conflicts.")
             } else {
-                "🔀 Press R to start a session that resolves the conflicts."
+                format!("🔀 Press {key} to start a session that resolves the conflicts.")
             },
             Role::Accent,
         ));
@@ -132,18 +138,24 @@ pub fn task_rows(task: &DeployTask, resumable: bool, dev_actions: bool) -> Vec<R
 
     rows.push(blank());
     rows.push(line(
-        if dev_actions {
-            "m merge  ·  R resolve conflicts  ·  g session  ·  o open MR  ·  t open task  ·  d deploy"
-        } else {
-            "m merge  ·  g session  ·  o open MR  ·  t open task  ·  d deploy"
-        },
+        keymap.line_of(
+            &[
+                "deploy.merge",
+                "deploy.conflicts",
+                "deploy.session",
+                "deploy.mr",
+                "deploy.task",
+                "deploy.deploy",
+            ],
+            "  ·  ",
+        ),
         Role::Dim,
     ));
     rows
 }
 
 /// One project: what it would run, and what still stands in the way.
-pub fn project_rows(name: &str, deploy: &DeploySlice) -> Vec<Row> {
+pub fn project_rows(name: &str, deploy: &DeploySlice, keymap: &Keymap) -> Vec<Row> {
     let project = deploy.project(name);
     let mut rows = vec![bold(format!("🚀 {name}")), blank()];
 
@@ -162,7 +174,10 @@ pub fn project_rows(name: &str, deploy: &DeploySlice) -> Vec<Row> {
         None => {
             rows.push(line("No deploy command configured.", Role::Danger));
             rows.push(line(
-                "Press c to set one, or add it to ~/.claude-sessions.json:",
+                format!(
+                    "Press {} to set one, or add it to ~/.claude-sessions.json:",
+                    keymap.key("deploy.config")
+                ),
                 Role::Dim,
             ));
             rows.push(line(
@@ -228,14 +243,22 @@ pub fn project_rows(name: &str, deploy: &DeploySlice) -> Vec<Row> {
 
     rows.push(blank());
     rows.push(line(
-        "d deploy  ·  M merge all ready  ·  c configure  ·  r refresh",
+        keymap.line_of(
+            &[
+                "deploy.deploy",
+                "deploy.merge_all",
+                "deploy.config",
+                "global.refresh",
+            ],
+            "  ·  ",
+        ),
         Role::Dim,
     ));
     rows
 }
 
 /// A run's captured output, headed by what is running and how it ended.
-pub fn run_rows(run: &DeployRun) -> Vec<Row> {
+pub fn run_rows(run: &DeployRun, keymap: &Keymap) -> Vec<Row> {
     let mut rows = vec![
         bold(format!("🚀 {}", run.project)),
         line(format!("$ {}", run.command), Role::Dim),
@@ -258,9 +281,10 @@ pub fn run_rows(run: &DeployRun) -> Vec<Row> {
     if run.total_lines > run.lines.len() {
         rows.push(line(
             format!(
-                "showing the last {} of {} lines — press L for the full log",
+                "showing the last {} of {} lines — press {} for the full log",
                 run.lines.len(),
-                run.total_lines
+                run.total_lines,
+                keymap.key("deploy.output")
             ),
             Role::Dim,
         ));
@@ -283,7 +307,7 @@ pub fn show_row(state: &mut AppState, row: &super::view::DeployRow) {
     match row {
         DeployRow::Task { task, .. } => {
             let resumable = state.board.archived_tasks.contains(&task.id);
-            let rows = task_rows(task, resumable, state.role.shows_dev_actions());
+            let rows = task_rows(task, resumable, &state.keymap());
             set_detail(state, TASK_LABEL, rows, Some(task.id), None);
         }
         DeployRow::Project { name } => show_project(state, &name.clone()),
@@ -299,7 +323,7 @@ pub fn show_project(state: &mut AppState, name: &str) {
     {
         return show_run(state, name);
     }
-    let rows = project_rows(name, &state.deploy);
+    let rows = project_rows(name, &state.deploy, &state.keymap());
     set_detail(state, PROJECT_LABEL, rows, None, None);
 }
 
@@ -308,7 +332,7 @@ pub fn show_run(state: &mut AppState, project: &str) {
         return show_project(state, project);
     };
     let running = run.status == DeployRunStatus::Running;
-    let rows = run_rows(run);
+    let rows = run_rows(run, &state.keymap());
     set_detail(state, OUTPUT_LABEL, rows, None, Some(project.to_string()));
     // A running deploy scrolls with its output rather than sitting at the top.
     state.conv.stick = running;

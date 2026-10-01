@@ -197,13 +197,49 @@ fn pipe_badge(task: &DeployTask) -> Row {
     row.build()
 }
 
-pub fn format_deploy_item(item: &DeployItem<'_>, now: DateTime<Local>) -> Row {
+/// The Deploy tab's keys its rows name, as the person has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeployKeys {
+    pub refresh: char,
+    pub configure: char,
+}
+
+impl Default for DeployKeys {
+    fn default() -> Self {
+        DeployKeys {
+            refresh: 'r',
+            configure: 'c',
+        }
+    }
+}
+
+/// The info row under a deploy board that failed to load.
+pub const DEPLOY_RETRY: &str = "retry";
+/// The info row before the deploy board's first load.
+pub const DEPLOY_LOAD: &str = "load";
+
+pub fn format_deploy_item(item: &DeployItem<'_>, now: DateTime<Local>, keys: DeployKeys) -> Row {
     let mut row = RowBuilder::new();
     match item {
         DeployItem::Info { name, project_name } => match *name {
             "no-projects" => {
                 row.plain("  ").styled(
-                    "No projects configured for deploy. Press c to add one.",
+                    format!(
+                        "No projects configured for deploy. Press {} to add one.",
+                        keys.configure
+                    ),
+                    Role::Dim,
+                );
+            }
+            DEPLOY_RETRY => {
+                row.plain("  ")
+                    .styled(format!("Press {} to retry", keys.refresh), Role::Dim);
+            }
+            // The Deploy tab refreshes only when asked, so this is not a nag:
+            // it is the whole interface.
+            DEPLOY_LOAD => {
+                row.plain("  ").styled(
+                    format!("Press {} to load the deploy board.", keys.refresh),
                     Role::Dim,
                 );
             }

@@ -688,8 +688,9 @@ pub enum Routed {
     Refused(String),
 }
 
-/// The bindings with the person's remaps applied, for one role.
-#[derive(Debug, Clone)]
+/// The bindings with the person's remaps applied, for one role. The default
+/// is the developer role with no remaps.
+#[derive(Debug, Clone, Default)]
 pub struct Keymap {
     role: UserRole,
     /// Binding id -> the key the person chose. Only valid remaps are kept.
@@ -735,6 +736,35 @@ impl Keymap {
             Key::Char(ch) => ch.to_string(),
             Key::Named(name) => name.to_string(),
         }
+    }
+
+    /// The key a binding answers to now, by id, for a sentence that names
+    /// it: "Press {} to retry".
+    pub fn key(&self, id: &str) -> String {
+        debug_assert!(Self::binding(id).is_some(), "no binding {id}");
+        Self::binding(id)
+            .map(|binding| self.label(binding))
+            .unwrap_or_default()
+    }
+
+    /// The key as a character, for text built where a `Copy` value is
+    /// needed. A named key has none, and reads as `?`.
+    pub fn char_of(&self, id: &str) -> char {
+        match Self::binding(id).map(|binding| self.key_of(binding)) {
+            Some(Key::Char(ch)) => ch,
+            _ => '?',
+        }
+    }
+
+    /// `key word` for each of these bindings the role is offered, joined by
+    /// `sep`: "m merge  ·  g session".
+    pub fn line_of(&self, ids: &[&str], sep: &str) -> String {
+        ids.iter()
+            .filter_map(|id| Self::binding(id))
+            .filter(|binding| binding.roles.has(self.role))
+            .map(|binding| format!("{} {}", self.label(binding), binding.hint))
+            .collect::<Vec<_>>()
+            .join(sep)
     }
 
     /// The binding with this id.
