@@ -332,7 +332,11 @@ fn triage(vars: &PromptVars) -> String {
          a real data point where an empty answer is not. Record BEFORE you act, never after, and \
          never try to edit a recorded answer: the command will refuse, and that refusal is what \
          makes the record worth keeping.",
-        qa_shadow_command(id, "<id>")
+        qa_shadow_command(
+            id,
+            vars.extras.get(RUN_STARTED_VAR).map(String::as_str),
+            "<id>"
+        )
     );
 
     let escalate = notify_kind_command(

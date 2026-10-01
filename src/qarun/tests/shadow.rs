@@ -172,3 +172,55 @@ fn an_unknown_run_reports_nothing_rather_than_failing() {
     assert_eq!(agreement.recorded, 0);
     assert_eq!(agreement.rate(), None);
 }
+
+// --- one prediction per task per run, not per task forever --------------------
+
+/// A run over a stage has the same id every time it starts. Keyed by run and
+/// task alone, the next run's coordinator was refused for every task the last
+/// one had recorded, and a coordinator told to record before it acts could
+/// then not act.
+#[test]
+fn a_later_run_records_again_and_the_agreement_counts_both() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let first = Some("2026-09-29T12:00:00Z");
+    let second = Some("2026-09-30T12:00:00Z");
+    store
+        .record_in(RUN, first, 6391, "which env?", "mr-7", None, at())
+        .unwrap();
+    store
+        .record_in(RUN, second, 6391, "which login?", "the QA one", None, at())
+        .expect("the second run was refused by the first run's record");
+
+    assert_eq!(store.records(RUN).len(), 2);
+    // Both runs' records count towards the agreement rate.
+    assert_eq!(store.agreement(RUN).recorded, 2);
+}
+
+/// Within one run the rule is unchanged: the first prediction is the one that
+/// counts.
+#[test]
+fn within_one_run_a_prediction_still_cannot_be_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let run = Some("2026-09-30T12:00:00Z");
+    store
+        .record_in(RUN, run, 6391, "q", "first", None, at())
+        .unwrap();
+    assert_eq!(
+        store.record_in(RUN, run, 6391, "q", "second", None, at()),
+        Err(ShadowError::AlreadyRecorded(6391))
+    );
+}
+
+/// The generation is free text from a prompt, so it never escapes the run's
+/// directory.
+#[test]
+fn a_generation_is_a_safe_file_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = store(dir.path());
+    let path = store
+        .record_in(RUN, Some("../../etc"), 6391, "q", "a", None, at())
+        .unwrap();
+    assert!(path.starts_with(store.root()), "{}", path.display());
+}

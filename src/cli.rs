@@ -153,6 +153,11 @@ pub struct QaShadowArgs {
     pub would_answer: String,
     #[arg(long)]
     pub confidence: Option<String>,
+    /// The run's generation: when its coordinator started. One prediction
+    /// per task per generation, so a later run of the same stage is not
+    /// refused by an earlier one's records.
+    #[arg(long)]
+    pub generation: Option<String>,
 }
 
 #[derive(Args)]

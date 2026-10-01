@@ -339,7 +339,9 @@ fn the_commands_name_the_task_asked_about_not_the_first_one() {
     // the project folder. Its commands used to carry that task's id as a
     // literal, so every record and answer named task 4101.
     let prompt = prompt(true);
-    assert!(prompt.contains("qa-shadow --run \"Aurora::Quality Assurance\" --task <id>"));
+    assert!(prompt.contains(
+        "qa-shadow --run \"Aurora::Quality Assurance\" --generation \"2026-09-30T12:00:00.000Z\" --task <id>"
+    ));
     assert!(prompt.contains("qa-answer --task <id>"));
     assert!(
         !prompt.contains("--task 4101"),
