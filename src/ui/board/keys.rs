@@ -30,21 +30,10 @@ pub fn handle_board(state: &mut AppState, key: KeyEvent) {
     }
 }
 
-/// Keys that start or resume development work. The QA role does not get them.
-const DEV_KEYS: [char; 3] = ['s', 'v', 'C'];
-
+/// Which role gets which key is the key table's call, made before a key
+/// reaches here. See [`crate::ui::keymap`].
 fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
     let task = snapshot.row.task().cloned();
-    if DEV_KEYS.contains(&ch) && !state.role.shows_dev_actions() {
-        // Said, not silently swallowed: a reviewer pressing `s` from habit
-        // should learn where the QA launch is rather than think the key broke.
-        state.flash(format!(
-            "`{ch}` starts development work, which the {} role does not offer. \
-             Press Enter on the task and pick QA to start a pass.",
-            state.role.as_str().to_uppercase()
-        ));
-        return;
-    }
     match ch {
         's' => with_task(state, task, |state, task| {
             start(state, StartRequest::new(&task, LaunchKind::Task))

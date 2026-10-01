@@ -128,11 +128,25 @@ fn the_dev_role_s_key_still_starts() {
 
 #[test]
 fn the_hints_follow_the_role() {
-    let dev = crate::ui::app::board_hints(UserRole::Dev).join("\n");
+    let hints = |role| {
+        let keymap = crate::ui::keymap::Keymap::new(role, &Default::default());
+        crate::ui::app::board_hints(&keymap).join("\n")
+    };
+    let dev = hints(UserRole::Dev);
     assert!(dev.contains("s start"));
-    let qa = crate::ui::app::board_hints(UserRole::Qa).join("\n");
-    assert!(!qa.contains("s start") && !qa.contains("v revise"));
-    assert!(qa.contains("QA"));
+    assert!(!dev.contains("R QA run"), "{dev}");
+    let qa = hints(UserRole::Qa);
+    for gone in [
+        "s start",
+        "v revise",
+        "P pipeline",
+        "S ssh",
+        "M MRs",
+        "D daemon",
+    ] {
+        assert!(!qa.contains(gone), "QA hints offer {gone}: {qa}");
+    }
+    assert!(qa.contains("R QA run"));
     assert!(qa.contains("clear all"));
 }
 

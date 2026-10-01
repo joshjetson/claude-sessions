@@ -11,6 +11,7 @@ mod dialogs;
 mod errors;
 mod extras_dialogs;
 mod harness;
+mod keymap;
 mod keys;
 mod layout;
 mod qa_settings;

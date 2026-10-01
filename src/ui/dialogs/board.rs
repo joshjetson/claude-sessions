@@ -102,26 +102,28 @@ impl TaskMenu {
                     session_id: String::new(),
                 }),
             ));
-            // A revision is a developer fixing what QA sent back.
-            if dev {
-                entries.push((
-                    "↺  Resume for revision (prior context)".into(),
-                    TaskAction::Start(LaunchKind::Revision {
-                        session_id: String::new(),
-                    }),
-                ));
-                entries.push((
-                    "↺  Resume for revision + add context…".into(),
-                    TaskAction::Context { revision: true },
-                ));
-            }
+        }
+        // A revision is a developer fixing what QA sent back.
+        if archived && dev {
+            entries.push((
+                "↺  Resume for revision (prior context)".into(),
+                TaskAction::Start(LaunchKind::Revision {
+                    session_id: String::new(),
+                }),
+            ));
+            entries.push((
+                "↺  Resume for revision + add context…".into(),
+                TaskAction::Context { revision: true },
+            ));
         }
         // Only when there is something to read, or a daemon tag saying there
         // will be — Node gated the row the same way (`dialogs.js:347`), and an
         // always-present row that opens an empty list is a row that teaches you
-        // to skip it.
-        if crate::autodev::has_run_logs(&state.paths.auto_dev_runs_dir, task.id)
-            || crate::autodev::auto_dev_state(&task.tags).is_some()
+        // to skip it. The auto-dev daemon works for developers, so the QA role
+        // does not get the row, like it does not get `D`.
+        if dev
+            && (crate::autodev::has_run_logs(&state.paths.auto_dev_runs_dir, task.id)
+                || crate::autodev::auto_dev_state(&task.tags).is_some())
         {
             entries.push(("🤖  Daemon run logs…".into(), TaskAction::DaemonLogs));
         }

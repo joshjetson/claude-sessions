@@ -30,6 +30,7 @@ pub mod deploy;
 pub mod dialogs;
 pub mod feed;
 pub mod feed_remote;
+pub mod keymap;
 pub mod keys;
 pub mod run;
 pub mod spans;

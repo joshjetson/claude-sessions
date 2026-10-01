@@ -43,6 +43,20 @@ impl ConfigHandle {
         self.config.qa.as_ref()?.peer_secret.as_deref()
     }
 
+    /// Give a binding a key of your own, or `None` to put its default back.
+    /// The caller checks the key first: see [`crate::ui::keymap::Keymap::refuse`].
+    pub fn set_key(&mut self, id: &str, key: Option<char>) -> io::Result<()> {
+        match key {
+            Some(ch) => {
+                self.config.keys.insert(id.to_string(), ch.to_string());
+            }
+            None => {
+                self.config.keys.remove(id);
+            }
+        }
+        self.save()
+    }
+
     /// Replaces the whole chat block, as the settings dialog does.
     pub fn save_chat_config(&mut self, chat: ChatConfig) -> io::Result<()> {
         self.config.chat = chat;
