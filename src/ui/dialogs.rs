@@ -26,6 +26,7 @@ pub mod odoo;
 pub mod pipeline;
 pub mod project_filter;
 pub mod purge;
+pub mod qa_settings;
 pub mod session;
 pub mod settings;
 pub mod shutdown;
@@ -275,7 +276,7 @@ impl Dialog {
             Dialog::Rename(dialog) => dialog.render(frame, area),
             Dialog::AddGroup(dialog) => dialog.render(frame, area),
             Dialog::Search(dialog) => dialog.render(frame, area),
-            Dialog::Settings(dialog) => dialog.render(frame, area, config.chat()),
+            Dialog::Settings(dialog) => dialog.render(frame, area, config),
             Dialog::Shutdown(dialog) => dialog.render(frame, area),
             Dialog::FileViewer(dialog) => {
                 // The only I/O in a render path, and it is a stat: the file is

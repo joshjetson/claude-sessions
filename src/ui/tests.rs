@@ -13,6 +13,7 @@ mod extras_dialogs;
 mod harness;
 mod keys;
 mod layout;
+mod qa_settings;
 mod render;
 mod shutdown;
 mod theme;

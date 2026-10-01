@@ -279,7 +279,7 @@ Audited against the key maps themselves, not against this document.
 | `X` | **Purge** — kill *and close the tab of* every session whose task has finished. Unrecognised stages are kept and named; sessions with no task are never purged |
 | `r` | Rename the selected session |
 | `a` / `d` | Add a group / remove the group under the cursor |
-| `s` | Chat settings |
+| `s` | Settings. `Tab` switches between the chat page and the QA page: role, QA runs, notifications, the health gate, Auto QA per project, and your other machines |
 
 ### The right-hand pane (`Shift-Tab` to focus it — works on every view)
 
@@ -291,7 +291,7 @@ Audited against the key maps themselves, not against this document.
 | `t` | Timestamps |
 | `f` | Message filter: all → user → assistant |
 | `/` | Search the conversation |
-| `s` | Chat settings |
+| `s` | Settings. `Tab` switches between the chat page and the QA page: role, QA runs, notifications, the health gate, Auto QA per project, and your other machines |
 
 ### Board
 
@@ -458,6 +458,12 @@ or over 8 hours (a session left open).
 | Already running | `g` / `y` | Go to the running session / start another anyway |
 
 ## Configuration
+
+Most QA settings are on the settings dialog's QA page (`s`, then `Tab`), and each change
+saves at once: the role, the lane limit, refilling lanes, the coordinator mode, alerts,
+"New in QA", the health gate, Auto QA per project, and the peer check. On that page `g`
+makes a new peer secret and shows it once, so you can put the same one on your other
+machines. The rest, and every setting below, is in the file.
 
 Everything lives in `~/.claude-sessions.json`. Every key is optional, every block is
 independent, and unknown keys are preserved when the app writes the file back — so a config
