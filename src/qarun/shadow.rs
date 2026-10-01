@@ -119,6 +119,24 @@ impl ShadowStore {
         self.run_dir(run_id).join(format!("task-{task_id}.json"))
     }
 
+    /// The record's file for one generation of a run.
+    ///
+    /// A run over a stage has the same id every time it starts, so a record
+    /// keyed by run and task alone outlived its run: the next run's coordinator
+    /// was refused for every task the last one had recorded, and a coordinator
+    /// told to record before it acts could then not act. The generation, the
+    /// coordinator's own start time, keeps one prediction per task per run.
+    /// Every generation sits in the run's directory, so the agreement rate
+    /// still counts them all.
+    fn generation_path(&self, run_id: &str, generation: Option<&str>, task_id: i64) -> PathBuf {
+        match generation.map(str::trim).filter(|g| !g.is_empty()) {
+            Some(generation) => self
+                .run_dir(run_id)
+                .join(format!("task-{task_id}-{}.json", safe_segment(generation))),
+            None => self.record_path(run_id, task_id),
+        }
+    }
+
     /// Record what the coordinator would have answered. Refuses to overwrite.
     pub fn record(
         &self,
@@ -129,10 +147,34 @@ impl ShadowStore {
         confidence: Option<&str>,
         recorded_at: String,
     ) -> Result<PathBuf, ShadowError> {
+        self.record_in(
+            run_id,
+            None,
+            task_id,
+            question,
+            would_answer,
+            confidence,
+            recorded_at,
+        )
+    }
+
+    /// [`Self::record`], for one generation of the run. See
+    /// [`Self::generation_path`].
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_in(
+        &self,
+        run_id: &str,
+        generation: Option<&str>,
+        task_id: i64,
+        question: &str,
+        would_answer: &str,
+        confidence: Option<&str>,
+        recorded_at: String,
+    ) -> Result<PathBuf, ShadowError> {
         if would_answer.trim().is_empty() {
             return Err(ShadowError::EmptyAnswer);
         }
-        let path = self.record_path(run_id, task_id);
+        let path = self.generation_path(run_id, generation, task_id);
         if path.exists() {
             return Err(ShadowError::AlreadyRecorded(task_id));
         }

@@ -75,9 +75,16 @@ pub fn notify_command(title: &str, message: &str) -> String {
 ///
 /// Called before the coordinator acts, never after. The store refuses to
 /// overwrite, and that refusal is what makes the record worth keeping.
-pub fn qa_shadow_command(run_id: &str, task: impl std::fmt::Display) -> String {
+pub fn qa_shadow_command(
+    run_id: &str,
+    generation: Option<&str>,
+    task: impl std::fmt::Display,
+) -> String {
+    let generation = generation
+        .map(|generation| format!(" --generation \"{generation}\""))
+        .unwrap_or_default();
     format!(
-        "{} qa-shadow --run \"{run_id}\" --task {task} \
+        "{} qa-shadow --run \"{run_id}\"{generation} --task {task} \
          --question \"<their question>\" --would-answer \"<your answer>\" \
          --confidence high|medium|low",
         bin()

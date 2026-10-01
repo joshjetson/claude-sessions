@@ -193,8 +193,9 @@ fn cwd() -> String {
 /// whole triage decision rests on.
 pub(super) fn qa_shadow(paths: &Paths, args: QaShadowArgs) -> Result<()> {
     let store = crate::qarun::ShadowStore::new(&paths.runtime_dir);
-    match store.record(
+    match store.record_in(
         &args.run,
+        args.generation.as_deref(),
         args.task,
         &args.question,
         &args.would_answer,
