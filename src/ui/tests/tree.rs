@@ -252,6 +252,27 @@ fn a_session_row_carries_its_status_dot_label_and_token_count() {
     assert!(!rendered.contains('%'), "{rendered}");
 }
 
+/// "idle" would hide that it stopped on an error and will not go on by itself.
+#[test]
+fn a_session_stopped_on_an_api_error_says_so() {
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.last_entry = Some(crate::types::LastEntry {
+        api_error: Some(crate::types::ApiError {
+            kind: "rate_limit".to_string(),
+            text: "You've hit your session limit".to_string(),
+        }),
+        ..crate::types::LastEntry::default()
+    });
+    let item = TreeItem::Session {
+        project_name: "x/alpha",
+        session: &s,
+    };
+    let rendered = line_text(&item, &config);
+    assert!(rendered.contains("stopped: usage limit"), "{rendered}");
+    assert!(!rendered.contains("idle"), "{rendered}");
+}
+
 #[test]
 fn a_session_with_no_process_still_renders_its_row() {
     // The transcript-only case: everything the row shows comes from the

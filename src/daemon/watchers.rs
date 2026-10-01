@@ -258,6 +258,69 @@ impl<S: ProcessSource> EngineInner<S> {
         }
     }
 
+    /// Tell the person when a session stopped on an API error or the usage
+    /// limit.
+    ///
+    /// Claude Code writes the failure into the transcript and ends the turn.
+    /// Nothing resumes it, so the session waits, quiet, until someone notices:
+    /// that needs the person, and it rings once. The row has a fixed id per
+    /// session, so a second failure replaces the first, and it is deleted when
+    /// the session moves on or goes away. After a restart, a row already in
+    /// the feed is adopted rather than rung again.
+    pub(crate) fn notify_api_errors(&self, sessions: &SessionIndex, complete: bool) {
+        let mut raise = Vec::new();
+        let mut clear = Vec::new();
+        {
+            let mut guard = self.state();
+            let state = &mut *guard;
+            for session in sessions.iter() {
+                if session.session_id.is_empty() {
+                    continue;
+                }
+                let row = api_error_row(&session.session_id);
+                let entry = session.last_entry.as_ref();
+                let Some(error) = entry.and_then(|entry| entry.api_error.as_ref()) else {
+                    if state.api_errors.remove(&session.session_id).is_some() {
+                        clear.push(row);
+                    }
+                    continue;
+                };
+                let at = entry
+                    .and_then(|entry| entry.activity_at.clone())
+                    .unwrap_or_default();
+                if state.api_errors.get(&session.session_id) == Some(&at) {
+                    continue;
+                }
+                let restored = !state.api_errors.contains_key(&session.session_id)
+                    && state.notifications.iter().any(|n| {
+                        n.id == row && n.status != crate::types::NotificationStatus::Resolved
+                    });
+                state.api_errors.insert(session.session_id.clone(), at);
+                if !restored {
+                    raise.push(api_error_notification(session, error));
+                }
+            }
+            if complete {
+                let gone: Vec<String> = state
+                    .api_errors
+                    .keys()
+                    .filter(|id| sessions.get(id).is_none())
+                    .cloned()
+                    .collect();
+                for id in gone {
+                    state.api_errors.remove(&id);
+                    clear.push(api_error_row(&id));
+                }
+            }
+        }
+        if !clear.is_empty() {
+            self.dismiss_notifications(&clear);
+        }
+        for notification in raise {
+            self.raise_notification(notification);
+        }
+    }
+
     /// Flag a running task session that has gone quiet.
     ///
     /// [`Self::notify_awaiting_decisions`] only fires when the newest entry is
@@ -542,6 +605,40 @@ fn restored_row(
                 && (n.kind == NotificationKind::Question) == asked
         })
         .map(|n| n.id.clone())
+}
+
+/// The fixed id of a session's API-error row.
+fn api_error_row(session_id: &str) -> String {
+    format!("apierr-{session_id}")
+}
+
+/// The row for a session that stopped on an API error.
+fn api_error_notification(session: &Session, error: &crate::types::ApiError) -> NewNotification {
+    let project = project_name(&session.cwd);
+    let what = match session.task_id {
+        Some(task_id) => format!("task #{task_id}"),
+        None => "a session".to_string(),
+    };
+    NewNotification {
+        cwd: session.cwd.clone(),
+        project: Some(project.clone()),
+        session_id: Some(session.session_id.clone()),
+        task_id: session.task_id,
+        level: NotificationLevel::Error,
+        id: Some(api_error_row(&session.session_id)),
+        ..NewNotification::new(
+            "apierr",
+            format!("🛑 {project}: Claude stopped on {what}"),
+            format!(
+                "{} It will not continue by itself. Open its terminal (o) and tell it to go on.",
+                if error.text.is_empty() {
+                    error.short()
+                } else {
+                    error.text.as_str()
+                }
+            ),
+        )
+    }
 }
 
 /// The notification for a session that has stopped and is waiting on a person.

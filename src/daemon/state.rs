@@ -257,6 +257,9 @@ pub struct EngineState {
     /// Session id -> the wait the await watcher is tracking for it, and the
     /// row that announced it. See [`AwaitWatch`].
     pub awaits: HashMap<String, AwaitWatch>,
+    /// Session id -> the API-error entry already announced for it, by its
+    /// timestamp. See `notify_api_errors`.
+    pub api_errors: HashMap<String, String>,
     pub pending: Vec<PendingLaunch>,
     /// Newest first, capped at [`super::NOTIFICATION_LIMIT`] (mandate #14: a
     /// deque, not `unshift` + `truncate`).

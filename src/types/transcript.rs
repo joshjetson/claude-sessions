@@ -163,6 +163,31 @@ pub struct LastEntry {
     /// the conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_at: Option<String>,
+    /// Set when this entry is the message Claude Code writes after an API
+    /// call failed: a timeout, an overloaded server, a lost connection, or
+    /// the usage limit. The turn has stopped, and it does not resume on its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_error: Option<ApiError>,
+}
+
+/// An API failure Claude Code recorded in a transcript.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ApiError {
+    /// The `error` field as written: `server_error`, `rate_limit`, and so on.
+    pub kind: String,
+    /// What Claude Code told the person, first line, cut short.
+    pub text: String,
+}
+
+impl ApiError {
+    /// A short name for the kind, for a session row.
+    pub fn short(&self) -> &'static str {
+        match self.kind.as_str() {
+            "rate_limit" => "usage limit",
+            _ => "API error",
+        }
+    }
 }
 
 impl Default for EntryKind {

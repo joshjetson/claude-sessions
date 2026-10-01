@@ -508,10 +508,17 @@ fn format_session_row(session: &Session, config: &ConfigHandle) -> Line<'static>
     let style = Style::default().fg(color_of(status.color()));
 
     // A working session says what it is doing; anything else says what it is.
-    let label = match (status, session.activity_detail.as_str()) {
-        (SessionStatus::Working | SessionStatus::Compacting, detail) if !detail.is_empty() => {
+    // A session whose newest entry is an API error says that: it stopped, and
+    // "idle" would hide that it will not go on by itself.
+    let api_error = session
+        .last_entry
+        .as_ref()
+        .and_then(|entry| entry.api_error.as_ref());
+    let label = match (status, session.activity_detail.as_str(), api_error) {
+        (SessionStatus::Working | SessionStatus::Compacting, detail, _) if !detail.is_empty() => {
             format!("{detail}...")
         }
+        (_, _, Some(error)) => format!("stopped: {}", error.short()),
         _ => status.label().to_string(),
     };
 
