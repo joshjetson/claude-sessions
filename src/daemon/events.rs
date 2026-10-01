@@ -100,6 +100,9 @@ pub struct Snapshot {
     /// still starts what arrived while it was closed.
     #[serde(default)]
     pub auto_qa: super::autoqa::AutoQaFeed,
+    /// The newest machine-health reading, while the health gate is on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health: Option<crate::health::Vitals>,
 }
 
 impl Snapshot {
@@ -125,6 +128,7 @@ impl Snapshot {
             deploy_error: state.deploy_error.clone(),
             deploy_runs: super::deploy::wire_runs(&state.deploy_runs),
             auto_qa: state.auto_qa.clone(),
+            health: state.health.clone(),
         }
     }
 }
@@ -221,6 +225,8 @@ pub enum EngineEvent {
     /// The Auto QA feed changed: the tasks in the Auto QA projects' QA stages,
     /// and the arrivals the dashboard has not confirmed yet.
     AutoQa(Box<super::autoqa::AutoQaFeed>),
+    /// A new machine-health reading, for the QA queue.
+    Health(Box<crate::health::Vitals>),
 }
 
 impl EngineEvent {
@@ -243,6 +249,7 @@ impl EngineEvent {
             EngineEvent::DeployRun { .. } => "deploy-run",
             EngineEvent::DeployOutput { .. } => "deploy-output",
             EngineEvent::AutoQa(_) => "auto-qa",
+            EngineEvent::Health(_) => "health",
         }
     }
 }

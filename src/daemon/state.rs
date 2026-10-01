@@ -293,6 +293,8 @@ pub struct EngineState {
     tasks_by_id: HashMap<i64, Task>,
     /// Phase 11 defines the shape; the engine carries it to clients unopened.
     pub usage: Option<serde_json::Value>,
+    /// The newest machine-health reading, while `qa.healthGate` is on.
+    pub health: Option<crate::health::Vitals>,
     /// The Deploy tab. MANUAL only — nothing polls it, because every refresh
     /// spends a GitLab API call per open merge request.
     pub deploy: Option<DeployBoard>,

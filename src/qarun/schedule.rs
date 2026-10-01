@@ -39,6 +39,9 @@ pub enum Refusal {
     AlreadyFinished(i64, QaVerdict),
     /// Every lane is busy.
     LaneLimit { running: usize, limit: usize },
+    /// The machine-health gate holds the queue. The text says why. See
+    /// [`crate::health`].
+    MachineBusy(String),
 }
 
 impl Refusal {
@@ -67,6 +70,7 @@ impl Refusal {
             Refusal::LaneLimit { running, limit } => {
                 format!("{running} of {limit} lanes busy.")
             }
+            Refusal::MachineBusy(reason) => reason.clone(),
         }
     }
 }
@@ -83,6 +87,8 @@ pub struct AdmitCtx<'a> {
     pub odoo_state_of: &'a dyn Fn(i64) -> Option<String>,
     /// `None` means uncapped.
     pub lane_limit: Option<usize>,
+    /// Why the machine-health gate holds the queue now, or `None`.
+    pub hold: Option<&'a str>,
 }
 
 impl AdmitCtx<'_> {
@@ -143,6 +149,11 @@ pub fn admit(run: &QaRun, task_id: i64, ctx: &AdmitCtx<'_>) -> Result<(), Refusa
             return Err(Refusal::LaneLimit { running, limit });
         }
     }
+    // Last, so a task with a reason of its own says that instead: the machine
+    // only matters once the task would otherwise start.
+    if let Some(reason) = ctx.hold {
+        return Err(Refusal::MachineBusy(reason.to_string()));
+    }
     Ok(())
 }
 
@@ -164,6 +175,7 @@ pub fn plan_spawns(run: &QaRun, ctx: &AdmitCtx<'_>) -> Vec<i64> {
             state_of: ctx.state_of,
             odoo_state_of: ctx.odoo_state_of,
             lane_limit: ctx.lane_limit,
+            hold: ctx.hold,
         };
         match admit(run, task_id, &local) {
             Ok(()) => {

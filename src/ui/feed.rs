@@ -75,6 +75,8 @@ pub enum FeedEvent {
     /// The daemon's Auto QA feed: the tasks in the Auto QA projects' QA stages,
     /// and the arrivals to put in their runs.
     AutoQa(Box<crate::daemon::AutoQaFeed>),
+    /// A machine-health reading from the daemon.
+    Health(Box<crate::health::Vitals>),
     /// Something to say that arrived asynchronously — a deploy the daemon
     /// refused, say. The feed has no other way back to the pane.
     Flash(String),

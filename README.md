@@ -371,6 +371,32 @@ conflict resolution (`R`). QA, QA dry run, the pre-work brief, `R`, `]`, `a`, `m
 A task in a QA stage shows `✅` when Odoo says a developer marked it Complete, and `🔁`
 when Odoo says Changes Requested. The detail pane names the state too.
 
+### The QA queue and machine health
+
+Each QA session is a `claude` process, a browser and a test server. A run that starts every
+free lane at once can slow a laptop to a crawl. With `qa.healthGate: true`, QA starts wait
+on the machine:
+
+- The daemon reads four vitals every 30 seconds, about 20 ms in all: load per CPU core,
+  free memory, swap, and the thermal CPU speed limit. The thresholds are the
+  machine-health plugin's.
+- While any vital is red, no QA session starts. Each waiting row says why, for example
+  `Waiting: the machine is busy (memory 8% free).`
+- At most one session starts per reading, so the next reading includes its load.
+- Waiting tasks start in the order they joined the run.
+- With no reading, or one older than 2.5 minutes, nothing waits. Missing data never
+  stops QA.
+
+| Vital | Amber | Red |
+|---|---|---|
+| 5-minute load per core | above 1.0 | above 2.0 |
+| Free memory (`memory_pressure`) | below 20% | below 10% |
+| Swap | over 2 GB used and under 35% free | over 8 GB used and under 20% free |
+| CPU speed limit (thermal) | below 100 | below 70 |
+
+Only red holds the queue. A laptop doing ordinary work is often amber, and holding on
+amber would stop QA for most of the day.
+
 ### Deploy
 
 | Key | Action |
@@ -491,6 +517,7 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | `qa.peerListen` | your Tailscale IPv4 | The address the peer listener binds, when `tailscale ip -4` cannot find it. Read at daemon start |
 | `qa.notifyNewInQa` | `false` | QA role only: announce a task that lands in a QA stage (`🧪 New in QA`). Off because the QA board already lists those tasks. Switched on, the first run records what is already there silently |
 | `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | The stages `qa.notifyNewInQa` and Auto QA watch. Revision stages never count |
+| `qa.healthGate` | `false` | Hold QA starts while the machine is red, and start one per health reading. See [The QA queue and machine health](#the-qa-queue-and-machine-health) |
 | `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |
 | `qa.otherQaUserIds[]` | `[]` | QA role only: Odoo user ids of the other reviewers. A task one of them has is not announced unless you are assigned too |
 | `alerts.enabled` | `true` | The daemon's alerting as a whole |

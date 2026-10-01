@@ -107,6 +107,9 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
                 let _ = sender.send(FeedEvent::Notifications(snapshot.notifications));
                 // Arrivals that waited for a dashboard to open.
                 let _ = sender.send(FeedEvent::AutoQa(Box::new(snapshot.auto_qa)));
+                if let Some(health) = snapshot.health {
+                    let _ = sender.send(FeedEvent::Health(Box::new(health)));
+                }
                 let _ = sender.send(sessions(snapshot.sessions));
                 let _ = sender.send(board);
                 let _ = sender.send(deploy);
@@ -189,6 +192,11 @@ fn forward(client: DaemonClient, kicks: &Kicks, sender: &Sender<FeedEvent>, even
                 if !project.is_empty() {
                     let _ = sender.send(FeedEvent::DeployOutput { project, line });
                 }
+            }
+        }
+        "health" => {
+            if let Ok(vitals) = serde_json::from_str::<crate::health::Vitals>(&event.data) {
+                let _ = sender.send(FeedEvent::Health(Box::new(vitals)));
             }
         }
         "auto-qa" => {

@@ -38,6 +38,11 @@ mod tests;
 /// one that needs both, because it reads a task's merge request through `glab`.
 fn daemon_options(paths: Paths, config: ConfigHandle) -> EngineOptions {
     let mut options = EngineOptions::system(paths, config);
+    // Machine health needs no Odoo, so it is wired before the early return.
+    let spawn = options.spawn;
+    options.health = Some(Box::new(move || {
+        crate::health::sample(&crate::term::Exec::new(spawn))
+    }));
     let creds = options.config.odoo_creds();
     if !creds.is_complete() {
         return options;

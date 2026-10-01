@@ -42,6 +42,9 @@ pub type QaStageFetch =
 /// value to clients.
 pub type UsageHook = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 
+/// One machine-health reading. Injected so a test reads a scripted machine.
+pub type HealthHook = Box<dyn Fn() -> crate::health::Vitals + Send + Sync>;
+
 /// The Odoo board query, behind the same injection seam as [`AssignedFetch`].
 ///
 /// A hook rather than an `OdooClient` field so the poll is testable without a
@@ -136,6 +139,7 @@ pub(crate) struct EngineInner<S: ProcessSource> {
     pub(crate) fetch_deploy: Option<DeployFetch>,
     pub(crate) daily_log: Option<DailyLogHook>,
     pub(crate) usage: Option<UsageHook>,
+    pub(crate) health: Option<HealthHook>,
     pub(crate) spawn: SpawnPolicy,
     pub(crate) shutdown: super::lifecycle::Shutdown,
     pub(crate) counters: Counters,
@@ -256,6 +260,8 @@ pub struct EngineOptions<S: ProcessSource = PlatformProcessSource> {
     /// Phase 11 wires the standup log in here.
     pub daily_log: Option<DailyLogHook>,
     pub usage: Option<UsageHook>,
+    /// The machine-health reading the QA queue waits on. `None` reads nothing.
+    pub health: Option<HealthHook>,
     pub spawn: SpawnPolicy,
 }
 
@@ -295,6 +301,7 @@ impl<S: ProcessSource> EngineOptions<S> {
             fetch_deploy: None,
             daily_log: None,
             usage: None,
+            health: None,
             spawn: SpawnPolicy::detect(),
         }
     }
@@ -330,6 +337,7 @@ impl<S: ProcessSource> Engine<S> {
                 fetch_deploy: options.fetch_deploy,
                 daily_log: options.daily_log,
                 usage: options.usage,
+                health: options.health,
                 spawn: options.spawn,
                 shutdown: super::lifecycle::Shutdown::default(),
                 counters: Counters::default(),

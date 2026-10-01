@@ -24,6 +24,7 @@ mod client;
 mod completion;
 mod deploy;
 mod fakes;
+mod health;
 mod linking;
 mod markers;
 mod ordering;
@@ -87,6 +88,7 @@ pub(crate) struct Setup {
     pub(crate) assigned: Option<super::engine::AssignedFetch>,
     pub(crate) qa_stage: Option<super::engine::QaStageFetch>,
     pub(crate) usage: Option<super::engine::UsageHook>,
+    pub(crate) health: Option<super::engine::HealthHook>,
     pub(crate) board: Option<super::engine::BoardFetch>,
     pub(crate) deploy: Option<super::engine::DeployFetch>,
     /// Refused everywhere but the one test that drives a real child process.
@@ -126,6 +128,7 @@ pub(crate) fn engine_with(setup: Setup) -> TestEngine {
             log.lock().unwrap().push(record.clone())
         })),
         usage: setup.usage,
+        health: setup.health,
         // Refused everywhere but the one deploy test that deliberately runs a
         // real short-lived `sh`.
         spawn: setup.spawn.unwrap_or(SpawnPolicy::Refuse),

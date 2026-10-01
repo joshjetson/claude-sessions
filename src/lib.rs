@@ -18,6 +18,7 @@ pub mod deploy;
 pub mod diagnostics;
 pub mod errorlog;
 pub mod gitlab;
+pub mod health;
 pub mod hook_state;
 pub mod http;
 pub mod journal;

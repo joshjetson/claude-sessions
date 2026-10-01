@@ -513,6 +513,10 @@ pub struct QaBlock {
     /// sound per arrival told a reviewer what they could already see.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notify_new_in_qa: Option<bool>,
+    /// Hold the QA queue while the machine is red, and start one session per
+    /// health reading. Off unless set to true. See `crate::health`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_gate: Option<bool>,
     /// The Odoo projects with Auto QA on, on this machine: a task that arrives
     /// in one of their QA stages joins that stage's QA run, and the run starts
     /// it. `A` on the board switches a project on or off.

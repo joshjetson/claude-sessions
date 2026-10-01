@@ -145,14 +145,22 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     let state_of = move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
     let odoo_states = state.board.odoo_states(&run.task_ids);
     let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
+    let hold = queue_hold(state);
     let ctx = AdmitCtx {
         live_task_ids: &live,
         state_of: &state_of,
         odoo_state_of: &odoo_state_of,
         lane_limit: state.config.qa_lane_limit(),
+        hold: hold.as_deref(),
     };
 
-    let plan = plan_spawns(&run, &ctx);
+    let mut plan = plan_spawns(&run, &ctx);
+    // One start per health reading, so the next reading includes this one's
+    // load. Starting every free lane at once is how a laptop ends up
+    // swapping before the first reading could say so.
+    if state.config.qa_health_gate() {
+        plan.truncate(1);
+    }
     if plan.is_empty() {
         if announce {
             let why = first_refusal(&run, &ctx)
@@ -387,3 +395,41 @@ pub fn jump_to_next_ask(state: &mut AppState, keys: &[String]) {
     }
     state.dirty = true;
 }
+
+/// Why the machine-health gate holds the QA queue now, or `None`.
+///
+/// Only with `qa.healthGate` on. Two reasons: the newest reading is red, or a
+/// session started since that reading was taken, so its load is not in it
+/// yet. No reading, or one older than [`HEALTH_STALE`], holds nothing: QA is
+/// never stopped by data that is missing.
+pub(crate) fn queue_hold(state: &AppState) -> Option<String> {
+    if !state.config.qa_health_gate() {
+        return None;
+    }
+    let vitals = state.health.as_ref()?;
+    let sampled = crate::util::parse_timestamp(&vitals.sampled_at)?;
+    let sampled: std::time::SystemTime = sampled.into();
+    let age = std::time::SystemTime::now()
+        .duration_since(sampled)
+        .unwrap_or_default();
+    if age > HEALTH_STALE {
+        return None;
+    }
+    if vitals.level == crate::health::HealthLevel::Red {
+        return Some(format!(
+            "Waiting: the machine is busy ({}).",
+            vitals.reasons.join(", ")
+        ));
+    }
+    if state
+        .last_run_launch
+        .is_some_and(|launched| launched >= sampled)
+    {
+        return Some("Waiting for a fresh machine reading after the last start.".to_string());
+    }
+    None
+}
+
+/// A reading older than this is not trusted to hold anything: the daemon
+/// reads every 30 seconds, so this is several missed readings.
+const HEALTH_STALE: std::time::Duration = std::time::Duration::from_secs(150);
