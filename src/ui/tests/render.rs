@@ -86,13 +86,18 @@ fn the_sessions_view_draws_its_tree_and_status_hints() {
     assert!(painted.contains("Sessions"), "{painted}");
     assert!(painted.contains("x/alpha"), "{painted}");
     assert!(painted.contains("Conversation"), "{painted}");
-    assert!(painted.contains("Tab view"), "status bar: {painted}");
+    // The bar keeps the most useful hints that fit, and always ends with the
+    // way to the rest and the way out.
+    assert!(painted.contains("Enter select"), "status bar: {painted}");
+    assert!(painted.contains("? keys"), "status bar: {painted}");
+    assert!(painted.contains("q quit"), "status bar: {painted}");
+    assert!(!painted.contains("stop all"), "status bar: {painted}");
 
-    // The bar is elided from the right on a narrow terminal, so the last hints
-    // only appear when there is room for them.
+    // The less used hints appear when there is room for them.
     let wide = text(&render(200, 24, |frame| draw(frame, &mut state)));
-    assert!(wide.contains("quit"), "{wide}");
-    assert!(wide.contains("stop all"), "{wide}");
+    assert!(wide.contains("Tab view"), "{wide}");
+    assert!(wide.contains("F folders"), "{wide}");
+    assert!(wide.contains("q quit"), "{wide}");
 }
 
 #[test]
@@ -190,12 +195,21 @@ fn only_the_visible_window_of_a_long_tree_is_drawn() {
 #[test]
 fn the_status_hints_change_with_the_focused_pane() {
     let (_dir, mut state) = sessions_state();
-    let tree: Vec<&str> = status_hints(&state).iter().map(|(k, _)| *k).collect();
+    let keys = |state: &AppState| -> Vec<String> {
+        status_hints(state)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
+    };
+    let tree = keys(&state);
     state.focus = Pane::Conversation;
-    let conv: Vec<&str> = status_hints(&state).iter().map(|(k, _)| *k).collect();
-    assert!(!tree.contains(&"/"));
-    assert!(conv.contains(&"/"), "{conv:?}");
-    assert!(conv.contains(&"g/G"), "{conv:?}");
+    let conv = keys(&state);
+    assert!(!tree.contains(&"/".to_string()));
+    assert!(conv.contains(&"/".to_string()), "{conv:?}");
+    assert!(conv.contains(&"G".to_string()), "{conv:?}");
+    // The list's own keys stop while the pane has the focus.
+    assert!(tree.contains(&"x".to_string()), "{tree:?}");
+    assert!(!conv.contains(&"x".to_string()), "{conv:?}");
 }
 
 // --- suspend ----------------------------------------------------------------

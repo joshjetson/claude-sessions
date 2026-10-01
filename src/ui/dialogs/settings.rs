@@ -1,4 +1,5 @@
-//! The settings dialog: the chat grid, and the QA page `Tab` switches to.
+//! The settings dialog: the chat grid, and the QA and Keys pages `Tab`
+//! switches to.
 //!
 //! Ported from `SETTINGS` + `SettingsMenu` in the Node app's
 //! `src/tui/dialogs.js`: the same rows in the same order, `←→` cycling enum and
@@ -216,6 +217,8 @@ pub enum Page {
     #[default]
     Chat,
     Qa,
+    /// See [`super::key_settings`].
+    Keys,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -233,9 +236,11 @@ pub struct SettingsDialog {
 impl SettingsDialog {
     pub fn handle_key(&mut self, key: KeyEvent, ctx: &mut DialogCtx<'_>) -> DialogOutcome {
         if self.editing.is_none() && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-            self.page = match self.page {
-                Page::Chat => Page::Qa,
-                Page::Qa => Page::Chat,
+            let back = key.code == KeyCode::BackTab;
+            self.page = match (self.page, back) {
+                (Page::Chat, false) | (Page::Keys, true) => Page::Qa,
+                (Page::Qa, false) | (Page::Chat, true) => Page::Keys,
+                (Page::Keys, false) | (Page::Qa, true) => Page::Chat,
             };
             self.row = 0;
             self.notice = None;
@@ -244,6 +249,7 @@ impl SettingsDialog {
         match self.page {
             Page::Chat => self.chat_key(key, ctx),
             Page::Qa => self.qa_key(key, ctx),
+            Page::Keys => self.keys_key(key, ctx),
         }
     }
 
@@ -290,7 +296,7 @@ impl SettingsDialog {
                     cycle(1);
                 }
             }
-            KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('q') => return DialogOutcome::Close,
+            KeyCode::Esc | KeyCode::Char('s' | 'q' | ',') => return DialogOutcome::Close,
             _ => {}
         }
         DialogOutcome::Stay
@@ -349,7 +355,7 @@ impl SettingsDialog {
                     self.notice = change(1);
                 }
             }
-            KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('q') => return DialogOutcome::Close,
+            KeyCode::Esc | KeyCode::Char('s' | 'q' | ',') => return DialogOutcome::Close,
             _ => {}
         }
         DialogOutcome::Stay
@@ -359,6 +365,11 @@ impl SettingsDialog {
         let (title, mut lines) = match self.page {
             Page::Chat => (" Settings · Chat ", self.chat_lines(config.chat())),
             Page::Qa => (" Settings · QA ", self.qa_lines(config)),
+            // The frame, the notice and the hint take about eight rows.
+            Page::Keys => (
+                " Settings · Keys ",
+                self.keys_lines(config, (area.height as usize).saturating_sub(8)),
+            ),
         };
         if let Some(notice) = &self.notice {
             lines.push(Line::default());
@@ -368,16 +379,19 @@ impl SettingsDialog {
             )));
         }
         lines.push(Line::default());
-        lines.push(hint(if self.editing.is_some() {
-            "Type to edit  Enter save  Esc cancel"
-        } else if self.page == Page::Qa {
-            "↑↓ move  ←→ change  Enter edit  g new secret  Tab chat  Esc close"
-        } else {
-            "↑↓ move  ←→ change  Enter edit text  Tab QA  Esc close"
+        lines.push(hint(match (self.page, self.editing.is_some()) {
+            (Page::Keys, true) => "Press the new key  Esc cancel",
+            (_, true) => "Type to edit  Enter save  Esc cancel",
+            (Page::Qa, false) => {
+                "↑↓ move  ←→ change  Enter edit  g new secret  Tab keys  Esc close"
+            }
+            (Page::Keys, false) => "↑↓ move  Enter new key  ⌫ default  Tab chat  Esc close",
+            (Page::Chat, false) => "↑↓ move  ←→ change  Enter edit text  Tab QA  Esc close",
         }));
         let width = match self.page {
             Page::Chat => 48,
             Page::Qa => 72,
+            Page::Keys => 76,
         };
         render_modal(
             frame,

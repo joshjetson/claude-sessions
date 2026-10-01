@@ -22,6 +22,12 @@ impl ConfigHandle {
         &self.config.chat
     }
 
+    /// The keys you remapped: binding id -> one character. See
+    /// [`crate::ui::keymap`].
+    pub fn key_overrides(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.config.keys
+    }
+
     /// The configured groups, with a leading `~` expanded against the home
     /// directory.
     ///

@@ -35,19 +35,19 @@ fn reloaded(paths: &crate::paths::Paths) -> ConfigHandle {
 }
 
 #[test]
-fn tab_switches_between_the_chat_and_qa_pages() {
+fn tab_walks_the_chat_qa_and_keys_pages_and_back_tab_walks_back() {
     let (_dir, mut config, _paths) = temp_config_paths();
     let mut dialog = Dialog::Settings(SettingsDialog::default());
-    press(&mut dialog, KeyCode::Tab, &mut config);
-    let Dialog::Settings(settings) = &dialog else {
-        panic!("not the settings dialog");
+    let page = |dialog: &Dialog| match dialog {
+        Dialog::Settings(settings) => settings.page,
+        _ => panic!("not the settings dialog"),
     };
-    assert_eq!(settings.page, Page::Qa);
-    press(&mut dialog, KeyCode::Tab, &mut config);
-    let Dialog::Settings(settings) = &dialog else {
-        panic!("not the settings dialog");
-    };
-    assert_eq!(settings.page, Page::Chat);
+    for expected in [Page::Qa, Page::Keys, Page::Chat] {
+        press(&mut dialog, KeyCode::Tab, &mut config);
+        assert_eq!(page(&dialog), expected);
+    }
+    press(&mut dialog, KeyCode::BackTab, &mut config);
+    assert_eq!(page(&dialog), Page::Keys);
 }
 
 #[test]
@@ -208,4 +208,28 @@ fn the_qa_page_draws_its_sections_and_hides_the_secret() {
         !drawn.contains("0123456789abcdef0123"),
         "the secret is on screen"
     );
+}
+
+/// `s` opens settings only where it is free. On the board it starts a task, so
+/// `,` opens them from every view.
+#[test]
+fn comma_opens_settings_from_every_view() {
+    use crossterm::event::{KeyEvent, KeyModifiers};
+    for view in [
+        crate::ui::state::View::Sessions,
+        crate::ui::state::View::Board,
+        crate::ui::state::View::Deploy,
+    ] {
+        let (_dir, mut state) = crate::ui::tests::sessions_state();
+        state.view = view;
+        crate::ui::keys::handle_key(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE),
+            ratatui::layout::Rect::new(0, 0, 120, 40),
+        );
+        assert!(
+            matches!(state.dialog, Some(Dialog::Settings(_))),
+            "{view:?} did not open settings"
+        );
+    }
 }

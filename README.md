@@ -249,7 +249,22 @@ One binary, one install. The original shipped seven executables; they are now su
 
 ## Shortcuts
 
-Audited against the key maps themselves, not against this document.
+Audited against the key maps themselves, not against this document. The key table in
+`src/ui/keymap.rs` drives the status bar, the `?` help and the settings Keys page.
+
+**Keys by role.** Each role sees and gets only its own keys. The QA role does not get the keys
+that start or resume development work: `s`, `v`, `C`, `P`, `S`, `M`, `D` on the board and `R`
+on the Deploy tab. The dev role does not get the QA run keys: `R`, `A` and `]` on the board. The
+PM role keeps every key. A key your role does not get does nothing, and the status line says
+why.
+
+**The status bar** shows the most useful keys that fit the terminal's width, and always ends
+with `? keys` and `q quit`. `?` lists every key for the view.
+
+**Your own keys.** Press `,`, then `Tab` to the Keys page. `Enter` on a key waits for the new
+one, and `Backspace` puts the default back. A key that already does something where the new
+one would work is refused, and the page says which. Navigation keys, `Enter`, `Tab`, `Space`,
+`j`, `k`, `q`, `Q` and `?` cannot be changed. The tables below list the defaults.
 
 ### Everywhere
 
@@ -262,6 +277,8 @@ Audited against the key maps themselves, not against this document.
 | `r` | Refresh this view |
 | `u` | Take a plan-usage reading (it spends one request against the quota it reports) |
 | `l`, `L` | Today's standup log, `←→` to browse days |
+| `,` | Settings: the chat page and, with `Tab`, the QA and Keys pages. `,` closes them again |
+| `?` | Every key for this view, as you have them, for your role |
 
 `r` renames instead of refreshing when the sessions tree is focused on a session row, and
 `L` on the Deploy tab shows that project's output instead of the log.
@@ -279,7 +296,7 @@ Audited against the key maps themselves, not against this document.
 | `X` | **Purge** — kill *and close the tab of* every session whose task has finished. Unrecognised stages are kept and named; sessions with no task are never purged |
 | `r` | Rename the selected session |
 | `a` / `d` | Add a group / remove the group under the cursor |
-| `s` | Settings. `Tab` switches between the chat page and the QA page: role, QA runs, notifications, the health gate, Auto QA per project, and your other machines |
+| `s` | Settings (also `,`, from any view) |
 
 ### The right-hand pane (`Shift-Tab` to focus it — works on every view)
 
@@ -291,7 +308,7 @@ Audited against the key maps themselves, not against this document.
 | `t` | Timestamps |
 | `f` | Message filter: all → user → assistant |
 | `/` | Search the conversation |
-| `s` | Settings. `Tab` switches between the chat page and the QA page: role, QA runs, notifications, the health gate, Auto QA per project, and your other machines |
+| `s` | Settings (also `,`, from any view) |
 
 ### Board
 
@@ -301,23 +318,23 @@ Audited against the key maps themselves, not against this document.
 | `Enter` | Action menu for the row |
 | `→` | Expand; on a row with nothing left to expand, show its detail |
 | `←` | Collapse |
-| `s` | Start the task — writes the prompt, opens a terminal, links the session |
-| `v` | Resume for a revision, with the prior conversation as context |
-| `C` | Resume the conversation with no prompt and no stage move |
-| `P` | The pipeline this project will actually run |
-| `S` | SSH to the project's server |
+| `s` | Start the task — writes the prompt, opens a terminal, links the session. Not QA |
+| `v` | Resume for a revision, with the prior conversation as context. Not QA |
+| `C` | Resume the conversation with no prompt and no stage move. Not QA |
+| `P` | The pipeline this project will actually run. Not QA |
+| `S` | SSH to the project's server. Not QA |
 | `m` | Move to another stage |
 | `o` | Open the task in a browser |
 | `g` / `G` | Go to the live session working this task / raise its terminal |
-| `D` | The auto-dev daemon's run logs for this task |
+| `D` | The auto-dev daemon's run logs for this task. Not QA |
 | `f` | Filter: mine ↔ all |
 | `p` | Choose which projects load |
-| `M` | Your open merge requests |
+| `M` | Your open merge requests. Not QA |
 | `x` | Dismiss the selected notification. On the `🔔 Notifications` header, clear the whole feed (every row is marked resolved) |
 | `a` | Answer the selected question or verdict as yourself |
-| `]` | Jump to the next agent waiting on a decision |
-| `R` | Watch the selected stage as a QA run |
-| `A` | Switch Auto QA on or off for the selected row's project, on this machine |
+| `]` | Jump to the next agent waiting on a decision. Not dev |
+| `R` | Watch the selected stage as a QA run. Not dev |
+| `A` | Switch Auto QA on or off for the selected row's project, on this machine. Not dev |
 
 ### Auto QA
 
@@ -431,7 +448,7 @@ or over 8 hours (a session left open).
 | `→` `←` | Expand and preview / collapse |
 | `m` | Merge this task's merge request |
 | `M` | Merge every ready MR in the project, one at a time, reporting each |
-| `R` | Hand a conflicted MR back to the session that wrote the branch |
+| `R` | Hand a conflicted MR back to the session that wrote the branch. Not QA |
 | `d` | Run the project's deploy command |
 | `X` | Cancel the running deploy (SIGTERM) |
 | `L` | This project's deploy output |
@@ -466,7 +483,7 @@ or over 8 hours (a session left open).
 
 ## Configuration
 
-Most QA settings are on the settings dialog's QA page (`s`, then `Tab`), and each change
+Most QA settings are on the settings dialog's QA page (`,` from any view, then `Tab`), and each change
 saves at once: the role, the lane limit, refilling lanes, the coordinator mode, alerts,
 "New in QA", the health gate, Auto QA per project, and the peer check. On that page `g`
 makes a new peer secret and shows it once, so you can put the same one on your other
@@ -535,6 +552,7 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | `chat.conversationWidth` | `25` | Pane width as a percentage, clamped to 10–80 |
 | `chat.swapPanels` | `false` | Put the conversation on the left |
 | `chat.showSessionHeader` | `true` | The token/last-activity line at the top of the pane |
+| `keys` | `{}` | Your own keys: binding id → one character, for example `{"board.stage": "w"}`. The settings Keys page writes it. The ids are in `src/ui/keymap.rs`. A bad line is ignored, and the key keeps its default |
 
 ### Alerts, sounds, usage, daemon
 

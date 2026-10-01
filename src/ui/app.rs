@@ -15,6 +15,7 @@ use crate::ui::components::{
     keep_visible, render_content, render_header, render_list, render_status, split,
 };
 use crate::ui::conversation::build_conversation_lines;
+use crate::ui::keymap::{Keymap, Scope};
 use crate::ui::spans::wrap_line;
 use crate::ui::state::{AppState, Pane, View};
 use crate::ui::tree::{build_grouped_tree_with, format_tree_item, TreeItem};
@@ -67,29 +68,27 @@ fn draw_list(frame: &mut Frame, state: &mut AppState, area: Rect) {
     }
 }
 
-/// The board's key hints, for the role at the keyboard. The QA role has no
-/// `s`, `v` or `C`, so its hints lead with what a reviewer does instead.
-pub(crate) fn board_hints(role: crate::types::UserRole) -> [&'static str; 6] {
-    let launch = if role.shows_dev_actions() {
-        "s start   v revise   C resume chat   P pipeline   m stage"
-    } else {
-        "Enter → QA / QA dry run / brief   P pipeline   m stage"
-    };
-    [
-        "Select a task (→) to preview, Enter for its action menu.",
-        "",
-        launch,
-        "R watch a stage as a QA run   ] next agent waiting   a answer",
-        "g session   G terminal   o browser   S ssh   M MRs   D logs",
-        "f mine/all   p projects   x dismiss (on the 🔔 header: clear all)",
-    ]
+/// The board's key hints, for the role at the keyboard and with its own
+/// keys. The QA role has no `s`, `v` or `C`, so its hints lead with what a
+/// reviewer does instead.
+pub(crate) fn board_hints(keymap: &Keymap) -> Vec<String> {
+    let mut lines = vec![
+        "Select a task (→) to preview, Enter for its action menu.".to_string(),
+        String::new(),
+    ];
+    if !keymap.role().shows_dev_actions() {
+        lines.push("Enter → QA / QA dry run / brief".to_string());
+    }
+    lines.extend(crate::ui::keymap::key_lines(keymap, Scope::Board, 5));
+    lines.push("x on the 🔔 header: clear all   ? every key".to_string());
+    lines
 }
 
-fn placeholder_lines(text: &[&str]) -> Vec<Line<'static>> {
+fn placeholder_lines<S: AsRef<str>>(text: &[S]) -> Vec<Line<'static>> {
     text.iter()
         .map(|line| {
             Line::from(ratatui::text::Span::styled(
-                (*line).to_string(),
+                line.as_ref().to_string(),
                 ratatui::style::Style::default().fg(crate::ui::theme::color_from_name("gray")),
             ))
         })
@@ -266,7 +265,10 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
             ),
             None => (
                 " Task ".to_string(),
-                placeholder_lines(&board_hints(state.role)),
+                placeholder_lines(&board_hints(&Keymap::new(
+                    state.role,
+                    state.config.key_overrides(),
+                ))),
             ),
         },
         (None, View::Deploy) => match &state.deploy.detail {
@@ -278,21 +280,17 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
                     .map(|row| crate::ui::spans::row_line(row))
                     .collect(),
             ),
-            None => (
-                " Deploy ".to_string(),
-                placeholder_lines(&[
-                    "Press r to load the deploy board — it never refreshes on its own,",
-                    "because every refresh costs a GitLab call per open merge request.",
-                    "",
-                    "→ preview   Enter menu   m merge   M merge all ready",
-                    if state.role.shows_dev_actions() {
-                        "R resolve conflicts   d deploy   X cancel   L output"
-                    } else {
-                        "d deploy   X cancel   L output"
-                    },
-                    "g session   G terminal   o open MR   t open task   c configure",
-                ]),
-            ),
+            None => {
+                let keymap = Keymap::new(state.role, state.config.key_overrides());
+                let mut text = vec![
+                    "Press r to load the deploy board — it never refreshes on its own,".to_string(),
+                    "because every refresh costs a GitLab call per open merge request.".to_string(),
+                    String::new(),
+                    "→ preview   Enter menu".to_string(),
+                ];
+                text.extend(crate::ui::keymap::key_lines(&keymap, Scope::Deploy, 5));
+                (" Deploy ".to_string(), placeholder_lines(&text))
+            }
         },
     };
 
@@ -322,71 +320,28 @@ fn draw_detail(frame: &mut Frame, state: &mut AppState, area: Rect) {
 fn draw_status(frame: &mut Frame, state: &AppState, area: Rect) {
     let clock = Local::now().format("%I:%M:%S %p").to_string();
     let feed = state.feed.label(std::time::Instant::now());
-    render_status(frame, area, &clock, &feed, &status_hints(state));
+    // What the clock and feed take: " {clock}  │ {feed} │".
+    let used = clock.chars().count() + feed.chars().count() + 7;
+    let keymap = Keymap::new(state.role, state.config.key_overrides());
+    let hints = crate::ui::keymap::fit_hints(
+        &keymap,
+        status_hints(state),
+        (area.width as usize).saturating_sub(used),
+    );
+    let hints: Vec<(&str, &str)> = hints
+        .iter()
+        .map(|(key, word)| (key.as_str(), *word))
+        .collect();
+    render_status(frame, area, &clock, &feed, &hints);
 }
 
-/// The contextual key hints. Each view advertises only what it can actually do
-/// right now — a hint for a key that does nothing is worse than no hint.
-pub fn status_hints(state: &AppState) -> Vec<(&'static str, &'static str)> {
-    let mut hints: Vec<(&'static str, &'static str)> = vec![("Tab", "view")];
-    match state.view {
-        View::Sessions => {
-            hints.extend([
-                ("S-Tab", "panel"),
-                ("←→", "expand"),
-                ("Enter", "select"),
-                ("o", "terminal"),
-                ("x", "kill"),
-                ("r", "rename"),
-                ("n", "new"),
-                ("F", "folders"),
-                ("a/d", "group"),
-            ]);
-            if state.focus == Pane::Conversation {
-                hints.extend([
-                    ("t", "ts"),
-                    ("f", "filter"),
-                    ("/", "search"),
-                    ("g/G", "top/end"),
-                ]);
-            }
-            hints.push(("s", "settings"));
-        }
-        View::Board => hints.extend([
-            ("←→", "expand"),
-            ("Enter", "menu"),
-            ("s", "start"),
-            ("R", "QA run"),
-            ("]", "next ask"),
-            ("a", "answer"),
-            ("v", "revise"),
-            ("C", "chat"),
-            ("P", "pipeline"),
-            ("m", "stage"),
-            ("g/G", "session"),
-            ("o", "browser"),
-            ("S", "ssh"),
-            ("f", "filter"),
-            ("p", "projects"),
-            ("r", "refresh"),
-        ]),
-        View::Deploy => hints.extend([
-            ("←→", "expand"),
-            ("Enter", "menu"),
-            ("m/M", "merge"),
-            ("R", "conflicts"),
-            ("d", "deploy"),
-            ("X", "cancel"),
-            ("L", "output"),
-            ("g/G", "session"),
-            ("o", "MR"),
-            ("t", "task"),
-            ("c", "config"),
-            ("r", "refresh"),
-        ]),
-    }
-    hints.extend([("q", "quit"), ("Q", "stop all")]);
-    hints
+/// The contextual key hints, most useful first. Each view advertises only
+/// what it can do right now and what the role is offered — a hint for a key
+/// that does nothing is worse than no hint. The bar shows as many as fit, then
+/// `? keys` and `q quit`. See [`crate::ui::keymap`].
+pub fn status_hints(state: &AppState) -> Vec<(String, &'static str)> {
+    let keymap = Keymap::new(state.role, state.config.key_overrides());
+    crate::ui::keymap::hints(&keymap, state.view, state.focus)
 }
 
 /// How many QA agents are waiting on a decision, across every run.

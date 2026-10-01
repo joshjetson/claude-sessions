@@ -5,15 +5,18 @@
 //! a file or draws — so a whole key sequence can be replayed in a test and the
 //! resulting state and action queue inspected.
 
+use std::ops::ControlFlow;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::term::SessionRef;
 use crate::ui::board::handle_board;
 use crate::ui::dialogs::{
-    AddGroup, Dialog, DialogCtx, KillConfirm, LogViewer, PurgeConfirm, Rename, Search,
+    AddGroup, Dialog, DialogCtx, HelpDialog, KillConfirm, LogViewer, PurgeConfirm, Rename, Search,
     SettingsDialog, ShutdownConfirm,
 };
+use crate::ui::keymap::{Keymap, Routed, Scope};
 use crate::ui::state::{Action, AppState, Pane, Quit, View};
 use crate::ui::tree::{build_grouped_tree_with, SelectedRow, TreeItem};
 
@@ -90,15 +93,34 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
         return;
     }
 
-    if handle_global(state, key) {
+    // Each scope sees the key as its handler knows it: a key you remapped
+    // arrives as the default it replaced. See [`crate::ui::keymap`].
+    let keymap = Keymap::new(state.role, state.config.key_overrides());
+    let ControlFlow::Continue(global) = route(state, &keymap, Scope::Global, key) else {
+        return;
+    };
+    if global.is_some_and(|global| handle_global(state, global, &keymap)) {
         return;
     }
     // The right-hand pane's keys, on EVERY view — Node routed them before the
     // per-view map (`App.js:251-253`). Without this a task description or a
     // deploy log longer than the pane could not be read past its first page.
-    if state.focus == Pane::Conversation && handle_conversation(state, key) {
-        return;
+    if state.focus == Pane::Conversation {
+        let ControlFlow::Continue(pane) = route(state, &keymap, Scope::Conversation, key) else {
+            return;
+        };
+        if pane.is_some_and(|pane| handle_conversation(state, pane)) {
+            return;
+        }
     }
+    let scope = match state.view {
+        View::Sessions => Scope::Sessions,
+        View::Board => Scope::Board,
+        View::Deploy => Scope::Deploy,
+    };
+    let ControlFlow::Continue(Some(key)) = route(state, &keymap, scope, key) else {
+        return;
+    };
     match state.view {
         View::Sessions => handle_sessions(state, key),
         View::Board => handle_board(state, key),
@@ -106,8 +128,28 @@ pub fn handle_key(state: &mut AppState, key: KeyEvent, area: Rect) {
     }
 }
 
+/// What one scope does with a key: `Continue(Some)` hands it to the scope's
+/// handler as the handler knows it, `Continue(None)` passes it to the next
+/// scope, and `Break` stops because the role is not offered it. The reason is
+/// said, so the key does not look broken.
+fn route(
+    state: &mut AppState,
+    keymap: &Keymap,
+    scope: Scope,
+    key: KeyEvent,
+) -> ControlFlow<(), Option<KeyEvent>> {
+    match keymap.route(scope, key) {
+        Routed::Key(key) => ControlFlow::Continue(Some(key)),
+        Routed::Skip => ControlFlow::Continue(None),
+        Routed::Refused(reason) => {
+            state.flash(reason);
+            ControlFlow::Break(())
+        }
+    }
+}
+
 /// Keys that mean the same thing everywhere. Returns true when it took the key.
-fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
+fn handle_global(state: &mut AppState, key: KeyEvent, keymap: &Keymap) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match key.code {
         // Detach. In remote mode the daemon keeps running — that is the point of
@@ -142,6 +184,13 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
             };
             true
         }
+        // Settings, from every view. `s` opens them only where it is free: on
+        // the board it starts a task, and a settings key that means
+        // something else on half the screens is one nobody can find.
+        KeyCode::Char(',') => {
+            state.dialog = Some(Dialog::Settings(SettingsDialog::default()));
+            true
+        }
         // Plan usage is itself a request against the quota it reports, so it
         // is manual unless a `usage.intervalMinutes` is configured.
         KeyCode::Char('u') => {
@@ -165,7 +214,12 @@ fn handle_global(state: &mut AppState, key: KeyEvent) -> bool {
             state.dirty = true;
             true
         }
-        KeyCode::Char('r') if !renames_instead(state) => {
+        // Every key for this view, as you have them now.
+        KeyCode::Char('?') => {
+            state.dialog = Some(Dialog::Help(HelpDialog::new(keymap, state.view)));
+            true
+        }
+        KeyCode::Char('r') if !renames_instead(state, keymap) => {
             state.enqueue(Action::Refresh);
             // On the board and deploy tabs `r` is also the retry the error
             // message asks for, so it refetches rather than only rescanning
@@ -215,9 +269,14 @@ fn open_purge(state: &mut AppState) {
 }
 
 /// `r` is refresh everywhere except on a session row, where it renames — the one
-/// place the Node app overloaded a global key.
-fn renames_instead(state: &AppState) -> bool {
+/// place the Node app overloaded a global key. Only while both still share a
+/// key: a rename moved to a key of its own leaves `r` as refresh everywhere.
+fn renames_instead(state: &AppState, keymap: &Keymap) -> bool {
     if state.view != View::Sessions || state.focus != Pane::Tree {
+        return false;
+    }
+    let key_of = |id| Keymap::binding(id).map(|binding| keymap.key_of(binding));
+    if key_of("sessions.rename") != key_of("global.refresh") {
         return false;
     }
     matches!(tree_snapshot(state).row, Some(SelectedRow::Session { .. }))

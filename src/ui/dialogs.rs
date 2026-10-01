@@ -19,6 +19,8 @@ pub mod deploy_config;
 pub mod deploy_confirm;
 pub mod folders;
 pub mod gates;
+pub mod help;
+pub mod key_settings;
 pub mod log;
 pub mod merge;
 pub mod mrs;
@@ -50,6 +52,7 @@ pub use deploy_config::{DeployConfig, DeployField};
 pub use deploy_confirm::{DeployConfirm, ResolveConflictConfirm};
 pub use folders::{DirPicker, FolderManager, SavedDirPicker, TargetBranch};
 pub use gates::{AlreadyRunning, BlockedBy};
+pub use help::HelpDialog;
 pub use log::{DaemonLogs, LogViewer};
 pub use merge::{MergeAllConfirm, MergeConfirm, MERGE_ALL_LISTED};
 pub use mrs::OpenMrs;
@@ -173,6 +176,7 @@ pub enum Dialog {
     Search(Search),
     Settings(SettingsDialog),
     Shutdown(ShutdownConfirm),
+    Help(HelpDialog),
     FileViewer(FileViewer),
     LogViewer(Box<LogViewer>),
     PurgeConfirm(PurgeConfirm),
@@ -220,6 +224,7 @@ impl Dialog {
             Dialog::Search(dialog) => dialog.handle_key(key, ctx),
             Dialog::Settings(dialog) => dialog.handle_key(key, ctx),
             Dialog::Shutdown(dialog) => dialog.handle_key(key),
+            Dialog::Help(dialog) => dialog.handle_key(key),
             Dialog::FileViewer(dialog) => match dialog.handle_key(key, area) {
                 ViewerOutcome::Stay => DialogOutcome::Stay,
                 ViewerOutcome::Close => DialogOutcome::Close,
@@ -278,6 +283,7 @@ impl Dialog {
             Dialog::Search(dialog) => dialog.render(frame, area),
             Dialog::Settings(dialog) => dialog.render(frame, area, config),
             Dialog::Shutdown(dialog) => dialog.render(frame, area),
+            Dialog::Help(dialog) => dialog.render(frame, area),
             Dialog::FileViewer(dialog) => {
                 // The only I/O in a render path, and it is a stat: the file is
                 // re-read only when its mtime moved (brief §10 mandate #8).
@@ -323,6 +329,7 @@ impl Dialog {
             Dialog::Search(_) => "search",
             Dialog::Settings(_) => "settings",
             Dialog::Shutdown(_) => "shutdown",
+            Dialog::Help(_) => "help",
             Dialog::FileViewer(_) => "fileViewer",
             Dialog::LogViewer(_) => "logViewer",
             Dialog::PurgeConfirm(_) => "purgeConfirm",

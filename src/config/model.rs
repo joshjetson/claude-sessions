@@ -91,6 +91,11 @@ pub struct Config {
     /// Stage a task moves to when work starts on it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_progress_stage: Option<OneOrMany>,
+    /// Binding id -> the key you chose for it, one character each. The
+    /// settings dialog's Keys page writes it. See [`crate::ui::keymap`].
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(deserialize_with = "lenient")]
+    pub keys: BTreeMap<String, String>,
     /// Session id -> the name you gave that session.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     #[serde(deserialize_with = "lenient")]
