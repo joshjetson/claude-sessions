@@ -74,6 +74,12 @@ pub struct Entry {
     /// Payload of a `progress` line.
     #[serde(deserialize_with = "shape_or_none")]
     pub data: Option<ProgressData>,
+    /// Set on the message Claude Code writes when an API call failed.
+    #[serde(deserialize_with = "shape_or_none")]
+    pub is_api_error_message: Option<bool>,
+    /// The failure's kind on such a message, for example `rate_limit`.
+    #[serde(deserialize_with = "shape_or_none")]
+    pub error: Option<String>,
 }
 
 /// `entry.message` — the API-shaped payload.
@@ -419,6 +425,38 @@ impl Entry {
             // The accumulator fills this in: it is a property of every line
             // folded so far, not of this one alone.
             activity_at: None,
+            api_error: self.api_error(),
         }
+    }
+
+    /// The failure this line records, when it is Claude Code's API-error
+    /// message.
+    fn api_error(&self) -> Option<crate::types::ApiError> {
+        if self.is_api_error_message != Some(true) {
+            return None;
+        }
+        let text = self
+            .message
+            .as_ref()
+            .and_then(|message| match &message.content {
+                Content::Text(text) => Some(text.clone()),
+                Content::Blocks(blocks) => blocks.iter().find_map(|block| match block {
+                    ContentBlock::Text(text) | ContentBlock::Raw(text) => Some(text.clone()),
+                    _ => None,
+                }),
+                Content::Absent => None,
+            })
+            .unwrap_or_default();
+        let first_line: String = text
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .chars()
+            .take(160)
+            .collect();
+        Some(crate::types::ApiError {
+            kind: self.error.clone().unwrap_or_else(|| "unknown".to_string()),
+            text: first_line,
+        })
     }
 }

@@ -121,6 +121,7 @@ impl<S: ProcessSource> EngineInner<S> {
         // before this tick's linking, so a session linked a moment ago is not
         // immediately judged for silence.
         self.notify_awaiting_decisions_in(&sessions, &hooked, now, complete);
+        self.notify_api_errors(&sessions, complete);
         self.notify_stalled_sessions(&sessions, now);
         self.auto_archive_vanished_sessions(&sessions, scanner.task_refs());
         self.link_pending_sessions(&sessions, now);

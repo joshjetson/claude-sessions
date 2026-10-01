@@ -14,6 +14,7 @@
 //! backend is a recorder, and the spawn policy refuses.
 
 mod alerts;
+mod apierr;
 mod archive;
 mod autoqa;
 mod awaiting;

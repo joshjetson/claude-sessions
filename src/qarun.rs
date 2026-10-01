@@ -41,6 +41,9 @@ pub const STALL: Duration = Duration::from_secs(15 * 60);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QaStatus {
     Asks,
+    /// The session stopped on an API error or the usage limit. It does not
+    /// resume on its own, so it needs the reviewer.
+    Stopped,
     Stalled,
     Revisions,
     Pass,
@@ -57,6 +60,7 @@ impl QaStatus {
     pub fn glyph(self) -> &'static str {
         match self {
             QaStatus::Asks => "⏸",
+            QaStatus::Stopped => "■",
             QaStatus::Stalled => "⚠",
             QaStatus::Revisions => "✗",
             QaStatus::Pass => "✓",
@@ -68,6 +72,7 @@ impl QaStatus {
     pub fn label(self) -> &'static str {
         match self {
             QaStatus::Asks => "asks you",
+            QaStatus::Stopped => "stopped",
             QaStatus::Stalled => "stalled",
             QaStatus::Revisions => "REVISION",
             QaStatus::Pass => "PASS",
@@ -78,7 +83,7 @@ impl QaStatus {
 
     /// Whether this is a row the reviewer has to do something about.
     pub fn wants_attention(self) -> bool {
-        matches!(self, QaStatus::Asks | QaStatus::Stalled)
+        matches!(self, QaStatus::Asks | QaStatus::Stopped | QaStatus::Stalled)
     }
 }
 
@@ -263,6 +268,17 @@ pub fn qa_task_status(
         return QaStatus::Asks;
     }
 
+    // A session stopped on an API error has a reason to be quiet, and it is not
+    // one that waiting fixes.
+    if session.is_some_and(|session| {
+        session
+            .last_entry
+            .as_ref()
+            .is_some_and(|entry| entry.api_error.is_some())
+    }) {
+        return QaStatus::Stopped;
+    }
+
     if let (Some(session), Some(now)) = (session, now) {
         // `duration_since` errs when the file is stamped in the future, which a
         // clock change can do. That is not silence, so it reads as zero.
@@ -326,6 +342,7 @@ pub struct RunSummary {
     pub total: usize,
     pub done: usize,
     pub asking: usize,
+    pub stopped: usize,
     pub stalled: usize,
     pub testing: usize,
     pub queued: usize,
@@ -340,7 +357,7 @@ impl RunSummary {
 
     /// Whether anything in this run is waiting on the reviewer.
     pub fn wants_attention(&self) -> bool {
-        self.asking > 0 || self.stalled > 0
+        self.asking > 0 || self.stopped > 0 || self.stalled > 0
     }
 }
 
@@ -351,6 +368,7 @@ pub fn run_summary(entries: &[RunEntry<'_>]) -> RunSummary {
         total: entries.len(),
         done,
         asking: count(QaStatus::Asks),
+        stopped: count(QaStatus::Stopped),
         stalled: count(QaStatus::Stalled),
         testing: count(QaStatus::Testing),
         queued: count(QaStatus::Queued),
@@ -472,6 +490,9 @@ pub fn run_header_text(run: &QaRun, summary: &RunSummary, wide: bool) -> String 
     }
     if summary.asking > 0 {
         parts.push(format!("{} ask", summary.asking));
+    }
+    if summary.stopped > 0 {
+        parts.push(format!("{} stopped", summary.stopped));
     }
     if summary.stalled > 0 {
         parts.push(format!("{} stalled", summary.stalled));

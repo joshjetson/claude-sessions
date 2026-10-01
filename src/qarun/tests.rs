@@ -156,6 +156,31 @@ fn a_silent_session_is_stalled_even_with_a_verdict_on_disk() {
     );
 }
 
+/// A session stopped on an API error, or on the usage limit, does not go on
+/// by itself. It needs the reviewer, so it ranks just after a question, and it
+/// outranks a silence that waiting might end.
+#[test]
+fn a_session_stopped_on_an_api_error_is_stopped() {
+    let mut stopped = session_silent_for(STALL + Duration::from_secs(1));
+    stopped.last_entry = Some(crate::types::LastEntry {
+        api_error: Some(crate::types::ApiError {
+            kind: "rate_limit".to_string(),
+            text: "You've hit your session limit".to_string(),
+        }),
+        ..crate::types::LastEntry::default()
+    });
+    assert_eq!(
+        qa_task_status(None, Some(&stopped), false, Some(now())),
+        QaStatus::Stopped
+    );
+    assert_eq!(
+        qa_task_status(None, Some(&stopped), true, Some(now())),
+        QaStatus::Asks
+    );
+    assert!(QaStatus::Stopped.wants_attention());
+    assert!(QaStatus::Asks < QaStatus::Stopped && QaStatus::Stopped < QaStatus::Stalled);
+}
+
 #[test]
 fn a_session_just_under_the_threshold_is_still_testing() {
     let nearly = session_silent_for(STALL - Duration::from_secs(1));

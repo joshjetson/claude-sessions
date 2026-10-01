@@ -26,7 +26,7 @@ pub use notify::{Notification, NotificationKind, NotificationLevel, Notification
 pub use role::{NotificationPolicy, UserRole};
 pub use session::{RawSession, Session, SessionFile, SessionStatus};
 pub use transcript::{
-    ConversationMessage, CumulativeUsage, EntryKind, LastEntry, MessageRole, ParsedSession,
-    ProgressData, Prompt, SessionMetaLite, Usage,
+    ApiError, ConversationMessage, CumulativeUsage, EntryKind, LastEntry, MessageRole,
+    ParsedSession, ProgressData, Prompt, SessionMetaLite, Usage,
 };
 pub use ui::{Color, DefaultView, TerminalDriverName};

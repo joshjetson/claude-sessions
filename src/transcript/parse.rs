@@ -109,6 +109,15 @@ impl Accumulator {
             }
             let mut projection = entry.last_entry();
             projection.activity_at = self.activity_at.as_ref().map(|(_, raw)| raw.clone());
+            // The `turn_duration` line that closes a turn an API error stopped
+            // is the end of that same turn, not news. Without this it hid the
+            // error, and the session read as an ordinary idle one.
+            if projection.subtype.as_deref() == Some("turn_duration") {
+                projection.api_error = self
+                    .last_entry
+                    .as_ref()
+                    .and_then(|previous| previous.api_error.clone());
+            }
             self.last_entry = Some(projection);
         }
 

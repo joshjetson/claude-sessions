@@ -545,6 +545,7 @@ never rings.
 |---|---|---|
 | A session asked you a question | ✓ | ✓ |
 | A session waits on a permission prompt | ✓ | ✓, with no sound |
+| A session stopped on an API error or the usage limit | ✓ | ✓ |
 | A QA verdict (`QA #N: PASS` or `REVISION REQUIRED`), once per task and round | ✓ | ✓ |
 | A task was blocked | ✓ | ✓ |
 | A task finished | ✓ | — |
@@ -566,6 +567,11 @@ Every role gets these rules:
   PASS or REVISION REQUIRED of a round rings. Later posts, such as a revised note, rewrite the
   row in silence. A `CHECKPOINT` never rings. The next round, read from QAden's `run.json`,
   gets a new row.
+- **Stopped sessions.** When an API call fails (a timeout, `529 Overloaded`, the computer
+  sleeping mid-response) or the usage limit is hit, Claude Code ends the turn and the
+  session waits. It rings once, says why, and the row goes when the session moves on. The
+  session reads `stopped: API error` or `stopped: usage limit`, and a QA run row reads
+  `■ stopped`, just after `asks you`.
 - **Restarts.** After a daemon restart, a row for a session that is still waiting is kept and
   does not ring again. A row for a session that stopped waiting is cleared.
 
