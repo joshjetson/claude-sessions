@@ -169,9 +169,21 @@ fn the_feed_is_published_and_rides_the_snapshot() {
     assert_eq!(published[0].arrivals.len(), 1);
     assert_eq!(w.harness.engine.snapshot().auto_qa, published[0]);
 
-    // No change, no event.
+    // A read with nothing new still publishes, because the check time is
+    // what the dashboard's "checked 8s ago" reads. Only the time moves.
+    std::thread::sleep(std::time::Duration::from_millis(2));
     w.harness.inner().watch_auto_qa();
-    assert_eq!(events.try_iter().count(), 0);
+    let again: Vec<AutoQaFeed> = events
+        .try_iter()
+        .filter_map(|event| match event {
+            EngineEvent::AutoQa(feed) => Some(*feed),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(again.len(), 1);
+    assert_ne!(again[0].checked_at, published[0].checked_at);
+    assert_eq!(again[0].tasks, published[0].tasks);
+    assert_eq!(again[0].arrivals, published[0].arrivals);
 }
 
 #[test]
