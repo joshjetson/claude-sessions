@@ -32,7 +32,7 @@ pub mod spec;
 pub mod start;
 pub mod view;
 
-pub use autoqa::apply_auto_qa;
+pub use autoqa::{apply_auto_qa, ask_for_auto_qa_check, auto_qa_badge, auto_qa_status_line};
 pub use controller::{
     focus_task_terminal, go_to_task_session, match_session_by_cwd, resolve_notif_session,
     run_task_sessions, task_session, task_sessions, FocusTarget, SessionTarget,

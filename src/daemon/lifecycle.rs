@@ -26,6 +26,10 @@ const FAST_TICK: Duration = Duration::from_millis(500);
 /// The slow cadence: the board poll, the new-assignment watcher and the QA
 /// arrival watcher.
 const SLOW_TICK: Duration = Duration::from_secs(45);
+/// How often Auto QA reads the QA stages. Faster than the slow tick, because
+/// a task waiting to start is the one thing here a person sits and watches.
+/// The read runs on a worker, so it never holds up the sessions list.
+pub const AUTO_QA_TICK: Duration = Duration::from_secs(15);
 /// How often the machine's health is read while `qa.healthGate` is on. About
 /// 20 ms of four small commands, so often enough that the queue reacts within
 /// a lane's start, and cheap enough not to matter.
@@ -138,8 +142,8 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
 }
 
 /// The one timer thread: sessions at 1s (500ms while a launch is in flight),
-/// markers on the same beat, the assignment watcher every 45s, and usage on its
-/// configured interval.
+/// markers on the same beat, the assignment watcher every 45s, Auto QA every
+/// 15s, and usage on its configured interval.
 ///
 /// One thread with deadlines rather than Node's four `setInterval`s: they
 /// cannot drift apart, a slow tick cannot overlap itself, and there is exactly
@@ -149,6 +153,7 @@ fn run_loop<S: ProcessSource + Send + 'static>(
     usage_interval: Option<Duration>,
 ) {
     let mut next_slow = Instant::now() + SLOW_TICK;
+    let mut next_auto_qa = Instant::now() + AUTO_QA_TICK;
     let mut next_health = Instant::now();
     let mut next_usage = usage_interval.map(|interval| Instant::now() + interval);
 
@@ -161,8 +166,11 @@ fn run_loop<S: ProcessSource + Send + 'static>(
             next_slow = now + SLOW_TICK;
             inner.notify_new_assignments();
             inner.notify_qa_arrivals();
-            inner.watch_auto_qa();
             inner.poll_board();
+        }
+        if now >= next_auto_qa {
+            next_auto_qa = now + AUTO_QA_TICK;
+            inner.check_auto_qa();
         }
         if now >= next_health {
             next_health = now + HEALTH_TICK;

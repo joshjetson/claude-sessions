@@ -33,6 +33,8 @@ pub enum QaRow {
     Separator(&'static str),
     /// A line of explanation under a section.
     Note(&'static str),
+    /// What Auto QA is doing now: what it watches and when it last checked.
+    AutoQaStatus,
     Field(QaField),
 }
 
@@ -63,6 +65,7 @@ pub fn rows(config: &ConfigHandle) -> Vec<QaRow> {
     for project in projects {
         rows.push(QaRow::Field(QaField::AutoQa(project.to_string())));
     }
+    rows.push(QaRow::AutoQaStatus);
     rows.extend([
         QaRow::Separator("──── Your other machines ────"),
         QaRow::Field(QaField::Peers),

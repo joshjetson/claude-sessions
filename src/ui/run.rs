@@ -403,6 +403,7 @@ fn event_loop(
                     if feed.feed().update_notifications(ids.clone(), status) => {}
                 Action::ClearNotifications if feed.feed().clear_notifications() => {}
                 Action::AutoQaJoined(ref keys) if feed.feed().auto_qa_joined(keys.clone()) => {}
+                Action::AutoQaCheck if feed.feed().auto_qa_check() => {}
                 other => {
                     // A task launch has to be registered with the pending queue
                     // BEFORE the terminal opens, or nothing will claim the

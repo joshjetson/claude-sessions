@@ -43,6 +43,10 @@ pub fn draw(frame: &mut Frame, state: &mut AppState) {
     // The dialog is drawn last and over the body, so it is genuinely modal
     // rather than merely on top of one pane.
     if let Some(mut dialog) = state.dialog.take() {
+        if let crate::ui::dialogs::Dialog::Settings(settings) = &mut dialog {
+            settings.auto_qa_status =
+                crate::ui::board::auto_qa_status_line(state, std::time::SystemTime::now());
+        }
         dialog.render(frame, layout.body, &state.config);
         state.dialog = Some(dialog);
     }
@@ -181,7 +185,10 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
 fn draw_board(frame: &mut Frame, state: &mut AppState, area: Rect) {
     let content_h = area.height.saturating_sub(2) as usize;
     state.board.blink_on = Local::now().timestamp() % 2 == 0;
-    let label = crate::ui::board::label(&state.board);
+    let mut label = crate::ui::board::label(&state.board);
+    if let Some(badge) = crate::ui::board::auto_qa_badge(state, std::time::SystemTime::now()) {
+        label.push_str(&format!("· {badge} "));
+    }
 
     // One walk of the row list: the window places itself from the scroll
     // position it is handed, and only the visible rows are formatted.

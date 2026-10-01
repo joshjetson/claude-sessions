@@ -324,8 +324,9 @@ Audited against the key maps themselves, not against this document.
 With Auto QA on for a project, a task that arrives in one of its QA stages
 (`qa.newTaskStages`) starts by itself. You still give the verdict and close the session.
 
-1. The daemon checks the project's QA stages every 45 seconds. A task that arrives joins
-   the QA run for its stage, the same run `R` makes.
+1. The daemon checks the project's QA stages every 15 seconds. When the board shows a
+   task in QA before that check, the dashboard asks the daemon to check at once. A task
+   that arrives joins the QA run for its stage, the same run `R` makes.
 2. The run gets a coordinator if none is running. A running coordinator is told the task
    joined.
 3. The run starts the task when a lane is free. The usual rules hold: no second session on
@@ -344,6 +345,12 @@ The details:
   keyboard to pick one.
 - Starting a session raises no notification. A session tells you when it needs you.
 - Auto QA needs the daemon. The dashboard without one has no Auto QA.
+- The board's title shows Auto QA's state, for example `Auto QA ✓ 8s ago`. The QA page in
+  settings shows it in full: the projects watched, the tasks in QA, the last check, and why
+  that check failed, if it did.
+- `~/.claude-sessions/logs/auto-qa.log` records each step with its time: the arrival (and
+  how long after the stage move the daemon saw it), the join, the coordinator, and the
+  start or the reason the task waits.
 
 **More than one machine.** Auto QA is switched on per machine. With a project on at two of
 your machines, both would start the same task. To stop that, the daemons ask each other
