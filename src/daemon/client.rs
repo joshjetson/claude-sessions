@@ -82,12 +82,37 @@ pub fn request(
     body: Option<&str>,
     timeout: Duration,
 ) -> Option<Response> {
-    let mut stream = TcpStream::connect_timeout(&loopback(port), timeout).ok()?;
+    exchange(loopback(port), method, path, body, timeout)
+}
+
+/// [`request`], to a daemon on another machine: `host` is an address or a
+/// name. Only the Auto QA peer check uses it. See [`super::peers`].
+pub fn request_to(
+    host: &str,
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    timeout: Duration,
+) -> Option<Response> {
+    use std::net::ToSocketAddrs;
+    let address = (host, port).to_socket_addrs().ok()?.next()?;
+    exchange(address, method, path, body, timeout)
+}
+
+fn exchange(
+    address: SocketAddr,
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    timeout: Duration,
+) -> Option<Response> {
+    let mut stream = TcpStream::connect_timeout(&address, timeout).ok()?;
     stream.set_read_timeout(Some(timeout)).ok()?;
     stream.set_write_timeout(Some(timeout)).ok()?;
     let payload = body.unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: {address}\r\nAccept: application/json\r\n\
          Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()
     );

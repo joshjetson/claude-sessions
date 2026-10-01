@@ -238,6 +238,32 @@ impl ConfigHandle {
             .any(|name| name.trim().to_lowercase() == wanted)
     }
 
+    /// How this machine finds its other machines for Auto QA. `secret` is
+    /// `None` when it is unset or too short, and then the daemon neither asks
+    /// nor answers.
+    pub fn qa_peers(&self) -> QaPeers {
+        let qa = self.config.qa.as_ref();
+        QaPeers {
+            hosts: qa
+                .and_then(|qa| qa.peers.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|host| host.trim().to_string())
+                .filter(|host| !host.is_empty())
+                .collect(),
+            secret: qa
+                .and_then(|qa| qa.peer_secret.clone())
+                .filter(|secret| secret.len() >= crate::daemon::MIN_PEER_SECRET_LEN),
+            port: qa
+                .and_then(|qa| qa.peer_port)
+                .unwrap_or(crate::daemon::DEFAULT_PEER_PORT),
+            listen: qa
+                .and_then(|qa| qa.peer_listen.clone())
+                .map(|address| address.trim().to_string())
+                .filter(|address| !address.is_empty()),
+        }
+    }
+
     /// The mode every new coordinator starts in.
     ///
     /// Anything other than `"shadow"` — including an absent block and a typo —
@@ -580,4 +606,13 @@ fn from_minutes(minutes: Option<f64>, fallback: f64) -> Duration {
 
 fn minutes_to_duration(minutes: f64) -> Duration {
     Duration::from_secs_f64(minutes.max(0.0) * 60.0)
+}
+
+/// The resolved peer settings. See [`ConfigHandle::qa_peers`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QaPeers {
+    pub hosts: Vec<String>,
+    pub secret: Option<String>,
+    pub port: u16,
+    pub listen: Option<String>,
 }

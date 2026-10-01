@@ -388,6 +388,72 @@ fn daemon(paths: Paths, config: ConfigHandle, args: DaemonArgs) -> Result<()> {
     }
 }
 
+/// Answer your other machines' Auto QA check, when a peer secret is set. See
+/// `daemon::peers`.
+///
+/// Bound to the Tailscale address, never to every interface: the question it
+/// answers is for your own machines. Every reason it does not start is said
+/// in the daemon log, because a listener that silently is not there looks
+/// exactly like a peer that is asleep.
+fn start_peer_listener<S: crate::scan::ProcessSource + Send + 'static>(
+    engine: &Arc<Engine<S>>,
+    peers: crate::config::QaPeers,
+    spawn: SpawnPolicy,
+) -> Option<crate::daemon::PeerListener> {
+    let secret = peers.secret?;
+    let Some(address) = peers.listen.or_else(|| tailscale_ipv4(spawn)) else {
+        println!("peer listener: no Tailscale address found; set qa.peerListen");
+        return None;
+    };
+    let listener = match std::net::TcpListener::bind((address.as_str(), peers.port)) {
+        Ok(listener) => listener,
+        Err(error) => {
+            println!(
+                "peer listener: could not bind {address}:{}: {error}",
+                peers.port
+            );
+            return None;
+        }
+    };
+    let answering = Arc::clone(engine);
+    match crate::daemon::serve_peers(listener, secret, move || answering.peer_answer()) {
+        Ok(listener) => {
+            engine.set_peer_id(Some(address.clone()));
+            println!("peer listener on {address}:{}", listener.port());
+            Some(listener)
+        }
+        Err(error) => {
+            println!("peer listener: {error}");
+            None
+        }
+    }
+}
+
+/// This machine's Tailscale IPv4 address, from the CLI on the PATH or inside
+/// the macOS app. A daemon started by launchd may not have `/usr/local/bin` on
+/// its PATH, hence the second try.
+fn tailscale_ipv4(spawn: SpawnPolicy) -> Option<String> {
+    let exec = crate::term::Exec::new(spawn);
+    [
+        "tailscale",
+        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+    ]
+    .iter()
+    .find_map(|program| {
+        let output = exec.run(
+            program,
+            &["ip".to_string(), "-4".to_string()],
+            Duration::from_secs(3),
+        );
+        output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| line.parse::<std::net::Ipv4Addr>().is_ok())
+            .map(str::to_string)
+    })
+}
+
 fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
     // Before anything slow: the first refresh scans every process on the
     // machine, and a daemon that cannot be stopped during its own startup gets
@@ -424,11 +490,14 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
     crate::errorlog::install(&paths, "daemon");
     crate::errorlog::chain_panic_hook();
 
+    let peer_settings = config.qa_peers();
     let mut options = daemon_options(paths.clone(), config);
     options.usage = Some(hooks::usage_hook(&paths, options.spawn));
     options.daily_log = Some(hooks::daily_log_hook(&paths));
+    let spawn = options.spawn;
     let engine = Arc::new(Engine::new(options));
     let server = server::serve(Arc::clone(&engine), listener)?;
+    let peers = start_peer_listener(&engine, peer_settings, spawn);
     let _ = protocol::write_daemon_info(&paths, port);
     engine.start();
     println!(
@@ -443,6 +512,9 @@ fn run_daemon(paths: Paths, config: ConfigHandle, port: u16) -> Result<()> {
         }
     }
 
+    if let Some(peers) = &peers {
+        peers.stop();
+    }
     server.stop();
     engine.stop();
     // Only if it still points at us: a newer daemon may have taken the port.

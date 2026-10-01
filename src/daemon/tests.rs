@@ -27,6 +27,7 @@ mod fakes;
 mod linking;
 mod markers;
 mod ordering;
+mod peers;
 mod protocol;
 mod refresh;
 mod remote;

@@ -274,6 +274,12 @@ pub struct EngineState {
     pub qa_watch_paused: bool,
     /// What the dashboard needs for Auto QA. See [`super::autoqa`].
     pub auto_qa: super::autoqa::AutoQaFeed,
+    /// The address this daemon's peer listener is bound to, when it runs. Its
+    /// side of the Auto QA tie-break. See [`super::peers`].
+    pub peer_id: Option<String>,
+    /// Auto QA projects paused here because another of your machines keeps
+    /// them. Kept so the notification is raised once per conflict.
+    pub peer_paused: BTreeSet<String>,
 
     // --- fed by later phases, carried by this one ---------------------------
     /// Phase 9b fills this; the engine only indexes it and hands it out.
