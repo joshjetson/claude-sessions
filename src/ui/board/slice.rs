@@ -125,6 +125,10 @@ pub struct BoardSlice {
     /// QA assigned to nobody is not on it, so a run looks here for what the
     /// board does not carry. See [`Self::run_task`].
     pub auto_qa_tasks: HashMap<i64, Task>,
+    /// What the daemon said about Auto QA last: the projects it watches, when
+    /// it last read the QA stages, and why that failed. `None` until a daemon
+    /// sends a feed. Its tasks and arrivals are left empty here.
+    pub auto_qa_status: Option<crate::daemon::AutoQaFeed>,
     /// What a QA pass usually takes, per project, from the outcome log. Read
     /// again only when the file changes. See [`crate::qarun::outcomes`].
     pub pass_estimates: HashMap<String, crate::qarun::outcomes::Estimate>,

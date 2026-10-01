@@ -130,17 +130,9 @@ pub(super) fn fill_lanes_quiet(state: &mut AppState, run_id: &str) {
     fill_lanes_inner(state, run_id, false)
 }
 
-fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
-    let Some(run) = state
-        .board
-        .runs
-        .iter()
-        .find(|run| run.id == run_id)
-        .cloned()
-    else {
-        return;
-    };
-    let live = live_task_ids(state, &run);
+/// Run `judge` with the admission context the run is judged by now.
+fn judge<R>(state: &AppState, run: &QaRun, judge: impl FnOnce(&AdmitCtx<'_>) -> R) -> R {
+    let live = live_task_ids(state, run);
     let paths = state.paths.clone();
     let state_of = move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
     let odoo_states = state.board.odoo_states(&run.task_ids);
@@ -153,8 +145,35 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
         lane_limit: state.config.qa_lane_limit(),
         hold: hold.as_deref(),
     };
+    judge(&ctx)
+}
 
-    let mut plan = plan_spawns(&run, &ctx);
+/// Why the run does not start this task now. `None` when it would.
+pub(super) fn refusal_for(state: &AppState, run_id: &str, task_id: i64) -> Option<String> {
+    let run = state.board.runs.iter().find(|run| run.id == run_id)?;
+    judge(state, run, |ctx| {
+        crate::qarun::admit(run, task_id, ctx)
+            .err()
+            .map(|refusal| refusal.detail())
+    })
+}
+
+fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
+    let Some(run) = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id)
+        .cloned()
+    else {
+        return;
+    };
+    let (mut plan, refusal) = judge(state, &run, |ctx| {
+        (
+            plan_spawns(&run, ctx),
+            first_refusal(&run, ctx).map(|refusal| refusal.detail()),
+        )
+    });
     // One start per health reading, so the next reading includes this one's
     // load. Starting every free lane at once is how a laptop ends up
     // swapping before the first reading could say so.
@@ -163,9 +182,8 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     }
     if plan.is_empty() {
         if announce {
-            let why = first_refusal(&run, &ctx)
-                .map(|refusal| refusal.detail())
-                .unwrap_or_else(|| "Every task is finished or already running.".to_string());
+            let why =
+                refusal.unwrap_or_else(|| "Every task is finished or already running.".to_string());
             state.flash(format!("Nothing to start: {why}"));
             state.dirty = true;
         }

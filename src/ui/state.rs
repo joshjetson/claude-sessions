@@ -231,6 +231,14 @@ pub struct AppState {
     /// takes seconds to appear in a scan, and Auto QA must not launch a second
     /// one in the meantime.
     pub auto_coordinator_at: HashMap<String, std::time::SystemTime>,
+    /// Auto QA arrivals this dashboard has already put in a run, by key. The
+    /// daemon hands an arrival over until it hears back, so a feed can carry
+    /// one twice. See [`crate::ui::board::apply_auto_qa`].
+    pub auto_qa_handled: std::collections::HashSet<String>,
+    /// Tasks the board shows in QA for an Auto QA project that the daemon's
+    /// feed did not have, as of the last board. A task new to this set makes
+    /// the dashboard ask the daemon to check now.
+    pub auto_qa_unseen: std::collections::BTreeSet<i64>,
     /// The daemon's newest machine-health reading, while `qa.healthGate` is
     /// on. What the QA queue waits on. See [`crate::health`].
     pub health: Option<crate::health::Vitals>,
@@ -311,6 +319,8 @@ impl AppState {
             feed_went_quiet: false,
             last_run_launch: None,
             auto_coordinator_at: HashMap::new(),
+            auto_qa_handled: Default::default(),
+            auto_qa_unseen: Default::default(),
             health: None,
             deploy: DeploySlice::default(),
             dialog: None,
@@ -453,6 +463,9 @@ impl AppState {
     /// event and the in-process fetch — so the two can never diverge.
     pub fn apply_board(&mut self, update: BoardUpdate) {
         self.board.apply(update);
+        // The board can show a task in QA before the daemon's next Auto QA
+        // read. If it can show it, it can start it.
+        crate::ui::board::ask_for_auto_qa_check(self);
         self.dirty = true;
     }
 

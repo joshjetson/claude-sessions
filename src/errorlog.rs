@@ -104,6 +104,28 @@ pub fn record(source: &str, message: &str) {
     }
 }
 
+/// The file Auto QA writes each step to, so a slow start can be measured.
+pub const AUTO_QA_LOG: &str = "auto-qa.log";
+
+/// Write one step of background work to its own file beside `errors.log`.
+///
+/// Not an error, so it never reaches the Notifications feed. Both processes
+/// write to the file, and the label says which one wrote each line. A process
+/// that never called [`install`] writes nothing, which keeps a unit test out
+/// of the developer's own runtime directory.
+pub fn trace(file: &str, source: &str, message: &str) {
+    let target = {
+        let sink = sink();
+        sink.path
+            .as_deref()
+            .and_then(Path::parent)
+            .map(|dir| (dir.join(file), sink.label))
+    };
+    if let Some((path, label)) = target {
+        let _ = append(&path, &format_line(&iso_now(), label, source, message));
+    }
+}
+
 /// Write an error to the log file, and queue it for the Notifications feed
 /// when a dashboard is running.
 pub fn report(source: &str, message: &str) {

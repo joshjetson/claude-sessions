@@ -196,7 +196,9 @@ fn the_route_confirms_arrivals() {
             task_id: 2,
             project: PROJECT.to_string(),
             stage: "QA".to_string(),
+            entered: String::new(),
         }],
+        ..AutoQaFeed::default()
     };
     let answer = post(
         served.port(),
@@ -206,4 +208,120 @@ fn the_route_confirms_arrivals() {
     assert_eq!(answer.status, 202);
     assert!(served.engine.inner().state().auto_qa.arrivals.is_empty());
     assert!(served.engine.db().was_alerted("autoqa:2:qa:x"));
+}
+
+/// A read that fails keeps the last tasks and arrivals and says why. The next
+/// read that works clears the error and moves the check time.
+#[test]
+fn a_failed_read_keeps_the_feed_and_says_why() {
+    let answer: Arc<Mutex<Result<Vec<QaStageTask>, String>>> = Arc::new(Mutex::new(Ok(vec![])));
+    let fetch: crate::daemon::QaStageFetch = {
+        let answer = Arc::clone(&answer);
+        Box::new(move |_stages| answer.lock().unwrap().clone())
+    };
+    let harness = engine_with(Setup {
+        config: Some(auto_on()),
+        qa_stage: Some(fetch),
+        ..Setup::default()
+    });
+    harness.inner().watch_auto_qa();
+    *answer.lock().unwrap() = Ok(vec![entry(2, PROJECT)]);
+    harness.inner().watch_auto_qa();
+    let good = feed(&harness);
+    assert_eq!(good.watching, vec![PROJECT.to_string()]);
+    assert!(good.error.is_none());
+    assert!(!good.checked_at.is_empty());
+    assert_eq!(good.arrivals.len(), 1);
+
+    *answer.lock().unwrap() = Err("Odoo timed out".to_string());
+    harness.inner().watch_auto_qa();
+    let failed = feed(&harness);
+    assert_eq!(failed.error.as_deref(), Some("Odoo timed out"));
+    assert_eq!(failed.tasks, good.tasks);
+    assert_eq!(failed.arrivals, good.arrivals);
+    assert_eq!(
+        failed.checked_at, good.checked_at,
+        "a failed read is not a check"
+    );
+
+    *answer.lock().unwrap() = Ok(vec![entry(2, PROJECT)]);
+    harness.inner().watch_auto_qa();
+    assert!(feed(&harness).error.is_none());
+}
+
+#[test]
+fn without_odoo_credentials_the_feed_says_so() {
+    let harness = engine_with(Setup {
+        config: Some(auto_on()),
+        ..Setup::default()
+    });
+    harness.inner().watch_auto_qa();
+    assert_eq!(
+        feed(&harness).error.as_deref(),
+        Some("No Odoo credentials.")
+    );
+    assert_eq!(feed(&harness).watching, vec![PROJECT.to_string()]);
+}
+
+/// The check runs on a worker, and a call while one runs makes it run once
+/// more instead of starting a second worker beside it.
+#[test]
+fn a_check_runs_off_the_tick_and_never_twice_at_once() {
+    let w = watcher(auto_on(), Vec::new());
+    let inner = w.harness.inner();
+    inner.state().auto_qa_checking = true;
+    inner.check_auto_qa();
+    assert_eq!(
+        w.calls.load(Ordering::SeqCst),
+        0,
+        "ran beside a running check"
+    );
+    assert!(inner.state().auto_qa_recheck);
+
+    inner.state().auto_qa_checking = false;
+    inner.check_auto_qa();
+    inner.join_workers();
+    // The worker ran once for this call and once more for the one it held.
+    assert_eq!(w.calls.load(Ordering::SeqCst), 2);
+    let state = inner.state();
+    assert!(!state.auto_qa_checking);
+    assert!(!state.auto_qa_recheck);
+}
+
+#[test]
+fn the_route_runs_a_check() {
+    let served = served();
+    fs::write(&served.paths.config_path, auto_on().to_string()).unwrap();
+    served.engine.inner().sync_config();
+    let answer = post(served.port(), "/auto-qa/check", "{}");
+    assert_eq!(answer.status, 202);
+    served.engine.join_workers();
+    // The test daemon has no Odoo, so the check it ran says that.
+    assert_eq!(
+        served.engine.inner().state().auto_qa.error.as_deref(),
+        Some("No Odoo credentials.")
+    );
+}
+
+#[test]
+fn the_log_line_says_how_long_the_arrival_took() {
+    let arrival = crate::daemon::AutoArrival {
+        key: "autoqa:7001:quality assurance:2026-10-01 02:44:44".to_string(),
+        task_id: 7001,
+        project: PROJECT.to_string(),
+        stage: "Quality Assurance".to_string(),
+        entered: "2026-10-01 02:44:44".to_string(),
+    };
+    let now = chrono::DateTime::parse_from_rfc3339("2026-10-01T02:45:22Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(
+        crate::daemon::autoqa::arrival_line(&arrival, now),
+        "#7001 arrived in Quality Assurance (Aurora), 38 s after it entered. Handed to the dashboard."
+    );
+    let unknown = crate::daemon::AutoArrival {
+        entered: String::new(),
+        ..arrival
+    };
+    assert!(!crate::daemon::autoqa::arrival_line(&unknown, now).contains("after it entered"));
 }

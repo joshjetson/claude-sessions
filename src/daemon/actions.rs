@@ -210,6 +210,19 @@ impl<S: ProcessSource + Send + 'static> Engine<S> {
         self.inner.spawn_worker(|inner| inner.poll_board());
     }
 
+    /// Read the QA stages for Auto QA now, off the caller's thread. A
+    /// dashboard asks for it when its board shows a task in QA that the Auto
+    /// QA feed does not have yet, so the task starts without waiting for the
+    /// timer.
+    pub fn check_auto_qa(&self) {
+        crate::errorlog::trace(
+            crate::errorlog::AUTO_QA_LOG,
+            "auto-qa",
+            "a dashboard asked for a check",
+        );
+        self.inner.check_auto_qa();
+    }
+
     /// Wait for the completion workers. `stop` does this too; it is public so a
     /// caller that has just posted a completion can wait for it.
     pub fn join_workers(&self) {

@@ -277,6 +277,12 @@ pub struct EngineState {
     pub qa_watch_paused: bool,
     /// What the dashboard needs for Auto QA. See [`super::autoqa`].
     pub auto_qa: super::autoqa::AutoQaFeed,
+    /// An Auto QA check is running on a worker. See
+    /// [`super::engine::EngineInner::check_auto_qa`].
+    pub auto_qa_checking: bool,
+    /// A check was asked for while one ran. It runs once more when that ends,
+    /// because the running one may have read Odoo before the stage move.
+    pub auto_qa_recheck: bool,
     /// The address this daemon's peer listener is bound to, when it runs. Its
     /// side of the Auto QA tie-break. See [`super::peers`].
     pub peer_id: Option<String>,

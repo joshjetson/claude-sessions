@@ -104,6 +104,8 @@ pub enum Action {
     NudgeCoordinator(Box<crate::ui::board::NudgeSpec>),
     /// Tell the daemon these Auto QA arrivals joined their runs, by key.
     AutoQaJoined(Vec<String>),
+    /// Ask the daemon to read the QA stages for Auto QA now.
+    AutoQaCheck,
     /// Deliver the reviewer's own decision to the session that asked, signed
     /// with that session's token. Only the dashboard sends one.
     Relay(Box<crate::ui::board::RelaySpec>),

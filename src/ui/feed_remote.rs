@@ -389,6 +389,13 @@ impl SessionFeed for RemoteFeed {
         true
     }
 
+    fn auto_qa_check(&self) -> bool {
+        self.act(|client| {
+            client.auto_qa_check();
+        });
+        true
+    }
+
     fn start_deploy(&self, project: &str) -> Option<String> {
         let project = project.to_string();
         self.act_reporting(move |client| {

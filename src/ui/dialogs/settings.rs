@@ -225,6 +225,9 @@ pub struct SettingsDialog {
     pub editing: Option<String>,
     /// A line under the page: why a change was refused, or what one did.
     pub notice: Option<String>,
+    /// Auto QA's state, under its section on the QA page. Set by the frame
+    /// before each draw, because the dialog does not see the daemon's feed.
+    pub auto_qa_status: Option<String>,
 }
 
 impl SettingsDialog {
@@ -465,6 +468,11 @@ impl SettingsDialog {
             match row {
                 QaRow::Separator(label) => lines.push(hint(label)),
                 QaRow::Note(text) => lines.push(hint(&format!("  {text}"))),
+                QaRow::AutoQaStatus => {
+                    if let Some(status) = &self.auto_qa_status {
+                        lines.push(hint(&format!("  {status}")));
+                    }
+                }
                 QaRow::Field(field) => {
                     lines.push(self.row_line(
                         index == self.row,

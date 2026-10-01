@@ -28,6 +28,7 @@ fn arrival(id: i64) -> AutoArrival {
         task_id: id,
         project: PROJECT.to_string(),
         stage: STAGE.to_string(),
+        entered: "2026-09-30 10:00:00".to_string(),
     }
 }
 
@@ -66,6 +67,7 @@ fn an_arrival_joins_its_run_gets_a_coordinator_and_starts() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
         },
     );
 
@@ -100,6 +102,7 @@ fn an_arrival_raises_no_notification() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
         },
     );
     assert_eq!(state.notifications.len(), before);
@@ -118,6 +121,7 @@ fn a_running_coordinator_is_told_about_a_task_that_joined() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
         },
     );
     let mut coordinator = live_session("coord", None, 1000);
@@ -130,6 +134,7 @@ fn a_running_coordinator_is_told_about_a_task_that_joined() {
         AutoQaFeed {
             tasks: vec![qa_task(7001), qa_task(7002)],
             arrivals: vec![arrival(7002)],
+            ..AutoQaFeed::default()
         },
     );
     let queued = actions(&mut state);
@@ -155,6 +160,7 @@ fn a_task_back_in_qa_can_start_again() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
         },
     );
     actions(&mut state);
@@ -167,6 +173,7 @@ fn a_task_back_in_qa_can_start_again() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![back],
+            ..AutoQaFeed::default()
         },
     );
     assert!(launches(&actions(&mut state)).contains(&(7001, false)));
@@ -185,6 +192,7 @@ fn a_task_odoo_sent_back_joins_but_does_not_start() {
         AutoQaFeed {
             tasks: vec![sent_back],
             arrivals: vec![arrival(7003)],
+            ..AutoQaFeed::default()
         },
     );
     assert!(!launches(&actions(&mut state)).contains(&(7003, false)));
@@ -207,6 +215,7 @@ fn a_project_switched_off_confirms_and_starts_nothing() {
         AutoQaFeed {
             tasks: vec![qa_task(7001)],
             arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
         },
     );
     let queued = actions(&mut state);
@@ -269,4 +278,210 @@ fn a_refuses_a_project_without_exactly_one_folder() {
         .flash
         .as_deref()
         .is_some_and(|f| f.contains("exactly one repo folder")));
+}
+
+/// The daemon hands an arrival over until it hears back, so a feed can carry
+/// one twice. It joins once and the coordinator hears once, but the daemon is
+/// told again, in case the first word was lost.
+#[test]
+fn an_arrival_seen_twice_joins_once() {
+    let (_dir, mut state) = auto_state();
+    let feed = || AutoQaFeed {
+        tasks: vec![qa_task(7001)],
+        arrivals: vec![arrival(7001)],
+        ..AutoQaFeed::default()
+    };
+    apply_auto_qa(&mut state, feed());
+    let mut coordinator = live_session("coord", None, 1000);
+    coordinator.run_id = Some(run_id());
+    with_sessions(&mut state, vec![coordinator]);
+    actions(&mut state);
+
+    apply_auto_qa(&mut state, feed());
+    let queued = actions(&mut state);
+    assert!(launches(&queued).is_empty(), "started twice");
+    assert!(!queued
+        .iter()
+        .any(|action| matches!(action, Action::NudgeCoordinator(_))));
+    assert!(queued.iter().any(|action| matches!(
+        action,
+        Action::AutoQaJoined(keys) if keys == &vec![arrival(7001).key]
+    )));
+}
+
+/// Put tasks on the board the way a fetch does, and return what that queued.
+fn show_on_board(state: &mut AppState, tasks: Vec<Task>) -> Vec<Action> {
+    use crate::types::{Board, BoardProject, BoardStage};
+    let mut board = Board {
+        task_count: tasks.len(),
+        ..Board::default()
+    };
+    board.projects.insert(
+        PROJECT.to_string(),
+        BoardProject {
+            project_id: 3,
+            stages: [(
+                STAGE.to_string(),
+                BoardStage {
+                    stage_id: 1,
+                    sequence: 1,
+                    tasks,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        },
+    );
+    state.apply_board(crate::ui::board::BoardUpdate::loaded(
+        crate::daemon::BoardFilter::Mine,
+        board,
+    ));
+    actions(state)
+}
+
+fn asked(queued: &[Action]) -> bool {
+    queued
+        .iter()
+        .any(|action| matches!(action, Action::AutoQaCheck))
+}
+
+/// If the board can show a task in QA, the daemon is asked to look now rather
+/// than at its next read. Once per task, and never for one the feed has.
+#[test]
+fn a_task_the_board_shows_in_qa_first_asks_for_a_check() {
+    let (_dir, mut state) = auto_state();
+    assert!(asked(&show_on_board(&mut state, vec![qa_task(7001)])));
+    assert!(
+        !asked(&show_on_board(&mut state, vec![qa_task(7001)])),
+        "asked again for the same task"
+    );
+
+    // The feed has 7002 already, so the daemon has seen it.
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7002)],
+            ..AutoQaFeed::default()
+        },
+    );
+    assert!(!asked(&show_on_board(
+        &mut state,
+        vec![qa_task(7001), qa_task(7002)]
+    )));
+
+    // 7001 leaves QA and comes back: that asks again.
+    show_on_board(&mut state, Vec::new());
+    assert!(asked(&show_on_board(&mut state, vec![qa_task(7001)])));
+}
+
+#[test]
+fn with_auto_qa_off_the_board_asks_nothing() {
+    let (_dir, mut state) = board_state();
+    assert!(!asked(&show_on_board(&mut state, vec![qa_task(7001)])));
+}
+
+#[test]
+fn the_status_says_what_auto_qa_is_doing() {
+    let (_dir, mut state) = auto_state();
+    let now = std::time::SystemTime::now();
+    assert_eq!(
+        board::auto_qa_badge(&state, now).as_deref(),
+        Some("Auto QA: no daemon feed")
+    );
+
+    let checked: chrono::DateTime<chrono::Utc> = (now - std::time::Duration::from_secs(8)).into();
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7001)],
+            watching: vec![PROJECT.to_string()],
+            checked_at: checked.to_rfc3339(),
+            ..AutoQaFeed::default()
+        },
+    );
+    assert_eq!(
+        board::auto_qa_badge(&state, now).as_deref(),
+        Some("Auto QA ✓ 8s ago")
+    );
+    assert_eq!(
+        board::auto_qa_status_line(&state, now).as_deref(),
+        Some("Watching Aurora · 1 task in QA · checked 8s ago")
+    );
+
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            watching: vec![PROJECT.to_string()],
+            checked_at: checked.to_rfc3339(),
+            error: Some("No Odoo credentials.".to_string()),
+            ..AutoQaFeed::default()
+        },
+    );
+    assert_eq!(
+        board::auto_qa_badge(&state, now).as_deref(),
+        Some("Auto QA: check failed")
+    );
+    assert!(board::auto_qa_status_line(&state, now)
+        .unwrap()
+        .ends_with("The last check failed: No Odoo credentials."));
+
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            paused: vec![PROJECT.to_string()],
+            checked_at: checked.to_rfc3339(),
+            ..AutoQaFeed::default()
+        },
+    );
+    assert_eq!(
+        board::auto_qa_badge(&state, now).as_deref(),
+        Some("Auto QA: paused")
+    );
+    assert_eq!(
+        board::auto_qa_status_line(&state, now).as_deref(),
+        Some("Another machine keeps Aurora · checked 8s ago")
+    );
+}
+
+#[test]
+fn with_auto_qa_off_there_is_no_status() {
+    let (_dir, state) = board_state();
+    assert!(board::auto_qa_badge(&state, std::time::SystemTime::now()).is_none());
+    assert!(board::auto_qa_status_line(&state, std::time::SystemTime::now()).is_none());
+}
+
+/// End to end through the real draw: the board's title carries the badge, and
+/// the settings page carries the full line under its Auto QA section.
+#[test]
+fn the_board_and_the_settings_page_show_the_status() {
+    let (_dir, mut state) = auto_state();
+    let checked: chrono::DateTime<chrono::Utc> = std::time::SystemTime::now().into();
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7001)],
+            watching: vec![PROJECT.to_string()],
+            checked_at: checked.to_rfc3339(),
+            ..AutoQaFeed::default()
+        },
+    );
+    with_tasks(&mut state, vec![qa_task(7001)]);
+    let painted = crate::ui::tests::text(&crate::ui::tests::render(140, 30, |frame| {
+        crate::ui::app::draw(frame, &mut state)
+    }));
+    assert!(painted.contains("Auto QA ✓"), "{painted}");
+
+    state.dialog = Some(crate::ui::dialogs::Dialog::Settings(
+        crate::ui::dialogs::SettingsDialog {
+            page: crate::ui::dialogs::settings::Page::Qa,
+            ..Default::default()
+        },
+    ));
+    let painted = crate::ui::tests::text(&crate::ui::tests::render(140, 40, |frame| {
+        crate::ui::app::draw(frame, &mut state)
+    }));
+    assert!(
+        painted.contains("Watching Aurora · 1 task in QA · checked"),
+        "{painted}"
+    );
 }

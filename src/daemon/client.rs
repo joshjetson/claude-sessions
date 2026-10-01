@@ -246,6 +246,12 @@ impl DaemonClient {
             .is_some_and(|response| response.accepted())
     }
 
+    /// Ask the daemon to read the QA stages for Auto QA now.
+    pub fn auto_qa_check(&self) -> bool {
+        self.post("/auto-qa/check", json!({}))
+            .is_some_and(|response| response.accepted())
+    }
+
     /// The legacy notification contract `claude-sessions notify` posts.
     pub fn notify(&self, body: Value) -> Option<Response> {
         self.post("/notify", body)

@@ -104,6 +104,12 @@ pub(super) fn route<S: ProcessSource + Send + 'static>(
             engine.auto_qa_joined(&id_list(&body(), "keys"));
             (202, json!({ "ok": true }))
         }
+        // The dashboard's board shows a task in QA that the Auto QA feed does
+        // not have yet. Read the QA stages now rather than at the next tick.
+        ("POST", "/auto-qa/check") => {
+            engine.check_auto_qa();
+            (202, json!({ "ok": true }))
+        }
         ("POST", "/done") => {
             let body = body();
             engine.process_done(DoneMarker {

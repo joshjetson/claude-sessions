@@ -37,6 +37,16 @@ pub struct AutoQaFeed {
     pub tasks: Vec<Task>,
     /// Arrivals the dashboard has not yet confirmed.
     pub arrivals: Vec<AutoArrival>,
+    /// The projects this machine watches: Auto QA is on here, and no other
+    /// machine keeps them.
+    pub watching: Vec<String>,
+    /// Auto QA projects another of your machines keeps.
+    pub paused: Vec<String>,
+    /// When the daemon last read the QA stages, in RFC 3339. Empty before the
+    /// first read that worked.
+    pub checked_at: String,
+    /// Why the last read failed. The next read that works clears it.
+    pub error: Option<String>,
 }
 
 /// One task that arrived in a QA stage of an Auto QA project.
@@ -48,6 +58,28 @@ pub struct AutoArrival {
     pub task_id: i64,
     pub project: String,
     pub stage: String,
+    /// When the task entered the stage, as Odoo wrote it. The log uses it to
+    /// say how long the arrival took to reach this machine.
+    pub entered: String,
+}
+
+/// Write one Auto QA step to `auto-qa.log`.
+fn trace(message: &str) {
+    crate::errorlog::trace(crate::errorlog::AUTO_QA_LOG, "auto-qa", message);
+}
+
+/// The log line for an arrival this daemon has just seen. It says how long
+/// after the stage move that was, when Odoo's time can be read.
+pub fn arrival_line(arrival: &AutoArrival, now: chrono::DateTime<chrono::Utc>) -> String {
+    let lag = chrono::NaiveDateTime::parse_from_str(arrival.entered.trim(), "%Y-%m-%d %H:%M:%S")
+        .ok()
+        .map(|entered| now.signed_duration_since(entered.and_utc()).num_seconds())
+        .map(|seconds| format!(", {seconds} s after it entered"))
+        .unwrap_or_default();
+    format!(
+        "#{} arrived in {} ({}){lag}. Handed to the dashboard.",
+        arrival.task_id, arrival.stage, arrival.project
+    )
 }
 
 /// Marks that a project's QA stages have been recorded once.
@@ -97,8 +129,10 @@ pub fn auto_tasks<'a>(
 }
 
 impl<S: ProcessSource> EngineInner<S> {
-    /// Refresh the Auto QA feed: one Odoo query on the slow tick, and only
-    /// when a project has Auto QA on.
+    /// Refresh the Auto QA feed: one Odoo query, and only when a project has
+    /// Auto QA on. The timer runs it every [`super::lifecycle::AUTO_QA_TICK`],
+    /// and a dashboard asks for it when its board shows a task in QA that this
+    /// feed does not have yet.
     pub(crate) fn watch_auto_qa(&self) {
         let (projects, rule) = {
             let config = self.config();
@@ -109,22 +143,35 @@ impl<S: ProcessSource> EngineInner<S> {
             self.set_auto_qa(AutoQaFeed::default());
             return;
         }
-        let Some(fetch) = &self.fetch_qa_stage else {
-            return;
-        };
-        // Best-effort: an Odoo blip keeps the last feed rather than emptying it.
-        let Ok(tasks) = fetch(&rule.stages) else {
-            return;
-        };
-
-        // A project another machine keeps: that machine starts what arrives,
-        // so it is recorded here as handled. Otherwise, when this machine
-        // took the project back, it would start each of those tasks again.
+        // A project another machine keeps: that machine starts what arrives.
         let paused: Vec<String> = projects
             .iter()
             .filter(|project| !kept.contains(project))
             .cloned()
             .collect();
+        let tasks = match &self.fetch_qa_stage {
+            Some(fetch) => fetch(&rule.stages),
+            None => Err("No Odoo credentials.".to_string()),
+        };
+        let tasks = match tasks {
+            Ok(tasks) => tasks,
+            // Best-effort: a failed read keeps the last tasks and arrivals,
+            // and says why beside them.
+            Err(error) => {
+                let mut feed = self.state().auto_qa.clone();
+                if feed.error.as_deref() != Some(error.as_str()) {
+                    trace(&format!("checking the QA stages failed: {error}"));
+                }
+                feed.watching = kept;
+                feed.paused = paused;
+                feed.error = Some(error);
+                self.set_auto_qa(feed);
+                return;
+            }
+        };
+
+        // Recorded here as handled. Otherwise, when this machine took the
+        // project back, it would start each of those tasks again.
         for entry in auto_tasks(&tasks, &paused, &rule) {
             self.db.mark_alerted(&arrival_key(entry));
         }
@@ -133,8 +180,13 @@ impl<S: ProcessSource> EngineInner<S> {
         }
 
         let projects = kept;
+        let checked_at = crate::util::iso_now();
         if projects.is_empty() {
-            self.set_auto_qa(AutoQaFeed::default());
+            self.set_auto_qa(AutoQaFeed {
+                paused,
+                checked_at,
+                ..AutoQaFeed::default()
+            });
             return;
         }
         let mine = auto_tasks(&tasks, &projects, &rule);
@@ -145,16 +197,26 @@ impl<S: ProcessSource> EngineInner<S> {
                 continue;
             }
             let wanted = project.trim().to_lowercase();
-            for entry in mine
+            let backlog: Vec<String> = mine
                 .iter()
                 .filter(|entry| entry.task.project_name.trim().to_lowercase() == wanted)
-            {
-                self.db.mark_alerted(&arrival_key(entry));
-            }
+                .map(|entry| {
+                    self.db.mark_alerted(&arrival_key(entry));
+                    format!("#{}", entry.task.id)
+                })
+                .collect();
             self.db.mark_alerted(&key);
+            trace(&format!(
+                "{project}: switched on. Already in QA, so not started: {}.",
+                if backlog.is_empty() {
+                    "nothing".to_string()
+                } else {
+                    backlog.join(", ")
+                }
+            ));
         }
 
-        let arrivals = mine
+        let arrivals: Vec<AutoArrival> = mine
             .iter()
             .map(|entry| (arrival_key(entry), entry))
             .filter(|(key, _)| !self.db.was_alerted(key))
@@ -163,11 +225,22 @@ impl<S: ProcessSource> EngineInner<S> {
                 task_id: entry.task.id,
                 project: entry.task.project_name.clone(),
                 stage: entry.task.stage_name.clone(),
+                entered: entry.stage_entered.clone(),
             })
             .collect();
+        let before = self.state().auto_qa.arrivals.clone();
+        for arrival in &arrivals {
+            if !before.iter().any(|old| old.key == arrival.key) {
+                trace(&arrival_line(arrival, chrono::Utc::now()));
+            }
+        }
         self.set_auto_qa(AutoQaFeed {
             tasks: mine.iter().map(|entry| entry.task.clone()).collect(),
             arrivals,
+            watching: projects,
+            paused,
+            checked_at,
+            error: None,
         });
     }
 
@@ -237,6 +310,9 @@ impl<S: ProcessSource> EngineInner<S> {
     /// are not handed over again.
     pub(crate) fn auto_qa_joined(&self, keys: &[String]) {
         for key in keys.iter().filter(|key| key.starts_with("autoqa:")) {
+            if !self.db.was_alerted(key) {
+                trace(&format!("the dashboard confirmed {key}"));
+            }
             self.db.mark_alerted(key);
         }
         let mut feed = self.state().auto_qa.clone();
@@ -245,6 +321,9 @@ impl<S: ProcessSource> EngineInner<S> {
     }
 
     /// Store the feed, and tell the dashboards when it changed.
+    ///
+    /// The check time changes on each read, so a read that works always
+    /// publishes. That is what the dashboard's "checked 8 s ago" reads.
     fn set_auto_qa(&self, feed: AutoQaFeed) {
         {
             let mut state = self.state();
@@ -254,5 +333,32 @@ impl<S: ProcessSource> EngineInner<S> {
             state.auto_qa = feed.clone();
         }
         self.publish(EngineEvent::AutoQa(Box::new(feed)));
+    }
+}
+
+impl<S: ProcessSource + Send + 'static> EngineInner<S> {
+    /// Run [`Self::watch_auto_qa`] on a worker, off the tick thread: it is an
+    /// Odoo round trip, and the peer check can wait on a machine that sleeps.
+    ///
+    /// One check at a time. A call while one runs makes it run once more
+    /// after, because the running one may have read Odoo before the move the
+    /// caller saw.
+    pub(crate) fn check_auto_qa(self: &std::sync::Arc<Self>) {
+        {
+            let mut state = self.state();
+            if state.auto_qa_checking {
+                state.auto_qa_recheck = true;
+                return;
+            }
+            state.auto_qa_checking = true;
+        }
+        self.spawn_worker(|inner| loop {
+            inner.watch_auto_qa();
+            let mut state = inner.state();
+            if !std::mem::take(&mut state.auto_qa_recheck) {
+                state.auto_qa_checking = false;
+                break;
+            }
+        });
     }
 }

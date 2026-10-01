@@ -358,7 +358,7 @@ fn run(
         }
         // Only reached without a daemon, which also means no Auto QA feed and
         // nothing to confirm.
-        Action::AutoQaJoined(_) => {}
+        Action::AutoQaJoined(_) | Action::AutoQaCheck => {}
 
         Action::Refresh | Action::RefreshBurst | Action::SelectSession { .. } => {}
     }

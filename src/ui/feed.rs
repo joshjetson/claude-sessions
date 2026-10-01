@@ -134,6 +134,11 @@ pub trait SessionFeed: Send {
         let _ = keys;
         false
     }
+    /// Ask the daemon to read the QA stages for Auto QA now. `false` when
+    /// there is no daemon.
+    fn auto_qa_check(&self) -> bool {
+        false
+    }
     /// Stop the engine behind this feed, for Shift-Q. Only the remote
     /// transport has anything to stop: an embedded engine dies with the
     /// process, and the daemon is meant to outlive the dashboard otherwise.
