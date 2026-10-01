@@ -376,3 +376,158 @@ fn the_conversation_pane_and_the_board_overlap() {
     assert!(Scope::Global.overlaps(Scope::Deploy));
     assert!(!Scope::Board.overlaps(Scope::Deploy));
 }
+
+// --- every page names the keys as the person has them --------------------------
+
+fn texts(rows: &[crate::board::Row]) -> String {
+    rows.iter()
+        .map(|row| crate::board::plain_text(row))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_task_pane_names_the_remapped_start_revise_and_chat_keys() {
+    let (_dir, mut state) = board_as(UserRole::Dev);
+    for (id, key) in [
+        ("board.start", 'w'),
+        ("board.revise", 'y'),
+        ("board.chat", 'z'),
+    ] {
+        state.config.set_key(id, Some(key)).unwrap();
+    }
+    state.board.archived_tasks.insert(5238);
+    let task = crate::types::Task {
+        id: 5238,
+        name: "x".to_string(),
+        ..crate::types::Task::default()
+    };
+    let rows = crate::ui::board::detail::task_header(
+        &task,
+        crate::ui::board::detail::state_of(&state, 5238),
+    );
+    let text = texts(&rows);
+    assert!(text.contains("w → start now"), "{text}");
+    assert!(
+        text.contains("press y to resume for a revision, z to just talk"),
+        "{text}"
+    );
+}
+
+#[test]
+fn the_notification_pane_names_the_remapped_keys() {
+    let none = BTreeMap::new();
+    let mut overrides = remap("board.session", 'w');
+    overrides.extend(remap("board.dismiss", 'y'));
+    let notif = crate::types::Notification {
+        id: "n1".to_string(),
+        title: "needs a decision".to_string(),
+        message: "which one?".to_string(),
+        cwd: "/repo".to_string(),
+        project: "repo".to_string(),
+        session_id: None,
+        task_id: None,
+        level: crate::types::NotificationLevel::Warn,
+        kind: crate::types::NotificationKind::Info,
+        run_id: String::new(),
+        ts: "2026-09-30T00:00:00.000Z".to_string(),
+        status: crate::types::NotificationStatus::Unread,
+    };
+    let detail = crate::ui::board::detail::notification(
+        &notif,
+        true,
+        &Keymap::new(UserRole::Qa, &overrides),
+    );
+    let text = texts(&detail.rows);
+    assert!(text.contains("w go to session  ·  y dismiss"), "{text}");
+    let default =
+        crate::ui::board::detail::notification(&notif, true, &Keymap::new(UserRole::Qa, &none));
+    assert!(texts(&default.rows).contains("g go to session  ·  x dismiss"));
+}
+
+#[test]
+fn the_retry_and_truncated_rows_name_the_remapped_keys() {
+    use crate::board::{format_board_item, BoardCtx, InfoKeys, RETRY_INFO, TRUNCATED_INFO};
+    let ctx = BoardCtx {
+        info_keys: InfoKeys {
+            refresh: 'w',
+            filter: 'y',
+            projects: 'z',
+        },
+        ..BoardCtx::default()
+    };
+    let draw = |name| {
+        crate::board::plain_text(&format_board_item(
+            &crate::board::BoardItem::Info { name },
+            &ctx,
+        ))
+    };
+    assert!(draw(RETRY_INFO).contains("Press w to retry"));
+    assert!(draw(TRUNCATED_INFO).contains("switch filter (y) or narrow the projects (z)"));
+
+    let keys = crate::board::DeployKeys {
+        refresh: 'w',
+        configure: 'y',
+    };
+    let draw = |name| {
+        crate::board::plain_text(&crate::board::format_deploy_item(
+            &crate::board::DeployItem::Info {
+                name,
+                project_name: "",
+            },
+            chrono::Local::now(),
+            keys,
+        ))
+    };
+    assert!(draw(crate::board::DEPLOY_RETRY).contains("Press w to retry"));
+    assert!(draw(crate::board::DEPLOY_LOAD).contains("Press w to load"));
+    assert!(draw("no-projects").contains("Press y to add one"));
+}
+
+#[test]
+fn the_deploy_pane_names_the_remapped_keys_and_only_the_role_s() {
+    let mut overrides = remap("deploy.merge", 'w');
+    overrides.extend(remap("deploy.output", 'y'));
+    let task = crate::types::DeployTask {
+        id: 7,
+        name: "x".to_string(),
+        ..crate::types::DeployTask::default()
+    };
+    let dev = Keymap::new(UserRole::Dev, &overrides);
+    let text = texts(&crate::ui::deploy::detail::task_rows(&task, false, &dev));
+    assert!(text.contains("w merge  ·  R conflicts"), "{text}");
+
+    let qa = Keymap::new(UserRole::Qa, &overrides);
+    let text = texts(&crate::ui::deploy::detail::task_rows(&task, false, &qa));
+    assert!(text.contains("w merge  ·  g session"), "{text}");
+    assert!(!text.contains("conflicts"), "{text}");
+
+    let run = crate::types::DeployRun {
+        lines: vec!["one".to_string()],
+        total_lines: 9,
+        ..crate::types::DeployRun::started("p", "make deploy", "2026-09-30T00:00:00Z")
+    };
+    let text = texts(&crate::ui::deploy::detail::run_rows(&run, &dev));
+    assert!(text.contains("press y for the full log"), "{text}");
+}
+
+#[test]
+fn the_folders_message_and_the_help_footer_name_the_remapped_keys() {
+    let (_dir, mut state) = sessions_state();
+    state.config.set_key("sessions.folders", Some('w')).unwrap();
+    press(&mut state, 'w');
+    let said = state.flash.clone().unwrap_or_default();
+    assert!(
+        said.contains("w hides them again") || said.contains("w shows them"),
+        "{said}"
+    );
+
+    state.config.set_key("global.settings", Some('y')).unwrap();
+    let keymap = state.keymap();
+    let help = crate::ui::dialogs::HelpDialog::new(&keymap, View::Board);
+    assert_eq!(help.settings_key, "y");
+    let painted = crate::ui::tests::text(&crate::ui::tests::render_area(100, 40, |frame, area| {
+        help.render(frame, area)
+    }));
+    assert!(painted.contains("y then Tab to Keys"), "{painted}");
+}

@@ -221,7 +221,10 @@ impl<S: ProcessSource> EngineInner<S> {
                     if let Some(old) = watch.row.take() {
                         ended.removed.push(old);
                     }
-                    raise.push((id.to_string(), awaiting_notification(session, asked, rings)));
+                    raise.push((
+                        id.to_string(),
+                        awaiting_notification(session, asked, rings, &self.keymap()),
+                    ));
                 }
             }
 
@@ -297,7 +300,11 @@ impl<S: ProcessSource> EngineInner<S> {
                     });
                 state.api_errors.insert(session.session_id.clone(), at);
                 if !restored {
-                    raise.push(api_error_notification(session, error));
+                    raise.push(api_error_notification(
+                        session,
+                        error,
+                        &self.keymap().key("sessions.terminal"),
+                    ));
                 }
             }
             if complete {
@@ -329,6 +336,8 @@ impl<S: ProcessSource> EngineInner<S> {
     /// working.
     pub(crate) fn notify_stalled_sessions(&self, sessions: &SessionIndex, now: SystemTime) {
         let alerts = self.config().alerts();
+        // The board's go-to-session key, as the person has it.
+        let go = self.keymap().key("board.session");
         if !alerts.enabled || alerts.stuck_after.is_zero() {
             return;
         }
@@ -397,9 +406,9 @@ impl<S: ProcessSource> EngineInner<S> {
                     task_id: Some(stall.task_id),
                     level: NotificationLevel::Warn,
                     message: if stall.awaiting {
-                        format!("{where_it_is}. Claude looks like it is waiting on you — open its terminal (g) to check.")
+                        format!("{where_it_is}. Claude looks like it is waiting on you — open its terminal ({go}) to check.")
                     } else {
-                        format!("{where_it_is}. No output for {silent} — it may be stuck, or waiting on a decision. Press g to look.")
+                        format!("{where_it_is}. No output for {silent} — it may be stuck, or waiting on a decision. Press {go} to look.")
                     },
                     ..NewNotification::new(
                         "stalled",
@@ -461,8 +470,10 @@ impl<S: ProcessSource> EngineInner<S> {
                     "assigned",
                     format!("📥 Assigned: #{} {}", task.id, task.name),
                     format!(
-                        "{} — now in {}. Press s on the board to start it.",
-                        task.project_name, task.stage_name
+                        "{} — now in {}. Press {} on the board to start it.",
+                        task.project_name,
+                        task.stage_name,
+                        self.keymap().key("board.start")
                     ),
                 )
             });
@@ -613,7 +624,12 @@ fn api_error_row(session_id: &str) -> String {
 }
 
 /// The row for a session that stopped on an API error.
-fn api_error_notification(session: &Session, error: &crate::types::ApiError) -> NewNotification {
+/// `terminal` is the key that raises a session's terminal, as the person has it.
+fn api_error_notification(
+    session: &Session,
+    error: &crate::types::ApiError,
+    terminal: &str,
+) -> NewNotification {
     let project = project_name(&session.cwd);
     let what = match session.task_id {
         Some(task_id) => format!("task #{task_id}"),
@@ -630,7 +646,7 @@ fn api_error_notification(session: &Session, error: &crate::types::ApiError) -> 
             "apierr",
             format!("🛑 {project}: Claude stopped on {what}"),
             format!(
-                "{} It will not continue by itself. Open its terminal (o) and tell it to go on.",
+                "{} It will not continue by itself. Open its terminal ({terminal}) and tell it to go on.",
                 if error.text.is_empty() {
                     error.short()
                 } else {
@@ -666,7 +682,9 @@ pub(crate) fn awaiting_notification(
     session: &Session,
     asked: bool,
     prompt_rings: bool,
+    keys: &crate::ui::keymap::Keymap,
 ) -> NewNotification {
+    let terminal = keys.key("sessions.terminal");
     let project = project_name(&session.cwd);
     if asked {
         let title = format!("🔔 {project}: Claude needs your decision");
@@ -680,15 +698,18 @@ pub(crate) fn awaiting_notification(
             ..NewNotification::new(
                 "await",
                 title,
-                "Claude is waiting for you to choose an option. Press a to answer it from here, \
-                 or o to open its terminal.",
+                format!(
+                    "Claude is waiting for you to choose an option. Press {} to answer it from \
+                     here, or {terminal} to open its terminal.",
+                    keys.key("board.answer")
+                ),
             )
         };
     }
     let (title, message) = {
         (
             format!("🔔 {project}: Claude may be waiting on a prompt"),
-            "A tool call is waiting, most likely on a permission prompt. Nothing can answer one of those remotely; open its terminal (press o on the session) to clear it.",
+            format!("A tool call is waiting, most likely on a permission prompt. Nothing can answer one of those remotely; open its terminal (press {terminal} on the session) to clear it."),
         )
     };
     NewNotification {

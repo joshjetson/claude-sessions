@@ -374,7 +374,7 @@ fn show_notification(state: &mut AppState, id: &str) {
     };
     let link = notif.task_id.and_then(|task| state.board.link(task));
     let has_session = controller::resolve_notif_session(state.sessions(), &notif, link).is_some();
-    state.board.detail = Some(detail::notification(&notif, has_session));
+    state.board.detail = Some(detail::notification(&notif, has_session, &state.keymap()));
     state.conv.scroll_top = 0;
     state.conv.stick = false;
     state.flash = None;

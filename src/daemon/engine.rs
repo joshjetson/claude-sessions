@@ -194,6 +194,13 @@ impl<S: ProcessSource> EngineInner<S> {
             .reload();
     }
 
+    /// The dashboard's keys as this person has them, from the config both
+    /// processes read, for a notification that names a key.
+    pub(crate) fn keymap(&self) -> crate::ui::keymap::Keymap {
+        let config = self.config();
+        crate::ui::keymap::Keymap::new(config.role(), config.key_overrides())
+    }
+
     pub(crate) fn archive(&self) -> Archive<'_> {
         Archive::new(&self.paths, &self.db)
     }

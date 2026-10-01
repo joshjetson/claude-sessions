@@ -68,7 +68,33 @@ pub struct BoardCtx<'a> {
     /// The stages that mean "waiting on QA", for the state badges. `None`
     /// means the built-in list, [`crate::config::DEFAULT_QA_STAGES`].
     pub qa_stages: Option<&'a [String]>,
+    /// The keys the info rows name, as this person has them.
+    pub info_keys: InfoKeys,
 }
+
+/// The keys the board's info rows name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InfoKeys {
+    pub refresh: char,
+    pub filter: char,
+    pub projects: char,
+}
+
+impl Default for InfoKeys {
+    fn default() -> Self {
+        InfoKeys {
+            refresh: 'r',
+            filter: 'f',
+            projects: 'p',
+        }
+    }
+}
+
+/// The row under a board that failed to load. Drawn with the refresh key as
+/// the person has it, so it reads "Press r to retry" only by default.
+pub const RETRY_INFO: &str = "Press r to retry";
+/// The row under a board Odoo cut short. Drawn with the person's keys.
+pub const TRUNCATED_INFO: &str = "… list truncated; switch filter (f) or narrow the projects (p)";
 
 impl BoardCtx<'_> {
     fn now(&self) -> DateTime<Local> {
@@ -217,6 +243,21 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
     match item {
         BoardItem::Separator => {}
 
+        BoardItem::Info { name } if *name == RETRY_INFO => {
+            let key = ctx.info_keys.refresh;
+            row.plain("  ")
+                .styled(format!("Press {key} to retry"), Role::Dim);
+        }
+        BoardItem::Info { name } if *name == TRUNCATED_INFO => {
+            let keys = ctx.info_keys;
+            row.plain("  ").styled(
+                format!(
+                    "… list truncated; switch filter ({}) or narrow the projects ({})",
+                    keys.filter, keys.projects
+                ),
+                Role::Dim,
+            );
+        }
         BoardItem::Info { name } => {
             row.plain("  ").styled(*name, Role::Dim);
         }

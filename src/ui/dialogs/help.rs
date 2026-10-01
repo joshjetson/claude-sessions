@@ -27,6 +27,8 @@ pub enum HelpLine {
 pub struct HelpDialog {
     pub title: String,
     pub lines: Vec<HelpLine>,
+    /// The settings key as the person has it, for the footer.
+    pub settings_key: String,
     /// The first line shown.
     pub scroll: usize,
 }
@@ -50,6 +52,7 @@ impl HelpDialog {
         HelpDialog {
             title: format!(" Keys · {} role ", keymap.role().as_str().to_uppercase()),
             lines,
+            settings_key: keymap.key("global.settings"),
             scroll: 0,
         }
     }
@@ -100,10 +103,11 @@ impl HelpDialog {
             })
             .collect();
         lines.push(Line::default());
-        lines.push(hint(if self.lines.len() > room {
-            "↑↓ scroll  , then Tab to Keys to change them  Esc close"
+        let change = format!("{} then Tab to Keys to change them", self.settings_key);
+        lines.push(hint(&if self.lines.len() > room {
+            format!("↑↓ scroll  {change}  Esc close")
         } else {
-            ", then Tab to Keys to change them  Esc close"
+            format!("{change}  Esc close")
         }));
         render_modal(
             frame,

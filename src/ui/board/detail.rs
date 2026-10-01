@@ -80,13 +80,20 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
             ));
         }
     } else {
+        let keys = state.keys;
         rows.push(line(
-            "Enter → action menu (start / add context)   ·   s → start now",
+            format!(
+                "Enter → action menu (start / add context)   ·   {} → start now",
+                keys.start
+            ),
             Role::Dim,
         ));
         if state.archived {
             rows.push(line(
-                "💾 transcript archived → press v to resume for a revision, C to just talk to it",
+                format!(
+                    "💾 transcript archived → press {} to resume for a revision, {} to just talk to it",
+                    keys.revise, keys.chat
+                ),
                 Role::Accent,
             ));
         }
@@ -110,15 +117,18 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         if !trail.is_empty() {
             rows.push(line(format!("tags: {trail}"), Role::Dim));
         }
+        // `D` is a developer key. The QA role reads the count only.
         if state.run_logs > 0 {
             let plural = if state.run_logs == 1 { "" } else { "s" };
-            rows.push(line(
+            let text = if state.qa_role {
+                format!("{} run log{plural}", state.run_logs)
+            } else {
                 format!(
-                    "{} run log{plural} → press D for daemon logs",
-                    state.run_logs
-                ),
-                Role::Dim,
-            ));
+                    "{} run log{plural} → press {} for daemon logs",
+                    state.run_logs, state.keys.daemon_logs
+                )
+            };
+            rows.push(line(text, Role::Dim));
         }
     }
 
@@ -134,7 +144,10 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
             rows.push(line(format!("  • {question}"), Role::Warn));
         }
         rows.push(line(
-            "Answer on the task, then press s to re-run.",
+            format!(
+                "Answer on the task, then press {} to re-run.",
+                state.keys.start
+            ),
             Role::Dim,
         ));
     }
@@ -173,8 +186,14 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         rows.push(blank());
         rows.push(line(
             format!(
-                "⛔ {} of {} blocker(s) still open — s will ask before starting.",
-                task.open_blocker_count, task.blocker_count
+                "⛔ {} of {} blocker(s) still open — {} will ask before starting.",
+                task.open_blocker_count,
+                task.blocker_count,
+                if state.qa_role {
+                    "a start".to_string()
+                } else {
+                    state.keys.start.to_string()
+                }
             ),
             Role::Danger,
         ));
@@ -208,6 +227,35 @@ pub struct TaskState<'a> {
     /// What Odoo's `state` says about a task still in a QA stage: Complete,
     /// or Changes Requested. See [`crate::types::qa_state_badge`].
     pub qa_state_badge: Option<crate::types::QaStateBadge>,
+    /// The keys the pane names, as this person has them.
+    pub keys: TaskKeys,
+}
+
+/// The board keys a task's pane names, as this person has them. Characters,
+/// so [`TaskState`] stays `Copy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaskKeys {
+    pub start: char,
+    pub revise: char,
+    pub chat: char,
+    pub daemon_logs: char,
+}
+
+impl TaskKeys {
+    pub fn from_keymap(keymap: &crate::ui::keymap::Keymap) -> Self {
+        TaskKeys {
+            start: keymap.char_of("board.start"),
+            revise: keymap.char_of("board.revise"),
+            chat: keymap.char_of("board.chat"),
+            daemon_logs: keymap.char_of("board.daemon_logs"),
+        }
+    }
+}
+
+impl Default for TaskKeys {
+    fn default() -> Self {
+        Self::from_keymap(&crate::ui::keymap::Keymap::default())
+    }
 }
 
 /// What the board knows about a task right now.
@@ -246,6 +294,7 @@ pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
             .as_ref()
             .filter(|_| state.board.detail_answers.task_id == Some(task_id)),
         qa_role: !state.role.shows_dev_actions(),
+        keys: TaskKeys::from_keymap(&state.keymap()),
         qa_state_badge: state
             .board
             .task(task_id)
@@ -337,7 +386,11 @@ pub fn with_description(
 }
 
 /// A notification, and what can be done about it.
-pub fn notification(notif: &Notification, has_session: bool) -> BoardDetail {
+pub fn notification(
+    notif: &Notification,
+    has_session: bool,
+    keymap: &crate::ui::keymap::Keymap,
+) -> BoardDetail {
     let mut rows = vec![bold(notif.title.clone())];
     let meta = [
         notif.project.clone(),
@@ -363,11 +416,12 @@ pub fn notification(notif: &Notification, has_session: bool) -> BoardDetail {
     };
     rows.extend(message.lines().map(|l| line(l.to_string(), Role::Plain)));
     rows.push(blank());
+    let (session, dismiss) = (keymap.key("board.session"), keymap.key("board.dismiss"));
     rows.push(line(
         if has_session {
-            "Enter menu  ·  g go to session  ·  x dismiss"
+            format!("Enter menu  ·  {session} go to session  ·  {dismiss} dismiss")
         } else {
-            "Enter menu  ·  x dismiss  ·  (no live session matched)"
+            format!("Enter menu  ·  {dismiss} dismiss  ·  (no live session matched)")
         },
         Role::Dim,
     ));

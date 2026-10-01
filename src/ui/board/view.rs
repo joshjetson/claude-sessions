@@ -49,10 +49,8 @@ fn notification_items(notifications: &VecDeque<Notification>) -> Vec<BoardItem<'
 
 /// Messages that stand in for the tree: still loading, or Odoo said no.
 const LOADING: &str = "Loading tasks from Odoo…";
-const RETRY: &str = "Press r to retry";
 const NO_CREDENTIALS: &str = "No Odoo credentials — set the odoo block in ~/.claude-sessions.json.";
 const NOTHING: &str = "Nothing assigned in the visible stages.";
-const TRUNCATED: &str = "… list truncated; switch filter (f) or narrow the projects (p)";
 
 /// Every row of the board tab, in order.
 ///
@@ -88,7 +86,9 @@ pub fn build_items_with_runs<'a>(
     match (&board.board, &board.error) {
         (_, Some(error)) => {
             items.push(BoardItem::Info { name: error });
-            items.push(BoardItem::Info { name: RETRY });
+            items.push(BoardItem::Info {
+                name: crate::board::RETRY_INFO,
+            });
         }
         (None, None) if board.loading => items.push(BoardItem::Info { name: LOADING }),
         (None, None) => items.push(BoardItem::Info {
@@ -106,7 +106,9 @@ pub fn build_items_with_runs<'a>(
                 ));
             }
             if board_data.truncated {
-                items.push(BoardItem::Info { name: TRUNCATED });
+                items.push(BoardItem::Info {
+                    name: crate::board::TRUNCATED_INFO,
+                });
             }
         }
     }
@@ -299,6 +301,14 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize, width: u16) ->
     let qa_stages = state.config.qa_alerts().stages;
     let ctx = BoardCtx {
         qa_stages: Some(&qa_stages),
+        info_keys: {
+            let keymap = state.keymap();
+            crate::board::InfoKeys {
+                refresh: keymap.char_of("global.refresh"),
+                filter: keymap.char_of("board.filter"),
+                projects: keymap.char_of("board.projects"),
+            }
+        },
         ..state.board.ctx_at_width(&live, width)
     };
     BoardWindow {
