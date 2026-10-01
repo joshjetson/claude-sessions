@@ -104,6 +104,7 @@ impl<S: ProcessSource> EngineInner<S> {
             let config = self.config();
             (config.qa_auto_projects(), config.qa_alerts())
         };
+        let kept = self.keep_unless_a_peer_has(projects.clone());
         if projects.is_empty() || rule.stages.is_empty() {
             self.set_auto_qa(AutoQaFeed::default());
             return;
@@ -115,6 +116,27 @@ impl<S: ProcessSource> EngineInner<S> {
         let Ok(tasks) = fetch(&rule.stages) else {
             return;
         };
+
+        // A project another machine keeps: that machine starts what arrives,
+        // so it is recorded here as handled. Otherwise, when this machine
+        // took the project back, it would start each of those tasks again.
+        let paused: Vec<String> = projects
+            .iter()
+            .filter(|project| !kept.contains(project))
+            .cloned()
+            .collect();
+        for entry in auto_tasks(&tasks, &paused, &rule) {
+            self.db.mark_alerted(&arrival_key(entry));
+        }
+        for project in &paused {
+            self.db.mark_alerted(&bootstrap_key(project));
+        }
+
+        let projects = kept;
+        if projects.is_empty() {
+            self.set_auto_qa(AutoQaFeed::default());
+            return;
+        }
         let mine = auto_tasks(&tasks, &projects, &rule);
 
         for project in &projects {
@@ -147,6 +169,68 @@ impl<S: ProcessSource> EngineInner<S> {
             tasks: mine.iter().map(|entry| entry.task.clone()).collect(),
             arrivals,
         });
+    }
+
+    /// The projects this machine keeps, after asking your other machines.
+    ///
+    /// A project another machine keeps is dropped for this pass, and the first
+    /// time that happens a notification says so: it needs the person, because
+    /// only they can switch it off at one machine. See [`super::peers`].
+    fn keep_unless_a_peer_has(&self, projects: Vec<String>) -> Vec<String> {
+        let peers = self.config().qa_peers();
+        let (Some(secret), false) = (peers.secret.as_deref(), peers.hosts.is_empty()) else {
+            return projects;
+        };
+        if projects.is_empty() {
+            self.state().peer_paused.clear();
+            return projects;
+        }
+        let answers: Vec<(String, super::peers::PeerAnswer)> = peers
+            .hosts
+            .iter()
+            .filter_map(|host| {
+                super::peers::ask_peer(host, peers.port, secret)
+                    .map(|answer| (host.clone(), answer))
+            })
+            .collect();
+        let my_id = self.state().peer_id.clone();
+        let paused = super::peers::paused_projects(my_id.as_deref(), &projects, &answers);
+
+        let newly: Vec<super::peers::Paused> = {
+            let mut state = self.state();
+            let now: std::collections::BTreeSet<String> =
+                paused.iter().map(|p| p.project.to_lowercase()).collect();
+            let newly = paused
+                .iter()
+                .filter(|p| !state.peer_paused.contains(&p.project.to_lowercase()))
+                .cloned()
+                .collect();
+            state.peer_paused = now;
+            newly
+        };
+        for conflict in newly {
+            self.raise_notification(super::notify::NewNotification {
+                project: Some(conflict.project.clone()),
+                level: crate::types::NotificationLevel::Warn,
+                ..super::notify::NewNotification::new(
+                    "auto-qa",
+                    format!("Auto QA for {} is on at two machines", conflict.project),
+                    format!(
+                        "{} has Auto QA on for {} too, and keeps it. This machine paused it so \
+                         no task starts twice. Switch it off at one of them with A on the board.",
+                        conflict.peer, conflict.project
+                    ),
+                )
+            });
+        }
+        projects
+            .into_iter()
+            .filter(|project| {
+                !paused
+                    .iter()
+                    .any(|p| p.project.eq_ignore_ascii_case(project))
+            })
+            .collect()
     }
 
     /// The dashboard put these arrivals in their runs. Record them, so they

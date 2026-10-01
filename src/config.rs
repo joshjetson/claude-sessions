@@ -25,7 +25,7 @@ pub use edit::DeployProjectPatch;
 pub use env::EnvOverrides;
 pub use model::*;
 pub use resolve::{
-    AlertConfig, BoardHideFilter, BoardProjectFilter, QaAlertConfig, ResolvedDeployConfig,
+    AlertConfig, BoardHideFilter, BoardProjectFilter, QaAlertConfig, QaPeers, ResolvedDeployConfig,
     UsageConfig,
 };
 

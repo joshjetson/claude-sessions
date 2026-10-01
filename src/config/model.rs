@@ -519,6 +519,23 @@ pub struct QaBlock {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(deserialize_with = "lenient")]
     pub auto_qa: Option<Vec<String>>,
+    /// Your other machines, by Tailscale address or name. Their daemons are
+    /// asked which projects have Auto QA on, so a project is on in one place
+    /// only. See `daemon::peers`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenient")]
+    pub peers: Option<Vec<String>>,
+    /// The secret every one of your machines shares, at least 16 characters.
+    /// Without it the daemon neither asks nor answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_secret: Option<String>,
+    /// The port the peer listener uses. Absent means 8788.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_port: Option<u16>,
+    /// The address the peer listener binds. Absent means this machine's
+    /// Tailscale IPv4 address, as `tailscale ip -4` gives it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_listen: Option<String>,
     /// Stages that mean "waiting on QA", for the QA role's new-arrival alert.
     ///
     /// Absent or empty means the default list. A revision stage in this list

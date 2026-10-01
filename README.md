@@ -344,6 +344,25 @@ The details:
 - Starting a session raises no notification. A session tells you when it needs you.
 - Auto QA needs the daemon. The dashboard without one has no Auto QA.
 
+**More than one machine.** Auto QA is switched on per machine. With a project on at two of
+your machines, both would start the same task. To stop that, the daemons ask each other
+over Tailscale:
+
+1. Pick a secret of at least 16 characters, and put the same one in every machine's config
+   as `qa.peerSecret`.
+2. On each machine, list the others' Tailscale addresses in `qa.peers`.
+3. Restart each daemon (`claude-sessions daemon stop`; the dashboard starts it again).
+
+Each daemon then answers on its Tailscale address, port 8788, and only with the secret. It
+says nothing but which projects have Auto QA on. Before each Auto QA pass it asks the
+others. A project on at two machines stays on at the one whose address sorts first, and is
+paused at the other, which tells you once. Switch it off at one machine to clear it. A
+machine that does not answer is taken to be asleep, and the others carry on.
+
+The pause is not written to your config: the project comes back when the other machine
+lets it go. What arrived meanwhile was the other machine's to start, so it does not start
+again.
+
 With `"role": "qa"`, `s`, `v` and `C` start nothing and say so, the task menu drops
 **Start task**, **Add context & start** and the revision resumes, and the Deploy tab drops
 conflict resolution (`R`). QA, QA dry run, the pre-work brief, `R`, `]`, `a`, `m`, `M`,
@@ -466,6 +485,10 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 |---|---|---|
 | `role` | `dev` | `dev` \| `qa` \| `pm`. Anything else reads as `dev`. `qa` hides the development launches on the board and filters the notification feed (see below). `pm` behaves like `dev` for now. The daemon picks up an edit within a second |
 | `qa.autoQa[]` | `[]` | The projects with Auto QA on, on this machine. `A` on the board edits it. See [Auto QA](#auto-qa) |
+| `qa.peers[]` | `[]` | Your other machines' Tailscale addresses, asked so an Auto QA project is on at one machine only |
+| `qa.peerSecret` | unset | The secret all your machines share, 16 characters or more. Without it the daemon neither asks nor answers. Read at daemon start |
+| `qa.peerPort` | `8788` | The port the peer listener uses. Read at daemon start |
+| `qa.peerListen` | your Tailscale IPv4 | The address the peer listener binds, when `tailscale ip -4` cannot find it. Read at daemon start |
 | `qa.notifyNewInQa` | `false` | QA role only: announce a task that lands in a QA stage (`🧪 New in QA`). Off because the QA board already lists those tasks. Switched on, the first run records what is already there silently |
 | `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | The stages `qa.notifyNewInQa` and Auto QA watch. Revision stages never count |
 | `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |

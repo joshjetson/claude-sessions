@@ -135,6 +135,21 @@ impl<S: ProcessSource> Engine<S> {
         self.inner.raise_agent_post(notification)
     }
 
+    /// Record the address this daemon's peer listener is bound to: its side of
+    /// the Auto QA tie-break.
+    pub fn set_peer_id(&self, id: Option<String>) {
+        self.inner.state().peer_id = id;
+    }
+
+    /// What this machine tells a peer: its listener's address and the
+    /// projects with Auto QA on here.
+    pub fn peer_answer(&self) -> super::peers::PeerAnswer {
+        super::peers::PeerAnswer {
+            id: self.inner.state().peer_id.clone().unwrap_or_default(),
+            projects: self.inner.config().qa_auto_projects(),
+        }
+    }
+
     /// Refresh the Auto QA feed now. See [`super::autoqa`].
     pub fn watch_auto_qa(&self) {
         self.inner.watch_auto_qa();

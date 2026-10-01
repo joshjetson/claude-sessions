@@ -53,6 +53,7 @@ mod events;
 mod lifecycle;
 mod markers;
 mod notify;
+mod peers;
 mod pending;
 mod qarun;
 mod refresh;
@@ -91,6 +92,10 @@ pub use engine::{
 pub use events::{wire_session, EngineEvent, SessionStats, SessionsEvent, Snapshot};
 pub use markers::{BlockedMarker, DoneMarker, MARKER_SETTLE};
 pub use notify::{ActionResult, NewNotification, NOTIFICATION_LIMIT};
+pub use peers::{
+    ask_peer, paused_projects, secrets_match, serve_peers, Paused, PeerAnswer, PeerListener,
+    DEFAULT_PEER_PORT, MIN_SECRET_LEN as MIN_PEER_SECRET_LEN, PEER_PATH,
+};
 pub use pending::PendingRequest;
 pub use protocol::{DaemonInfo, DEFAULT_PORT};
 pub use server::ServerHandle;
