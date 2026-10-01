@@ -236,6 +236,8 @@ pub struct RunCtx<'a> {
     /// Injected rather than read here, so every row in one frame is judged
     /// against the same instant and the module stays pure.
     pub now: Option<SystemTime>,
+    /// What a pass usually takes, per project. See [`outcomes`].
+    pub estimates: HashMap<String, outcomes::Estimate>,
 }
 
 /// What a single task in a run is doing.
@@ -473,7 +475,12 @@ pub fn qa_cell_text(entry: &RunEntry<'_>, wide: bool) -> String {
 /// The run header's counts. On a narrow pane only the two that change a
 /// decision survive — how much is left, and how much is waiting — because the
 /// rest is arithmetic the reader can do.
-pub fn run_header_text(run: &QaRun, summary: &RunSummary, wide: bool) -> String {
+pub fn run_header_text(
+    run: &QaRun,
+    summary: &RunSummary,
+    wide: bool,
+    estimate: Option<&outcomes::Estimate>,
+) -> String {
     let mut parts = vec![format!(
         "{} task{}",
         summary.total,
@@ -497,6 +504,11 @@ pub fn run_header_text(run: &QaRun, summary: &RunSummary, wide: bool) -> String 
     if summary.stalled > 0 {
         parts.push(format!("{} stalled", summary.stalled));
     }
+    // Only while something is left to run: once every task has a verdict, how
+    // long the next pass takes is not a question anyone is asking.
+    if let (true, Some(estimate)) = (wide && !summary.finished(), estimate) {
+        parts.push(estimate.text());
+    }
 
     // The stage name is what the run is pinned under, so on a narrow pane it is
     // already on screen one row above.
@@ -509,6 +521,8 @@ pub fn run_header_text(run: &QaRun, summary: &RunSummary, wide: bool) -> String 
 }
 
 mod answer;
+pub mod backfill;
+pub mod outcomes;
 mod schedule;
 mod shadow;
 mod since;

@@ -93,7 +93,9 @@ pub(crate) fn run(task_ids: Vec<i64>) -> QaRun {
 }
 
 mod answer;
+mod backfill;
 mod coordinator;
+mod outcomes;
 mod schedule;
 mod shadow;
 mod since;
@@ -238,6 +240,7 @@ fn rows_sort_by_what_needs_you_most() {
         sessions: HashMap::from([(11, &live), (13, &live)]),
         asks: HashMap::from([(13, &ask)]),
         now: Some(now()),
+        estimates: HashMap::new(),
     };
 
     let order: Vec<_> = build_run_entries(&run(vec![10, 11, 12, 13]), &ctx)
@@ -473,7 +476,7 @@ fn the_header_carries_the_fixed_denominator() {
         queued: 1,
         ..RunSummary::default()
     };
-    let wide = run_header_text(&run(vec![1, 2, 3]), &summary, true);
+    let wide = run_header_text(&run(vec![1, 2, 3]), &summary, true, None);
     assert!(wide.contains("QA RUN · Quality Assurance"), "{wide}");
     assert!(
         wide.contains("3 tasks · 1 done · 1 testing · 1 queued"),
@@ -490,7 +493,7 @@ fn the_header_drops_the_stage_name_on_a_narrow_pane() {
         asking: 2,
         ..RunSummary::default()
     };
-    let narrow = run_header_text(&run(vec![1, 2, 3]), &summary, false);
+    let narrow = run_header_text(&run(vec![1, 2, 3]), &summary, false, None);
     assert!(narrow.contains("QA RUN"), "{narrow}");
     assert!(!narrow.contains("Quality Assurance"), "{narrow}");
     assert!(narrow.contains("2 ask"), "{narrow}");
@@ -503,11 +506,38 @@ fn one_task_does_not_read_as_one_tasks() {
         queued: 1,
         ..RunSummary::default()
     };
-    assert!(run_header_text(&run(vec![1]), &summary, true).contains("1 task "));
+    assert!(run_header_text(&run(vec![1]), &summary, true, None).contains("1 task "));
 }
 
 #[test]
 fn the_width_breakpoint_is_where_it_says_it_is() {
     assert!(is_wide(QA_WIDE_MIN_COLS));
     assert!(!is_wide(QA_WIDE_MIN_COLS - 1));
+}
+
+/// A run with work left says what a pass usually takes there. A finished run
+/// does not: nobody is asking how long the next pass will be.
+#[test]
+fn the_header_shows_what_a_pass_usually_takes_while_work_is_left() {
+    let estimate = crate::qarun::outcomes::Estimate {
+        minutes: 40.0,
+        tokens: 160_000,
+        passes: 5,
+        everywhere: false,
+    };
+    let open = RunSummary {
+        total: 3,
+        done: 1,
+        ..RunSummary::default()
+    };
+    let text = run_header_text(&run(vec![1, 2, 3]), &open, true, Some(&estimate));
+    assert!(text.ends_with("≈40 min, ≈160K tokens a pass"), "{text}");
+    assert!(!run_header_text(&run(vec![1, 2, 3]), &open, false, Some(&estimate)).contains('≈'));
+
+    let finished = RunSummary {
+        total: 3,
+        done: 3,
+        ..RunSummary::default()
+    };
+    assert!(!run_header_text(&run(vec![1, 2, 3]), &finished, true, Some(&estimate)).contains('≈'));
 }

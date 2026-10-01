@@ -139,6 +139,8 @@ pub enum Command {
     QaAnswer(QaAnswerArgs),
     /// Say, per task, whether its QA record belongs to this run or an earlier one
     QaStatus(QaStatusArgs),
+    /// What a QA pass usually takes, per project, and filling that in from past passes
+    QaOutcomes(QaOutcomesArgs),
     /// Record a Claude Code hook event from stdin (register it in settings.json)
     Hook,
 }
@@ -186,6 +188,14 @@ pub struct QaStatusArgs {
     /// The run's task ids, separated by commas or spaces
     #[arg(long)]
     pub tasks: String,
+}
+
+#[derive(Args)]
+pub struct QaOutcomesArgs {
+    /// Read past QA passes out of the transcripts into the outcome log first.
+    /// Safe to run again: a pass already in the log is not added twice.
+    #[arg(long)]
+    pub backfill: bool,
 }
 
 #[derive(Args)]
@@ -320,6 +330,7 @@ pub fn run() -> Result<()> {
         Some(Command::QaShadow(args)) => markers::qa_shadow(&paths, args),
         Some(Command::QaAnswer(args)) => markers::qa_answer(&paths, &config, args),
         Some(Command::QaStatus(args)) => markers::qa_status(&paths, args),
+        Some(Command::QaOutcomes(args)) => markers::qa_outcomes(&paths, &config, args),
         // Unreachable: `run` hands `hook` to `run_hook` before clap parses. The
         // arm exists so the subcommand shows in `--help`.
         Some(Command::Hook) => run_hook(),

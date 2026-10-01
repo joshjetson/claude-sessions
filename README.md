@@ -242,6 +242,7 @@ One binary, one install. The original shipped seven executables; they are now su
 | `claude-sessions hook` | Record one Claude Code hook event from stdin, for the session status. Prints nothing and always exits 0. Register it as shown in [Session Status Hooks](#session-status-hooks) |
 | `claude-sessions journal [--stats] [--out <path>] [--no-open]` | Build the reasoning-journal page and open it. `--stats` prints per-repo counts instead |
 | `claude-sessions pipeline [--out <path>] [--no-open]` | Build the pipeline page and open it |
+| `claude-sessions qa-outcomes [--backfill]` | Print what a QA pass usually takes, per project. `--backfill` first reads past passes out of the transcripts into the log. Running it again adds nothing twice. See [How long a pass takes](#how-long-a-pass-takes) |
 | `claude-sessions pipeline init <repo> [--pipeline <id>]` | Write the starter `.claude-sessions/pipeline.json` into a repository. Never clobbers an existing one |
 | `claude-sessions pipeline skills [FILTER] [--repo <path>]` | List the skills a pipeline step can name, including the repository's own |
 | `claude-sessions pipeline show [ID] [--repo <path>]` | Print one pipeline's steps as this project would actually run them |
@@ -396,6 +397,23 @@ on the machine:
 
 Only red holds the queue. A laptop doing ordinary work is often amber, and holding on
 amber would stop QA for most of the day.
+
+#### How long a pass takes
+
+When a QA session parks the first verdict of a round, the daemon writes the pass down in
+`~/.claude-sessions/qa-outcomes.jsonl`: how long since the session started, and how many
+tokens it used. The board's run header then shows what a pass in that project usually
+takes, for example `≈30 min, ≈330K tokens a pass`. That is the median of the project's
+20 most recent passes, or of every project's while it has fewer than 3.
+
+Tokens are the new ones: input, cache writes and output. Cache reads are left out. They
+run to tens of millions on a long pass and cost a fraction of the rest.
+
+To start with estimates rather than wait for passes to collect, run
+`claude-sessions qa-outcomes --backfill` once. It reads past QA sessions out of the
+transcripts, from each session's first line to its first parked verdict. It skips folders
+mapped to no project in `odooProjectDirs`, and passes under 2 minutes (a resumed session)
+or over 8 hours (a session left open).
 
 ### Deploy
 

@@ -337,11 +337,12 @@ pub fn format_board_item(item: &BoardItem<'_>, ctx: &BoardCtx<'_>) -> Row {
             run,
             summary,
             expanded,
+            estimate,
         } => {
             let wide = crate::qarun::is_wide(ctx.tree_cols);
             row.plain("    ")
                 .styled(format!("{} ", arrow(*expanded)), Role::Accent);
-            let text = crate::qarun::run_header_text(run, summary, wide);
+            let text = crate::qarun::run_header_text(run, summary, wide, estimate.as_ref());
             // The header flashes only while something waits on the reviewer,
             // and stops the moment nothing does. A header that always blinks is
             // a header nobody reads.

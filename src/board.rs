@@ -88,6 +88,8 @@ pub enum BoardItem<'a> {
         run: &'a QaRun,
         summary: RunSummary,
         expanded: bool,
+        /// What a pass in the run's project usually takes, when known.
+        estimate: Option<crate::qarun::outcomes::Estimate>,
     },
     /// One task inside a run. Still a task row — every key that works on
     /// [`BoardItem::Task`] works here, which is most of the argument for
@@ -209,6 +211,10 @@ pub fn build_board_tree_with_runs<'a>(
                     run,
                     summary,
                     expanded: run_expanded,
+                    estimate: crate::qarun::outcomes::estimate_for(
+                        &run_ctx.estimates,
+                        &run.project_name,
+                    ),
                 });
                 for entry in entries {
                     claimed.insert(entry.task_id);

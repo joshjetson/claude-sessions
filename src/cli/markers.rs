@@ -24,7 +24,8 @@ use crate::util::iso_now;
 use serde_json::Value;
 
 use super::{
-    fail, BlockedArgs, DoneArgs, NotifyArgs, QaAnswerArgs, QaShadowArgs, QaStatusArgs, TASK_ID_ENV,
+    fail, BlockedArgs, DoneArgs, NotifyArgs, QaAnswerArgs, QaOutcomesArgs, QaShadowArgs,
+    QaStatusArgs, TASK_ID_ENV,
 };
 
 // --- notify -----------------------------------------------------------------
@@ -229,6 +230,63 @@ pub(super) fn qa_status(paths: &Paths, args: QaStatusArgs) -> Result<()> {
     for task_id in tasks {
         let record = crate::qarun::task_record(paths, task_id, since.into());
         println!("{}", crate::qarun::record_line(&record));
+    }
+    Ok(())
+}
+
+/// Print what a QA pass usually takes, per project, after an optional backfill.
+pub(super) fn qa_outcomes(
+    paths: &Paths,
+    config: &ConfigHandle,
+    args: QaOutcomesArgs,
+) -> Result<()> {
+    use crate::qarun::outcomes::{estimates, OutcomeLog};
+    let log = OutcomeLog::new(&paths.runtime_dir);
+    if args.backfill {
+        let projects: Vec<(String, Vec<String>)> = config
+            .odoo_project_names()
+            .map(|name| {
+                (
+                    name.to_string(),
+                    config.odoo_project_dir_list(name).to_vec(),
+                )
+            })
+            .collect();
+        let project_of = |cwd: &str| {
+            projects
+                .iter()
+                .find(|(_, dirs)| {
+                    dirs.iter().any(|dir| {
+                        crate::util::same_dir(cwd, dir) || crate::util::is_within_dir(cwd, dir)
+                    })
+                })
+                .map(|(name, _)| name.clone())
+        };
+        let report = crate::qarun::backfill::backfill(&paths.projects_dir, &log, project_of);
+        println!(
+            "backfill: {} transcripts, {} parked a verdict, {} added, {} in no mapped project, \
+             {} too short or too long",
+            report.transcripts, report.passes, report.added, report.no_project, report.out_of_range
+        );
+    }
+    let all = estimates(&log.read());
+    if all.is_empty() {
+        println!("No estimates yet: fewer than 3 passes recorded.");
+        return Ok(());
+    }
+    let mut rows: Vec<_> = all.iter().collect();
+    rows.sort_by(|a, b| a.0.cmp(b.0));
+    for (project, estimate) in rows {
+        let name = if project == "*" {
+            "all projects"
+        } else {
+            project
+        };
+        println!(
+            "{name}: {} (from {} passes)",
+            estimate.text(),
+            estimate.passes
+        );
     }
     Ok(())
 }
