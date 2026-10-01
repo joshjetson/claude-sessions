@@ -63,6 +63,70 @@ fn title_parts(title: &str) -> Option<(i64, &str)> {
 }
 
 impl<S: ProcessSource> EngineInner<S> {
+    /// Write the pass down for the queue's estimates: once per round, at its
+    /// first verdict. See [`crate::qarun::outcomes`].
+    ///
+    /// Timed from the session's process start. A pass with no live session to
+    /// time is not recorded: an estimate built on guesses is worse than one
+    /// built on fewer passes.
+    fn record_outcome(&self, task_id: i64, round: u32, title: &str) {
+        let outcome = {
+            let state = self.state();
+            let Some(session) = state
+                .sessions
+                .iter()
+                .filter(|session| session.task_id == Some(task_id) && session.run_id.is_none())
+                .max_by_key(|session| session.session_mtime)
+            else {
+                return;
+            };
+            let Some(started) = session
+                .lstart
+                .as_deref()
+                .and_then(crate::util::start_time_instant)
+            else {
+                return;
+            };
+            let now = std::time::SystemTime::now();
+            let minutes = now
+                .duration_since(started)
+                .unwrap_or_default()
+                .as_secs_f64()
+                / 60.0;
+            let tokens = session.cumulative_usage.as_ref().map_or(0, |usage| {
+                usage.input_tokens + usage.cache_creation_input_tokens + usage.output_tokens
+            });
+            let project = state
+                .task(task_id)
+                .map(|task| task.project_name.clone())
+                .or_else(|| {
+                    state
+                        .auto_qa
+                        .tasks
+                        .iter()
+                        .find(|task| task.id == task_id)
+                        .map(|task| task.project_name.clone())
+                })
+                .unwrap_or_else(|| crate::util::project_name(&session.cwd));
+            let verdict = if title.to_ascii_uppercase().contains("PASS") {
+                "pass"
+            } else {
+                "revisions"
+            };
+            crate::qarun::outcomes::QaOutcome {
+                task_id,
+                project,
+                round,
+                verdict: verdict.to_string(),
+                started_at: chrono::DateTime::<chrono::Utc>::from(started).to_rfc3339(),
+                finished_at: chrono::DateTime::<chrono::Utc>::from(now).to_rfc3339(),
+                minutes,
+                tokens,
+            }
+        };
+        crate::qarun::outcomes::OutcomeLog::new(&self.paths.runtime_dir).append(&outcome);
+    }
+
     /// Raise a post from an agent (`POST /notify`).
     ///
     /// A verdict or a checkpoint that names its task shares that task's row
@@ -88,6 +152,7 @@ impl<S: ProcessSource> EngineInner<S> {
         let rings = post == AgentPost::Verdict && !announced;
         if rings {
             self.db.mark_alerted(&announced_key);
+            self.record_outcome(task_id, round, &new.title);
         }
         if post == AgentPost::Verdict {
             new.kind = NotificationKind::Verdict;

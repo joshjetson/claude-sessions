@@ -434,6 +434,7 @@ impl AppState {
         }
 
         // A lane frees when a session ENDS, and nothing else notices that.
+        self.board.refresh_pass_estimates(&self.paths);
         crate::ui::board::auto_refill(self, std::time::SystemTime::now());
 
         self.dirty = true;

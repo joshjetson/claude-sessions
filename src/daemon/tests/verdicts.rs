@@ -251,3 +251,63 @@ fn the_notify_route_shares_the_verdict_row() {
     assert_eq!(notifications.len(), 1);
     assert_eq!(notifications[0].message, "Updated: second");
 }
+
+// --- the outcome the queue estimates from --------------------------------------
+
+/// A live session for the task, started 30 minutes ago, with some tokens.
+fn working_on(task_id: i64) -> Session {
+    let started = chrono::Local::now() - chrono::Duration::minutes(30);
+    Session {
+        task_id: Some(task_id),
+        lstart: Some(started.format("%a %b %e %H:%M:%S %Y").to_string()),
+        cumulative_usage: Some(crate::types::CumulativeUsage {
+            input_tokens: 1_000,
+            cache_creation_input_tokens: 100_000,
+            cache_read_input_tokens: 9_000_000,
+            output_tokens: 40_000,
+        }),
+        ..a_session("qa-sess", "/repo/aurora")
+    }
+}
+
+fn outcomes(harness: &TestEngine) -> Vec<crate::qarun::outcomes::QaOutcome> {
+    crate::qarun::outcomes::OutcomeLog::new(&harness.paths.runtime_dir).read()
+}
+
+/// Once per round, at its first verdict: the time since the session started,
+/// and its new tokens, without cache reads.
+#[test]
+fn the_first_verdict_of_a_round_records_the_pass() {
+    let harness = engine();
+    harness.state().sessions = index(vec![working_on(7010)]);
+    harness.state().auto_qa.tasks = vec![Task {
+        project_name: "Aurora".to_string(),
+        ..a_task(7010, "QA")
+    }];
+    harness
+        .inner()
+        .raise_agent_post(agent_post("QA #7010: PASS", NotificationLevel::Success));
+    harness
+        .inner()
+        .raise_agent_post(agent_post("QA #7010: PASS", NotificationLevel::Success));
+
+    let recorded = outcomes(&harness);
+    assert_eq!(recorded.len(), 1, "the update recorded a second pass");
+    let pass = &recorded[0];
+    assert_eq!(pass.task_id, 7010);
+    assert_eq!(pass.project, "Aurora");
+    assert_eq!(pass.verdict, "pass");
+    assert_eq!(pass.tokens, 141_000);
+    assert!((29.0..32.0).contains(&pass.minutes), "{}", pass.minutes);
+}
+
+/// With no live session to time, nothing is recorded.
+#[test]
+fn a_verdict_with_no_session_to_time_records_nothing() {
+    let harness = engine();
+    harness.inner().raise_agent_post(agent_post(
+        "QA #7011: REVISION REQUIRED",
+        NotificationLevel::Warn,
+    ));
+    assert!(outcomes(&harness).is_empty());
+}

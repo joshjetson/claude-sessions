@@ -118,6 +118,7 @@ fn run_ctx<'a>(ask: &'a Notification) -> RunCtx<'a> {
         sessions: HashMap::new(),
         asks: HashMap::from([(4101, ask)]),
         now: Some(now()),
+        estimates: HashMap::new(),
     }
 }
 

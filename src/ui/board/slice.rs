@@ -125,6 +125,10 @@ pub struct BoardSlice {
     /// QA assigned to nobody is not on it, so a run looks here for what the
     /// board does not carry. See [`Self::run_task`].
     pub auto_qa_tasks: HashMap<i64, Task>,
+    /// What a QA pass usually takes, per project, from the outcome log. Read
+    /// again only when the file changes. See [`crate::qarun::outcomes`].
+    pub pass_estimates: HashMap<String, crate::qarun::outcomes::Estimate>,
+    pass_estimates_read: Option<SystemTime>,
     /// Derived when an update lands, because the row formatter wants a plain
     /// status per task and a set of gated ids — rebuilding either per row would
     /// be a map copy per frame.
@@ -212,6 +216,20 @@ impl BoardSlice {
                 })
             })
         })
+    }
+
+    /// Read the outcome log again when it changed since the last read. One
+    /// `stat` per call otherwise, so the sessions tick can call it.
+    pub fn refresh_pass_estimates(&mut self, paths: &Paths) {
+        let log = crate::qarun::outcomes::OutcomeLog::new(&paths.runtime_dir);
+        let modified = std::fs::metadata(log.path())
+            .and_then(|meta| meta.modified())
+            .ok();
+        if modified == self.pass_estimates_read {
+            return;
+        }
+        self.pass_estimates_read = modified;
+        self.pass_estimates = crate::qarun::outcomes::estimates(&log.read());
     }
 
     /// The task a run works from: the board's row, or the Auto QA list's when
@@ -470,6 +488,7 @@ impl BoardSlice {
             sessions: sessions.clone(),
             asks,
             now: Some(now),
+            estimates: self.pass_estimates.clone(),
         }
     }
 }
