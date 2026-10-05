@@ -8,7 +8,7 @@
 
 use crate::ui::board::controller::{focus_task_terminal, task_sessions, SessionTarget};
 use crate::ui::board::task_session;
-use crate::ui::board::{go_to_task_session, resolve_notif_session};
+use crate::ui::board::{go_to_task_session, live_task_ids, resolve_notif_session};
 
 use super::fixtures::*;
 
@@ -192,4 +192,32 @@ fn a_notification_falls_back_to_its_task_then_its_folder() {
     let by_cwd =
         resolve_notif_session(state.sessions(), &notification("n", None), None).expect("a session");
     assert_eq!(by_cwd.cwd, "/repo");
+}
+
+#[test]
+fn a_task_is_live_only_while_a_session_is_open_on_it() {
+    let (_dir, mut state) = board_state();
+    let mut coordinator = live_session("coord", Some(7003), 3000);
+    coordinator.run_id = Some("run-1".to_string());
+    with_sessions(
+        &mut state,
+        vec![
+            live_session("named", Some(7001), 1000),
+            // Started by hand: the transcript names no task, the link does.
+            live_session("by-hand", None, 2000),
+            coordinator,
+        ],
+    );
+    with_link(&mut state, 7002, running_link("/repo", "by-hand"));
+    // Killed: the link still says Running, but its session is gone.
+    with_link(&mut state, 7004, running_link("/repo", "killed"));
+
+    let live = live_task_ids(state.sessions(), &state.board.links);
+    assert!(live.contains(&7001), "a transcript names the task");
+    assert!(live.contains(&7002), "the link points at a live session");
+    assert!(
+        !live.contains(&7003),
+        "a QA run's coordinator is not the task's session"
+    );
+    assert!(!live.contains(&7004), "the link's session was killed");
 }

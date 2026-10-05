@@ -37,21 +37,20 @@ pub type AutoDevResolver = fn(&[String]) -> Option<AutoMarker>;
 /// "nothing known", which is also what [`BoardCtx::default`] gives you.
 #[derive(Default)]
 pub struct BoardCtx<'a> {
-    /// Sessions the dashboard launched, by task id.
+    /// Sessions the dashboard launched, by task id. Only picks the glyph of a
+    /// task that is live: the link outlives its session.
     pub task_sessions: Option<&'a HashMap<i64, TaskSessionStatus>>,
-    /// Tasks whose completion marker has landed but whose board row has not
-    /// caught up yet.
-    pub done_tasks: Option<&'a HashSet<i64>>,
     pub archived_tasks: Option<&'a HashSet<i64>>,
     /// Tasks the readiness gate stopped with questions waiting for a human.
     pub blocked_tasks: Option<&'a HashSet<i64>>,
     /// Recorded Optics processes per task.
     pub optics_tasks: Option<&'a HashMap<i64, usize>>,
-    /// Tasks a live transcript says are being worked right now.
+    /// Tasks with a session open on them right now. The only thing that turns
+    /// a row's glyph green.
     ///
-    /// The fallback that makes the running marker right after a daemon restart:
-    /// a session started outside the dashboard, or before the restart, is still
-    /// working the task even though `task_sessions` is empty.
+    /// Read from the live sessions, not from `task_sessions`: a session started
+    /// outside the dashboard, or before a daemon restart, is still working the
+    /// task, and a killed one is not, whatever its link says.
     pub live_task_ids: Option<&'a HashSet<i64>>,
     /// The blink tick — unread notifications flash on it.
     pub blink_on: bool,
@@ -142,24 +141,25 @@ fn task_markers(task: &Task, ctx: &BoardCtx<'_>) -> TaskMarkers {
         .and_then(|sessions| sessions.get(&task.id))
         .copied();
     let mut marker = RowBuilder::new();
-    if BoardCtx::has(ctx.done_tasks, task.id) {
-        marker.styled("✓", Role::Ok);
-    } else if needs_info {
+    if needs_info {
         marker.styled("🚧", Role::Warn);
     } else if task.open_blocker_count > 0 {
         // Odoo says another task has to land first — distinct from the
         // readiness gate's "needs info" above.
         marker.styled("⛔", Role::Danger);
-    } else if let Some(status) = session {
+    } else if BoardCtx::has(ctx.live_task_ids, task.id) {
+        // Green means a session is open on the task right now, and nothing
+        // else. The launch link and the completion marker outlive the session:
+        // read alone, they kept a task green after its session was killed and
+        // after it came back from QA, so the task never looked like it needed
+        // work again.
         marker.styled(
-            match status {
-                TaskSessionStatus::Done => "✓",
-                TaskSessionStatus::Running => "⟳",
+            match session {
+                Some(TaskSessionStatus::Done) => "✓",
+                _ => "⟳",
             },
             Role::Ok,
         );
-    } else if BoardCtx::has(ctx.live_task_ids, task.id) {
-        marker.styled("⟳", Role::Ok);
     } else {
         marker.styled("○", Role::Dim);
     }
