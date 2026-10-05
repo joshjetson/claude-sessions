@@ -40,13 +40,46 @@ fn a_plain_task_row_is_marker_name_and_id() {
 #[test]
 fn a_running_session_marks_the_row() {
     let sessions = HashMap::from([(5944, TaskSessionStatus::Running)]);
+    let live = HashSet::from([5944]);
     let ctx = BoardCtx {
         task_sessions: Some(&sessions),
+        live_task_ids: Some(&live),
         ..ctx()
     };
     let row = row_for(&task(5944, "Fix the export"), &ctx);
     assert!(text(&row).contains("⟳"));
     assert_eq!(role_of(&row, "⟳"), Some(Role::Ok));
+}
+
+#[test]
+fn a_killed_session_turns_the_row_gray() {
+    // The launch link still says Running: nothing flips it when a session is
+    // killed and the archive already names that session. No live session, so
+    // the row is gray.
+    let sessions = HashMap::from([(5944, TaskSessionStatus::Running)]);
+    let live = HashSet::new();
+    let ctx = BoardCtx {
+        task_sessions: Some(&sessions),
+        live_task_ids: Some(&live),
+        ..ctx()
+    };
+    let row = row_for(&task(5944, "Fix the export"), &ctx);
+    assert!(!text(&row).contains("⟳"));
+    assert_eq!(role_of(&row, "○"), Some(Role::Dim));
+}
+
+#[test]
+fn a_task_back_from_qa_with_no_session_is_gray() {
+    // The task finished once, so its link says Done. It came back from QA and
+    // nobody has opened a session on it yet: the row must not stay green.
+    let sessions = HashMap::from([(5944, TaskSessionStatus::Done)]);
+    let ctx = BoardCtx {
+        task_sessions: Some(&sessions),
+        ..ctx()
+    };
+    let row = row_for(&task(5944, "Fix the export"), &ctx);
+    assert!(!text(&row).contains("✓"));
+    assert_eq!(role_of(&row, "○"), Some(Role::Dim));
 }
 
 #[test]
@@ -62,20 +95,16 @@ fn a_session_the_dashboard_lost_track_of_still_marks_the_row() {
 }
 
 #[test]
-fn a_finished_session_and_a_completion_marker_both_read_as_done() {
+fn a_finished_session_still_open_reads_as_done() {
     let sessions = HashMap::from([(5944, TaskSessionStatus::Done)]);
-    let from_session = BoardCtx {
+    let live = HashSet::from([5944]);
+    let ctx = BoardCtx {
         task_sessions: Some(&sessions),
+        live_task_ids: Some(&live),
         ..ctx()
     };
-    assert!(text(&row_for(&task(5944, "One"), &from_session)).contains("✓"));
-
-    let done = HashSet::from([5944]);
-    let from_marker = BoardCtx {
-        done_tasks: Some(&done),
-        ..ctx()
-    };
-    assert!(text(&row_for(&task(5944, "One"), &from_marker)).contains("✓"));
+    let row = row_for(&task(5944, "One"), &ctx);
+    assert_eq!(role_of(&row, "✓"), Some(Role::Ok));
 }
 
 #[test]

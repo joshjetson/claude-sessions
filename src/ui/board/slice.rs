@@ -314,7 +314,6 @@ impl BoardSlice {
     pub fn ctx_at_width<'a>(&'a self, live: &'a HashSet<i64>, tree_cols: u16) -> BoardCtx<'a> {
         BoardCtx {
             task_sessions: Some(&self.session_status),
-            done_tasks: Some(&self.done_tasks),
             archived_tasks: Some(&self.archived_tasks),
             blocked_tasks: Some(&self.blocked_ids),
             optics_tasks: Some(&self.optics_tasks),
@@ -334,11 +333,31 @@ impl BoardSlice {
     }
 }
 
-/// The task ids a live transcript names. Derived from the sessions rather than
-/// from the launch links on purpose: a session started outside the dashboard,
-/// or before the daemon restarted, is still working its task.
-pub fn live_task_ids<'a>(sessions: impl Iterator<Item = &'a Session>) -> HashSet<i64> {
-    sessions.filter_map(|session| session.task_id).collect()
+/// The task ids with a session open on them right now.
+///
+/// Derived from the live sessions rather than from the launch links on
+/// purpose: a session started outside the dashboard, or before the daemon
+/// restarted, is still working its task, and a killed one is not. A link counts
+/// only while the session it points at is still live, which covers a session
+/// whose transcript names no task. A QA run's coordinator is never a task's
+/// session (see [`super::controller::task_sessions`]).
+pub fn live_task_ids<'a>(
+    sessions: impl Iterator<Item = &'a Session> + Clone,
+    links: &BTreeMap<i64, TaskLink>,
+) -> HashSet<i64> {
+    let mut live: HashSet<i64> = sessions
+        .clone()
+        .filter(|session| session.run_id.is_none())
+        .filter_map(|session| session.task_id)
+        .collect();
+    for (task_id, link) in links {
+        if !live.contains(task_id)
+            && super::controller::task_session(sessions.clone(), *task_id, Some(link)).is_some()
+        {
+            live.insert(*task_id);
+        }
+    }
+    live
 }
 
 fn status_of(status: TaskLinkStatus) -> TaskSessionStatus {

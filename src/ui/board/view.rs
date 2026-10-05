@@ -295,7 +295,7 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize, width: u16) ->
     let keys: Vec<String> = items.iter().map(board_item_key).collect();
     let selected = state.board_sel.resolve(&keys);
     let top = crate::ui::components::keep_visible(selected, scroll_top, height, items.len());
-    let live = live_task_ids(state.sessions());
+    let live = live_task_ids(state.sessions(), &state.board.links);
     // Only a QA run's status column reads the width; every other row formats
     // identically whatever the pane is.
     let qa_stages = state.config.qa_alerts().stages;
