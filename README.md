@@ -338,8 +338,9 @@ one would work is refused, and the page says which. Navigation keys, `Enter`, `T
 
 ### Auto QA
 
-With Auto QA on for a project, a task that arrives in one of its QA stages
-(`qa.newTaskStages`) starts by itself. You still give the verdict and close the session.
+With Auto QA on for a project, every task in one of its QA stages (`qa.newTaskStages`)
+starts by itself: the tasks already there when you switch it on, and each task that arrives
+later. You still give the verdict and close the session.
 
 1. The daemon checks the project's QA stages every 15 seconds. When the board shows a
    task in QA before that check, the dashboard asks the daemon to check at once. A task
@@ -347,13 +348,15 @@ With Auto QA on for a project, a task that arrives in one of its QA stages
 2. The run gets a coordinator if none is running. A running coordinator is told the task
    joined.
 3. The run starts the task when a lane is free. The usual rules hold: no second session on
-   a task, the lane limit, and never a task Odoo marks Done, Complete, Changes Requested or
-   Cancelled.
+   a task, the lane limit, never a task Odoo marks Done, Complete, Changes Requested or
+   Cancelled, and never a task whose QAden verdict still describes the code in front of it.
 
 The details:
 
-- Switching a project on records what already sits in its QA stages. Auto QA starts what
-  arrives from then on, not the backlog.
+- Switching a project on starts what already sits in its QA stages, not only what arrives
+  later. Until 1.2.19 it recorded that backlog and skipped it. The first check after an
+  update to a later version hands every task in QA over once, and the run's rules above
+  refuse the ones already running or done.
 - A task that comes back to QA after a revision is a new round, and starts again.
 - A task assigned to another QA reviewer (`qa.otherQaUserIds`) and not to you is left out.
 - Sessions start only while the dashboard is open. An arrival while it is closed waits in

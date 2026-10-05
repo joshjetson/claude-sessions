@@ -13,9 +13,19 @@
 //!
 //! An arrival is keyed by task, stage and stage-entry time, like the QA arrival
 //! notification, so a task that comes back to QA after a revision is new work
-//! again. The first time a project is switched on, whatever already sits in
-//! its QA stages is recorded silently: Auto QA starts what arrives from then
-//! on, not the backlog.
+//! again.
+//!
+//! Every task in a QA stage is handed over, the backlog included: a project
+//! switched on starts what already sits in QA as well as what arrives later.
+//! The dashboard's run admission is the guard against a second pass. It refuses
+//! a task that has a live session, that the run already started, that Odoo
+//! closed, or whose verdict still describes the code in front of it.
+//!
+//! Until 1.2.19 the first check of a project recorded its backlog as handled,
+//! under the same key a started task gets, so the two cannot be told apart.
+//! The keys carry a `handed` marker since then and the old ones are not read:
+//! each task in QA is handed over once more, and admission refuses the ones
+//! already done.
 
 use serde::{Deserialize, Serialize};
 
@@ -88,9 +98,12 @@ fn bootstrap_key(project: &str) -> String {
 }
 
 /// The key that records one arrival as handled.
+///
+/// `handed` tells it from the keys up to 1.2.19, which also marked the
+/// backlog a project had when it was switched on. See the module note.
 pub fn arrival_key(entry: &QaStageTask) -> String {
     format!(
-        "autoqa:{}:{}:{}",
+        "autoqa:handed:{}:{}:{}",
         entry.task.id,
         normalise_stage(&entry.task.stage_name),
         entry.stage_entered
@@ -191,6 +204,8 @@ impl<S: ProcessSource> EngineInner<S> {
         }
         let mine = auto_tasks(&tasks, &projects, &rule);
 
+        // Logged once per project. The backlog is handed over with everything
+        // else below. This line only says what was already there.
         for project in &projects {
             let key = bootstrap_key(project);
             if self.db.was_alerted(&key) {
@@ -200,14 +215,11 @@ impl<S: ProcessSource> EngineInner<S> {
             let backlog: Vec<String> = mine
                 .iter()
                 .filter(|entry| entry.task.project_name.trim().to_lowercase() == wanted)
-                .map(|entry| {
-                    self.db.mark_alerted(&arrival_key(entry));
-                    format!("#{}", entry.task.id)
-                })
+                .map(|entry| format!("#{}", entry.task.id))
                 .collect();
             self.db.mark_alerted(&key);
             trace(&format!(
-                "{project}: switched on. Already in QA, so not started: {}.",
+                "{project}: switched on. Already in QA, handed to the dashboard: {}.",
                 if backlog.is_empty() {
                     "nothing".to_string()
                 } else {

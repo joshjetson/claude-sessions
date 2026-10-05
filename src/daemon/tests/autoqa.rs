@@ -76,21 +76,45 @@ fn with_no_project_on_nothing_is_fetched() {
     assert_eq!(feed(&w.harness), AutoQaFeed::default());
 }
 
-/// Switched on, the backlog already in QA is recorded silently: Auto QA starts
-/// what arrives from then on. The tasks are still published, because the
-/// dashboard needs their Odoo state.
+/// Switched on, the backlog already in QA is handed over too, and so is what
+/// arrives after it. The dashboard's run admission refuses a task already done.
 #[test]
-fn switching_on_records_the_backlog_and_starts_what_arrives_next() {
+fn switching_on_hands_over_the_backlog_and_what_arrives_next() {
     let w = watcher(auto_on(), vec![entry(1, PROJECT)]);
     w.harness.inner().watch_auto_qa();
-    assert!(arrival_ids(&w.harness).is_empty(), "the backlog arrived");
+    assert_eq!(
+        arrival_ids(&w.harness),
+        vec![1],
+        "the backlog was not handed over"
+    );
     assert_eq!(feed(&w.harness).tasks.len(), 1);
+    assert_eq!(feed(&w.harness).arrivals[0].project, PROJECT);
+    assert_eq!(feed(&w.harness).arrivals[0].stage, "QA");
 
     w.queue.lock().unwrap().push(entry(2, PROJECT));
     w.harness.inner().watch_auto_qa();
-    assert_eq!(arrival_ids(&w.harness), vec![2]);
-    assert_eq!(feed(&w.harness).arrivals[0].project, PROJECT);
-    assert_eq!(feed(&w.harness).arrivals[0].stage, "QA");
+    assert_eq!(arrival_ids(&w.harness), vec![1, 2]);
+}
+
+/// Up to 1.2.19 switching on recorded the backlog under the same key a started
+/// task got. Those keys must not hide a task: it is handed over once more, and
+/// the dashboard's admission refuses it when it is already running or done.
+#[test]
+fn a_key_from_before_the_handed_marker_does_not_hide_a_task() {
+    let w = watcher(auto_on(), vec![entry(5, PROJECT)]);
+    let task = entry(5, PROJECT);
+    let old_key = format!(
+        "autoqa:{}:{}:{}",
+        task.task.id,
+        crate::daemon::normalise_stage(&task.task.stage_name),
+        task.stage_entered
+    );
+    w.harness.engine.db().mark_alerted(&old_key);
+    w.harness.inner().watch_auto_qa();
+    assert_eq!(arrival_ids(&w.harness), vec![5]);
+    assert!(feed(&w.harness).arrivals[0]
+        .key
+        .starts_with("autoqa:handed:"));
 }
 
 /// An arrival waits for the dashboard, however many ticks pass and across a
