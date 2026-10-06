@@ -408,3 +408,34 @@ fn menu_label_for_reads_the_disk_without_any_head() {
     let label = menu_label_for(&f.paths, 700020, &HeadCache::new());
     assert!(label.contains("resume round 1, 2 gaps open"), "{label}");
 }
+
+#[test]
+fn the_round_written_by_matrix_py_wins_over_the_archive_count() {
+    // 6751's round 7 was archived as run-round4.json by hand, so the count
+    // read 5 while matrix.py would print "archived round 7". Since QAden
+    // 1.16.0 the file says which round it is, and the prompt must agree with
+    // what `init --force` is about to print.
+    let f = fixture();
+    let dir = write_run(
+        &f.paths,
+        700040,
+        Run {
+            rounds: 3,
+            closed: 2,
+            ..Run::default()
+        },
+    );
+    let mut body: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("run.json")).unwrap()).unwrap();
+    body["round"] = json!(7);
+    fs::write(dir.join("run.json"), body.to_string()).unwrap();
+    assert_eq!(state(&f.paths, 700040).round, 7);
+
+    // A round of 0, a string, or a missing key falls back to the count.
+    body["round"] = json!("seven");
+    fs::write(dir.join("run.json"), body.to_string()).unwrap();
+    assert_eq!(state(&f.paths, 700040).round, 4);
+    body["round"] = json!(0);
+    fs::write(dir.join("run.json"), body.to_string()).unwrap();
+    assert_eq!(state(&f.paths, 700040).round, 4);
+}
