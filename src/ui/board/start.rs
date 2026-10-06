@@ -226,13 +226,14 @@ fn send_to_live(
 /// Everything after the folder is known.
 fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
     let task = &request.task;
+    let extras = launch_extras(state, request);
     let context = prompt_context(
         &state.config,
         &state.paths,
         task,
         task_url(state, task.id),
         &request.extra_context,
-        &request.extras,
+        &extras,
     );
     let prompt = match context.prompt(&request.kind, dir, None) {
         Ok(prompt) => prompt,
@@ -267,6 +268,35 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
     state.board.blocked_tasks.remove(&task.id);
     state.enqueue(Action::Launch(Box::new(spec)));
     state.dirty = true;
+}
+
+/// The request's extras, plus what QAden has recorded about the task when the
+/// launch is a QA pass.
+///
+/// The board already reads `run.json` to label the menu entry "start round 3
+/// (round 2 complete)"; the agent was told none of it, and its prompt opened
+/// with "starting cold", so round 3 was a new audit of the whole MR. Now the
+/// prompt names the recorded round and opens the next one as a verification
+/// round. The caller's extras are merged last, the same precedence
+/// [`prompt_context`] gives them.
+fn launch_extras(
+    state: &AppState,
+    request: &StartRequest,
+) -> std::collections::BTreeMap<String, String> {
+    if !matches!(request.kind, LaunchKind::Qa | LaunchKind::QaDry) {
+        return request.extras.clone();
+    }
+    let run = crate::qaden::qa_run_state(&state.paths, request.task.id, |dir| {
+        state.qa_heads.cached(dir)
+    });
+    let mut extras = crate::pipeline::definitions::prior_round_extras(&run);
+    extras.extend(
+        request
+            .extras
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    extras
 }
 
 /// A token for one QA session, proving later that an instruction came from the

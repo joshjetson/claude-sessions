@@ -89,8 +89,12 @@ pub(crate) const GOLDEN_REVISION: &[&str] = &[
     " Then run: claude-sessions done 5944 --summary-file /runtime/summaries/task-5944-summary.md",
 ];
 
+/// The opening of every QA prompt. Independence is from the DEVELOPER; it used
+/// to read "starting cold", and a cold start on round 3 was a new audit.
+const QA_PREAMBLE: &str = "You are the QA reviewer for this task, and you are independent of whoever built it on purpose. Do not assume the implementation is correct and do not reuse any reasoning from the developer — that independence is the whole value of this pass. It does not extend to QA's own earlier rounds on this task: those are your record, and a repeat round starts from them.";
+
 const GOLDEN_QA: &[&str] = &[
-    "You are the QA reviewer for this task, and you are starting cold on purpose. Do not assume the implementation is correct and do not reuse any reasoning from whoever built it — independence is the whole value of this pass.",
+    QA_PREAMBLE,
     " The task is https://odoo/web#id=5944&model=project.task&view_type=form.",
     " Run /qa 5944 and follow that skill exactly, including its completeness challenge. Do not skip the challenge and do not shorten the gap list after forming a verdict.",
     // How a session tells the reviewer's decision from a peer's opinion. A
@@ -134,7 +138,7 @@ const GOLDEN_CONFLICT: &[&str] = &[
 ];
 
 const GOLDEN_QA_DRY: &[&str] = &[
-    "You are the QA reviewer for this task, and you are starting cold on purpose. Do not assume the implementation is correct and do not reuse any reasoning from whoever built it — independence is the whole value of this pass.",
+    QA_PREAMBLE,
     " The task is https://odoo/web#id=5944&model=project.task&view_type=form.",
     " Run /qa 5944 and follow that skill exactly, including its completeness challenge. Do not skip the challenge and do not shorten the gap list after forming a verdict.",
     " This is a dry run by the developer, not a hand-back. Do NOT write a pass note or a revision note, do NOT run write_note.py, do NOT notify the dashboard, and do NOT touch Odoo in any way. Report the per-criterion results and the challenge findings in the terminal, then stop and wait for the user. Do not end the session.",
@@ -187,11 +191,121 @@ fn the_conflict_prompt_lifted_out_of_actions_js_is_unchanged() {
 fn a_dry_run_reports_instead_of_parking_a_verdict() {
     let out = prompt("qa-dry", &vars());
     assert_eq!(out, GOLDEN_QA_DRY.concat());
-    // The same cold start and the same pass as `qa`…
+    // The same independence and the same pass as `qa`…
     assert!(out.contains(" Run /qa 5944 and follow that skill exactly"));
     // …but nothing is written for hand-back and nothing is flagged.
     assert!(!out.contains("claude-sessions notify"));
     assert!(!out.contains("@PM placeholder"));
+}
+
+/// The pass step when the board found a recorded verdict in `run.json`.
+const GOLDEN_QA_REPEAT_ROUND: &str = " Run /qa 5944 and follow that skill exactly. This task already has a QA record: round 2 ended in REVISION REQUIRED at commit 7a2a9d1. \
+This launch opens round 3, which is a VERIFICATION round, not a new audit. \
+Open it with `matrix.py init --force --head <this commit>` — that archives round 2 and prints its FAILs, its BLOCKED and SCOPE gaps and its carried decisions. Read them first. \
+The gap list has three parts and no others: last round's items, one row each; what the fix diff changed, with what calls it and what renders it; and the criteria the fix can affect. \
+Criteria the diff does not touch keep last round's evidence. \
+Do not write fresh gap rows over the whole MR. A defect outside those three parts is an observation for the checkpoint, recorded with its criterion as none — it does not hand the task back on its own. \
+Do not shorten the gap list after forming a verdict.";
+
+fn repeat_round_vars(verdict: &str, head: Option<&str>) -> PromptVars {
+    use crate::pipeline::definitions::{
+        QA_PRIOR_HEAD_VAR, QA_PRIOR_ROUND_VAR, QA_PRIOR_VERDICT_VAR,
+    };
+    let mut vars = vars();
+    vars.extras
+        .insert(QA_PRIOR_ROUND_VAR.to_string(), "2".to_string());
+    vars.extras
+        .insert(QA_PRIOR_VERDICT_VAR.to_string(), verdict.to_string());
+    if let Some(head) = head {
+        vars.extras
+            .insert(QA_PRIOR_HEAD_VAR.to_string(), head.to_string());
+    }
+    vars
+}
+
+#[test]
+fn a_repeat_round_is_a_verification_round_not_a_new_audit() {
+    // Measured over 593 runs: a repeat round that started cold wrote 13 to 17
+    // fresh gap rows over the whole MR, and the pass chance per round was the
+    // same in round 6 as in round 1. The prompt now names the recorded round
+    // and scopes the next one to the fix.
+    let out = prompt("qa", &repeat_round_vars("revisions", Some("7a2a9d1")));
+    let expected =
+        [GOLDEN_QA[0], GOLDEN_QA[1], GOLDEN_QA_REPEAT_ROUND].concat() + &GOLDEN_QA[3..].concat();
+    assert_eq!(out, expected);
+    // The first-round wording is gone: no fresh completeness challenge.
+    assert!(!out.contains("including its completeness challenge"));
+    // The ordering lock stays whatever the round.
+    assert!(out.contains("Do not shorten the gap list after forming a verdict"));
+}
+
+#[test]
+fn a_repeat_round_names_a_pass_and_survives_a_missing_head() {
+    let out = prompt("qa-dry", &repeat_round_vars("pass", None));
+    assert!(out.contains("round 2 ended in PASS. This launch opens round 3"));
+    assert!(!out.contains("at commit"));
+    // The dry run gets the same round framing as the hand-back pass.
+    assert!(out.contains("VERIFICATION round"));
+}
+
+#[test]
+fn a_first_round_still_runs_the_full_challenge() {
+    // No recorded round means no extras, and the prompt is the pinned one:
+    // the full completeness challenge, as before.
+    let out = prompt("qa", &vars());
+    assert!(out.contains("including its completeness challenge"));
+    assert!(!out.contains("VERIFICATION round"));
+}
+
+#[test]
+fn only_a_recorded_verdict_makes_the_next_launch_a_repeat_round() {
+    use crate::pipeline::definitions::{
+        prior_round_extras, QA_PRIOR_HEAD_VAR, QA_PRIOR_ROUND_VAR, QA_PRIOR_VERDICT_VAR,
+    };
+    use crate::qaden::{QaRunState, QaVerdict};
+
+    // No run.json at all.
+    assert!(prior_round_extras(&QaRunState::default()).is_empty());
+
+    // A round still open is a resume, which /qa handles by itself.
+    let open = QaRunState {
+        exists: true,
+        round: 1,
+        open_gaps: 3,
+        ..QaRunState::default()
+    };
+    assert!(prior_round_extras(&open).is_empty());
+
+    // A recorded verdict: the next launch opens the round after it.
+    let recorded = QaRunState {
+        exists: true,
+        round: 2,
+        head: Some("7a2a9d1".to_string()),
+        verdict: Some(QaVerdict::Revisions),
+        ..QaRunState::default()
+    };
+    let extras = prior_round_extras(&recorded);
+    assert_eq!(
+        extras.get(QA_PRIOR_ROUND_VAR).map(String::as_str),
+        Some("2")
+    );
+    assert_eq!(
+        extras.get(QA_PRIOR_VERDICT_VAR).map(String::as_str),
+        Some("revisions")
+    );
+    assert_eq!(
+        extras.get(QA_PRIOR_HEAD_VAR).map(String::as_str),
+        Some("7a2a9d1")
+    );
+
+    // A verdict with no anchoring commit still counts; the prompt just drops
+    // the commit.
+    let unanchored = QaRunState {
+        head: None,
+        ..recorded
+    };
+    assert!(!prior_round_extras(&unanchored).contains_key(QA_PRIOR_HEAD_VAR));
+    assert!(prior_round_extras(&unanchored).contains_key(QA_PRIOR_ROUND_VAR));
 }
 
 #[test]
