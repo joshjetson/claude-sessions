@@ -33,7 +33,10 @@ mod task;
 
 pub use conflict::CONFLICT_PIPELINE;
 pub use pre_optics::PRE_OPTICS_PIPELINE;
-pub use qa::{QA_DRYRUN_PIPELINE, QA_PIPELINE};
+pub use qa::{
+    prior_round_extras, QA_DRYRUN_PIPELINE, QA_PIPELINE, QA_PRIOR_HEAD_VAR, QA_PRIOR_ROUND_VAR,
+    QA_PRIOR_VERDICT_VAR,
+};
 pub use qa_run::{
     QA_ROOT_VAR, QA_RUN_PIPELINE, RUN_ID_VAR, RUN_STARTED_VAR, TASK_IDS_VAR, TRIAGE_VAR,
 };

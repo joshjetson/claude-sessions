@@ -228,6 +228,90 @@ fn a_task_launch_asks_for_the_working_stage_and_a_qa_launch_does_not() {
     }
 }
 
+/// A QA launch on a task QAden has already judged tells the agent so.
+///
+/// The board labelled the menu entry "start round 3 (round 2 complete)" from
+/// `run.json` and then launched a prompt that said "starting cold", so the
+/// agent audited the whole MR again. The same file now reaches the prompt.
+#[test]
+fn a_qa_launch_on_a_recorded_round_opens_a_verification_round() {
+    let (_dir, mut state) = board_state();
+    state
+        .config
+        .add_odoo_project_dir("NoSuchProject-ForTests", "/tmp/repo")
+        .unwrap();
+    // Round 2 is archived beside the live file; the live file holds round 3's
+    // verdict. QAden's own layout, as `qaden::qa_run_state` reads it.
+    let qa_dir = state.paths.qa_task_dir(5238);
+    std::fs::create_dir_all(&qa_dir).unwrap();
+    std::fs::write(qa_dir.join("run-round1.json"), "{}").unwrap();
+    std::fs::write(qa_dir.join("run-round2.json"), "{}").unwrap();
+    std::fs::write(
+        qa_dir.join("run.json"),
+        r#"{"meta":{"head":"7a2a9d1"},"cells":{"G1|check":{"verdict":"FAIL"}},"verdict":"revisions","note_written":{"kind":"rev"}}"#,
+    )
+    .unwrap();
+
+    for kind in [LaunchKind::Qa, LaunchKind::QaDry] {
+        start(&mut state, start_request(&task(5238, "x"), kind.clone()));
+        let queued = actions(&mut state);
+        let Some(Action::Launch(spec)) =
+            queued.into_iter().find(|a| matches!(a, Action::Launch(_)))
+        else {
+            panic!("no launch for {kind:?}");
+        };
+        let prompt = spec.prompt.expect("a QA launch carries a prompt");
+        assert!(
+            prompt.contains("round 3 ended in REVISION REQUIRED at commit 7a2a9d1. This launch opens round 4, which is a VERIFICATION round"),
+            "{kind:?}: {prompt}"
+        );
+        assert!(!prompt.contains("including its completeness challenge"));
+    }
+
+    // A task pipeline launch on the same folder is not a QA pass and gets none
+    // of it.
+    start(
+        &mut state,
+        start_request(&task(5238, "x"), LaunchKind::Task),
+    );
+    let queued = actions(&mut state);
+    let Some(Action::Launch(spec)) = queued.into_iter().find(|a| matches!(a, Action::Launch(_)))
+    else {
+        panic!("no task launch");
+    };
+    assert!(!spec
+        .prompt
+        .unwrap_or_default()
+        .contains("VERIFICATION round"));
+}
+
+/// No `run.json`, or one with no verdict yet, keeps the first-round prompt.
+#[test]
+fn a_qa_launch_without_a_recorded_verdict_runs_the_full_challenge() {
+    let (_dir, mut state) = board_state();
+    state
+        .config
+        .add_odoo_project_dir("NoSuchProject-ForTests", "/tmp/repo")
+        .unwrap();
+    // An open round: cells, no verdict. /qa resumes it by itself.
+    let qa_dir = state.paths.qa_task_dir(5238);
+    std::fs::create_dir_all(&qa_dir).unwrap();
+    std::fs::write(
+        qa_dir.join("run.json"),
+        r#"{"meta":{"head":"7a2a9d1"},"cells":{"G1|check":{"verdict":null}},"verdict":null}"#,
+    )
+    .unwrap();
+    start(&mut state, start_request(&task(5238, "x"), LaunchKind::Qa));
+    let queued = actions(&mut state);
+    let Some(Action::Launch(spec)) = queued.into_iter().find(|a| matches!(a, Action::Launch(_)))
+    else {
+        panic!("no launch");
+    };
+    let prompt = spec.prompt.expect("a QA launch carries a prompt");
+    assert!(prompt.contains("including its completeness challenge"));
+    assert!(!prompt.contains("VERIFICATION round"));
+}
+
 #[test]
 fn qa_does_not_skip_permission_prompts() {
     // QA drives real preview environments carrying live credentials, so a

@@ -19,8 +19,47 @@
 //!    and the refusal to reach a verdict with no gap list. Measured across 31
 //!    real runs, fidelity drops every time a step is handed across a boundary.
 
+use std::collections::BTreeMap;
+
 use super::{PipelineDef, StepDef};
 use crate::pipeline::vars::{bin, PromptVars};
+use crate::qaden::QaRunState;
+
+/// The round QAden has recorded for this task, when there is one. Filled by
+/// the board from `run.json` at launch — see [`prior_round_extras`].
+pub const QA_PRIOR_ROUND_VAR: &str = "qaPriorRound";
+/// How that round ended: `pass` or `revisions`.
+pub const QA_PRIOR_VERDICT_VAR: &str = "qaPriorVerdict";
+/// The commit that round was anchored to, when `run.json` names one.
+pub const QA_PRIOR_HEAD_VAR: &str = "qaPriorHead";
+
+/// Prompt variables for a QA launch on a task that already has a verdict.
+///
+/// The board reads `run.json` to label the QA menu entry ("start round 3,
+/// round 2 complete"); the agent used to be told none of it. Its prompt said
+/// "starting cold", and a cold start on round 3 is a new full audit of the
+/// MR. Measured over 593 runs, that audit wrote 13 to 17 fresh gap rows a
+/// round, 83% on surfaces no earlier round had looked at, and the pass chance
+/// per round was the same in round 6 as in round 1. The developer had fixed
+/// every listed item in 69% of those rounds.
+///
+/// Only a RECORDED verdict counts. An open round is a resume, which `/qa`
+/// handles by itself, and a file we cannot read means no prior run.
+pub fn prior_round_extras(run: &QaRunState) -> BTreeMap<String, String> {
+    let mut extras = BTreeMap::new();
+    let Some(verdict) = run.verdict.filter(|_| run.exists) else {
+        return extras;
+    };
+    extras.insert(QA_PRIOR_ROUND_VAR.to_string(), run.round.to_string());
+    extras.insert(
+        QA_PRIOR_VERDICT_VAR.to_string(),
+        verdict.as_str().to_string(),
+    );
+    if let Some(head) = &run.head {
+        extras.insert(QA_PRIOR_HEAD_VAR.to_string(), head.clone());
+    }
+    extras
+}
 
 /// Shared by both QA pipelines: the task URL plus anything typed at launch.
 const CONTEXT: StepDef = StepDef::new(
@@ -40,14 +79,14 @@ const RUN_QA: StepDef = StepDef::new(
 )
 .skill("qa")
 .gate()
-.detail("Invoked whole and never decomposed — see the note above this pipeline. /qa stops for a human verdict at its checkpoint, which is the point of it. Verified: an interactive session in a detached tmux pane reaches a checkpoint and waits rather than running past it.");
+.detail("Invoked whole and never decomposed — see the note above this pipeline. /qa stops for a human verdict at its checkpoint, which is the point of it. Verified: an interactive session in a detached tmux pane reaches a checkpoint and waits rather than running past it. When run.json already holds a verdict, the step names that round and its outcome and opens the next one as a verification round: last round's items, the fix diff, the criteria the fix can affect — not a fresh audit of the whole MR.");
 
 pub static QA_PIPELINE: PipelineDef = PipelineDef {
     id: "qa",
     name: "QA a task",
     trigger: "Enter on a board task → QA",
     summary: "Runs QAden against delivered work and parks the verdict for a human to confirm. Posts nothing to Odoo and moves no stage.",
-    preamble: "You are the QA reviewer for this task, and you are starting cold on purpose. Do not assume the implementation is correct and do not reuse any reasoning from whoever built it — independence is the whole value of this pass.",
+    preamble: "You are the QA reviewer for this task, and you are independent of whoever built it on purpose. Do not assume the implementation is correct and do not reuse any reasoning from the developer — that independence is the whole value of this pass. It does not extend to QA's own earlier rounds on this task: those are your record, and a repeat round starts from them.",
     steps: &[
         CONTEXT,
         RUN_QA,
@@ -95,9 +134,45 @@ fn context(vars: &PromptVars) -> String {
 }
 
 fn run_qa(vars: &PromptVars) -> String {
+    let Some(round) = vars.extras.get(QA_PRIOR_ROUND_VAR) else {
+        return format!(
+            " Run /qa {} and follow that skill exactly, including its completeness challenge. Do not skip the challenge and do not shorten the gap list after forming a verdict.",
+            vars.task_id
+        );
+    };
+    verification_round(vars, round)
+}
+
+/// Round 2 and later. The previous round is named, with its outcome, so the
+/// agent cannot mistake this launch for a first look at the task.
+///
+/// The three parts of the gap list are QAden's rule, restated here because
+/// this prompt used to open with "starting cold" and the agent took that over
+/// the skill's own instruction. The next commit is named as `--head` on
+/// purpose: `bootstrap --force` has no archiving step and once destroyed a
+/// finished round with 4 FAILs in it.
+fn verification_round(vars: &PromptVars, round: &str) -> String {
+    let next = round
+        .parse::<u32>()
+        .map_or_else(|_| "the next".to_string(), |n| (n + 1).to_string());
+    let outcome = match vars.extras.get(QA_PRIOR_VERDICT_VAR).map(String::as_str) {
+        Some("pass") => "PASS",
+        _ => "REVISION REQUIRED",
+    };
+    let anchor = vars
+        .extras
+        .get(QA_PRIOR_HEAD_VAR)
+        .map(|head| format!(" at commit {head}"))
+        .unwrap_or_default();
     format!(
-        " Run /qa {} and follow that skill exactly, including its completeness challenge. Do not skip the challenge and do not shorten the gap list after forming a verdict.",
-        vars.task_id
+        " Run /qa {task} and follow that skill exactly. This task already has a QA record: round {round} ended in {outcome}{anchor}. \
+This launch opens round {next}, which is a VERIFICATION round, not a new audit. \
+Open it with `matrix.py init --force --head <this commit>` — that archives round {round} and prints its FAILs, its BLOCKED and SCOPE gaps and its carried decisions. Read them first. \
+The gap list has three parts and no others: last round's items, one row each; what the fix diff changed, with what calls it and what renders it; and the criteria the fix can affect. \
+Criteria the diff does not touch keep last round's evidence. \
+Do not write fresh gap rows over the whole MR. A defect outside those three parts is an observation for the checkpoint, recorded with its criterion as none — it does not hand the task back on its own. \
+Do not shorten the gap list after forming a verdict.",
+        task = vars.task_id,
     )
 }
 
