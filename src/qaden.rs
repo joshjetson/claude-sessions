@@ -94,6 +94,11 @@ impl QaVerdict {
 #[serde(default)]
 struct RunFile {
     meta: RunMeta,
+    /// The round matrix.py says this file is, written since QAden 1.16.0. It
+    /// wins over the archive count because that count drifted whenever a
+    /// round was archived by hand (6751's round 7 sat in `run-round4.json`),
+    /// and the prompt must name the same round `init --force` will print.
+    round: Option<serde_json::Value>,
     /// `null` on a run that stopped before it recorded any cell. An `Option`,
     /// because `#[serde(default)]` covers a missing key but not a `null` one.
     cells: Option<HashMap<String, Option<Cell>>>,
@@ -153,8 +158,9 @@ pub fn qa_run_state(
         }
     }
 
-    // Archived rounds are run-round<N>.json beside the live file, so the round
-    // in progress is one past however many have been archived.
+    // The round comes from the file when matrix.py wrote it. Before 1.16.0 it
+    // did not, and then the archived rounds are run-round<N>.json beside the
+    // live file, so the round in progress is one past however many exist.
     let archived = fs::read_dir(&dir)
         .map(|entries| {
             entries
@@ -163,6 +169,12 @@ pub fn qa_run_state(
                 .count()
         })
         .unwrap_or(0);
+    let round = run
+        .round
+        .as_ref()
+        .and_then(serde_json::Value::as_u64)
+        .filter(|n| *n > 0)
+        .map_or(archived as u32 + 1, |n| n as u32);
 
     let head = run
         .meta
@@ -180,7 +192,7 @@ pub fn qa_run_state(
 
     QaRunState {
         exists: true,
-        round: archived as u32 + 1,
+        round,
         verdict,
         phase: run.phase,
         note_written: note_written(run.note_written.as_ref()),

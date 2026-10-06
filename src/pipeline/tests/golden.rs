@@ -123,7 +123,9 @@ const GOLDEN_QA: &[&str] = &[
      Two things stay true: it is SHARED, so label what you create and clean up after yourself, \
      and it is not sandboxed, so stop and ask before anything that would email, charge, notify or \
      page a real person.",
-    " When /qa has produced its note, do NOT post anything to Odoo, do NOT move the task to another stage, and do NOT tag anyone — leave the @PM placeholder exactly as written. Leave the note where write_note.py saved it in the task's QA directory. Then flag it for review by running: claude-sessions notify --title \"QA #5944: PASS\" (or \"QA #5944: REVISION REQUIRED\") --message \"<one line on the outcome, then the absolute path to the saved note>\" --level success (use --level warn when revisions are required). Finally, print the note in the terminal exactly as write_note.py emitted it, unfenced, then stop and wait for the user. Do not end the session. A human decides whether it is posted.",
+    // Nothing reaches Odoo before the reviewer approves (rule of 2026-10-06):
+    // the session prints the frame, notifies with --kind verdict, and waits.
+    " When /qa reaches its end, print the frame it produces (`qa_tab.py report`: the acceptance-criteria table, the findings outside the criteria, the verdict, and what needs the reviewer) as your reply, whole. Do NOT post anything to Odoo, do NOT move the task to another stage, do NOT tag anyone, and do NOT write to the QA tab or write a note yet — nothing reaches Odoo before the reviewer approves. Then flag it for the reviewer by running: claude-sessions notify --kind verdict --title \"QA #5944: PASS\" (or \"QA #5944: REVISION REQUIRED\", or \"QA #5944: CHECKPOINT\" when an item still holds the verdict) --message \"<how many criteria pass, which fail, which are blocked, how many fell outside the criteria; awaiting approval>\" --level success (use --level warn when revisions are required), then stop and wait. Do not end the session. The reviewer's answer arrives in this terminal beginning `[reviewer <that exact token>]` or is typed here. \"approve\" means: record the QA tab (`qa_tab.py record --approved` with their words, verbatim), write the note with write_note.py and leave it in the task's QA directory, run /grab so they can paste it, print the note exactly as write_note.py emitted it, unfenced, and stop again. Any other answer is a redirect: act on it, print the frame again, and wait. A human posts the note. You never do.",
 ];
 
 /// The sixth pipeline: the prompt that was hardcoded in `tui/actions.js`.
@@ -426,4 +428,35 @@ fn only_a_qa_session_is_given_a_token() {
         !coordinating.contains(crate::term::REVIEWER_TOKEN_ENV),
         "the coordinator prompt names the token: {coordinating}"
     );
+}
+
+#[test]
+fn the_parked_verdict_waits_for_the_reviewer_before_any_odoo_write() {
+    // Rule of 2026-10-06: the reviewer approves the frame before the QA tab,
+    // the note or anything else reaches Odoo. Every launched session on
+    // 10-05 and 10-06 had either skipped the tab record or would have written
+    // it unseen; now the prompt makes the approval the gate for both.
+    let out = prompt("qa", &vars());
+    assert!(out.contains("print the frame it produces (`qa_tab.py report`"));
+    assert!(out.contains("do NOT write to the QA tab or write a note yet"));
+    assert!(out.contains("nothing reaches Odoo before the reviewer approves"));
+    // The notification is answerable from the dashboard: that is how the
+    // approval travels.
+    assert!(out.contains("notify --kind verdict"));
+    assert!(out.contains("awaiting approval"));
+    assert!(out.contains("[reviewer <that exact token>]"));
+    // On approval, in this order: the tab with the reviewer's words, the note, /grab.
+    let approve = out.find("\"approve\" means").expect("the approval branch");
+    let tab = out[approve..]
+        .find("qa_tab.py record --approved")
+        .expect("the tab");
+    let note = out[approve..].find("write_note.py").expect("the note");
+    let grab = out[approve..].find("/grab").expect("grab");
+    assert!(tab < note && note < grab, "tab, then note, then grab");
+    // The note itself still never goes out from the session.
+    assert!(out.contains("A human posts the note. You never do."));
+    // A dry run still touches nothing in Odoo.
+    let dry = prompt("qa-dry", &vars());
+    assert!(!dry.contains("qa_tab.py record"));
+    assert!(dry.contains("do NOT touch Odoo in any way"));
 }
