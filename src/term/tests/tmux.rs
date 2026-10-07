@@ -177,6 +177,19 @@ fn reuses_an_existing_viewer_rather_than_failing_on_it() {
 }
 
 #[test]
+fn exits_before_creating_anything_when_the_real_session_is_gone() {
+    // iTerm2 can run a viewer tab's line again, for example when it restores
+    // windows. With the target gone, `new-session -t` does not fail: it starts
+    // a new server and an empty session, and the tab attaches to that.
+    let cmd = build_attach_shell_command("claude-sessions", "0");
+    let guard = cmd
+        .find("tmux has-session -t '=claude-sessions' 2>/dev/null || exit 0")
+        .expect("guard");
+    let create = cmd.find("new-session").expect("new-session");
+    assert!(guard < create, "the guard must run first: {cmd}");
+}
+
+#[test]
 fn a_session_name_with_a_quote_in_it_cannot_break_out_of_the_shell_word() {
     let cmd = build_attach_shell_command("it's", "0");
     assert!(cmd.contains("'it'\\''s'"), "{cmd}");

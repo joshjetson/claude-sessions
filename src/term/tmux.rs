@@ -176,10 +176,21 @@ pub fn build_viewer_session_name(target: &str, window_index: &str) -> String {
 /// harmlessly when one already exists, so re-opening the same task reuses its
 /// viewer rather than stacking another. The count is bounded by how many
 /// windows the real session has, and a viewer holds no processes of its own.
+///
+/// The line must also be safe to run again later. iTerm2 keeps it as the tab's
+/// program and can run it again, for example when it restores windows. Without
+/// the target, `new-session -t` does not fail: it starts a new server and an
+/// empty session in a group named after the target, and the tab attaches to
+/// that. So the line first checks for the target (`=` asks for an exact name)
+/// and exits when the target is gone.
 pub fn build_attach_shell_command(target: &str, window_index: &str) -> String {
     let viewer = build_viewer_session_name(target, window_index);
     let select = format!("{viewer}:{window_index}");
     [
+        format!(
+            "tmux has-session -t {} 2>/dev/null || exit 0",
+            shell_quote(&format!("={target}"))
+        ),
         format!(
             "tmux new-session -d -t {} -s {} 2>/dev/null",
             shell_quote(target),
