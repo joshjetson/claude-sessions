@@ -286,10 +286,9 @@ fn launch_extras(
     if !matches!(request.kind, LaunchKind::Qa | LaunchKind::QaDry) {
         return request.extras.clone();
     }
-    let run = crate::qaden::qa_run_state(&state.paths, request.task.id, |dir| {
+    let mut extras = qa_extras(&state.paths, request.task.id, |dir| {
         state.qa_heads.cached(dir)
     });
-    let mut extras = crate::pipeline::definitions::prior_round_extras(&run);
     extras.extend(
         request
             .extras
@@ -297,6 +296,18 @@ fn launch_extras(
             .map(|(key, value)| (key.clone(), value.clone())),
     );
     extras
+}
+
+/// What QAden has recorded about a task, as prompt variables. Shared with
+/// `claude-sessions spawn`, so a QA session started from outside the board
+/// opens the same round the board would.
+pub(crate) fn qa_extras(
+    paths: &crate::paths::Paths,
+    task_id: i64,
+    head_of: impl Fn(&std::path::Path) -> Option<String>,
+) -> std::collections::BTreeMap<String, String> {
+    let run = crate::qaden::qa_run_state(paths, task_id, head_of);
+    crate::pipeline::definitions::prior_round_extras(&run)
 }
 
 /// A token for one QA session, proving later that an instruction came from the
@@ -308,7 +319,7 @@ fn launch_extras(
 /// without waiting on them", an inference stated as the reviewer's words, and
 /// the receiving agent refused it because it could not tell the two apart. A
 /// token it has no reason to go and copy makes them tellable apart.
-fn reviewer_token(task_id: i64) -> String {
+pub(crate) fn reviewer_token(task_id: i64) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     task_id.hash(&mut hasher);
@@ -326,7 +337,13 @@ fn reviewer_token(task_id: i64) -> String {
 /// Load-bearing beyond being a link: the launch prompt carries it, and the
 /// scanner recovers a session's task by finding it in the transcript head.
 pub fn task_url(state: &AppState, task_id: i64) -> String {
-    let url = state.config.odoo_creds().url;
+    task_url_for(&state.config, task_id)
+}
+
+/// [`task_url`] for a caller with no board state, such as `claude-sessions
+/// spawn`. Empty when no Odoo URL is configured.
+pub(crate) fn task_url_for(config: &crate::config::ConfigHandle, task_id: i64) -> String {
+    let url = config.odoo_creds().url;
     if url.is_empty() {
         return String::new();
     }

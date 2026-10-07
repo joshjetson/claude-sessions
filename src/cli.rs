@@ -22,10 +22,12 @@ use crate::term::SpawnPolicy;
 
 mod doctor;
 mod hooks;
+pub(crate) mod iterm_script;
 mod journal;
 pub(crate) mod markers;
 mod pipeline;
 mod signals;
+pub(crate) mod spawn;
 #[cfg(test)]
 mod tests;
 
@@ -143,6 +145,63 @@ pub enum Command {
     QaOutcomes(QaOutcomesArgs),
     /// Record a Claude Code hook event from stdin (register it in settings.json)
     Hook,
+    /// Start a session for Opus the way the board would, and answer in one JSON line
+    Spawn(SpawnArgs),
+    /// Print the AppleScript the dashboard uses to focus, close or open an iTerm2 tab
+    ItermScript(ItermScriptArgs),
+}
+
+/// `claude-sessions spawn`. Opus sends one JSON object on stdin; the argv
+/// flags exist for trying it by hand. See `cli/spawn.rs` for the rules.
+#[derive(Args)]
+pub struct SpawnArgs {
+    /// Answer in one JSON line. The only format there is; the flag keeps the
+    /// call reading as the contract it is.
+    #[arg(long)]
+    pub json: bool,
+    /// Read the request as one JSON object on stdin. Opus uses this, so the
+    /// prompt never shows in the process list.
+    #[arg(long)]
+    pub stdin: bool,
+    #[arg(long)]
+    pub cwd: Option<String>,
+    #[arg(long)]
+    pub task: Option<i64>,
+    /// `qa`, `qa-dry` or `plain` (default)
+    #[arg(long)]
+    pub kind: Option<String>,
+    /// The tmux window name, verbatim
+    #[arg(long)]
+    pub title: Option<String>,
+    /// The round the caller expects. A cross-check only: run.json decides.
+    #[arg(long)]
+    pub round: Option<u32>,
+    /// `tmux` or `iterm2`; omit for the configured driver
+    #[arg(long)]
+    pub driver: Option<String>,
+    /// The flags after `claude`, shell-quoted
+    #[arg(long, allow_hyphen_values = true)]
+    pub flags: Option<String>,
+    /// The prompt, for a `plain` launch
+    #[arg(long = "prompt-file")]
+    pub prompt_file: Option<PathBuf>,
+    /// Start even when a session already works the task
+    #[arg(long)]
+    pub force: bool,
+    /// Check everything, write nothing, start nothing
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+}
+
+/// `claude-sessions iterm-script`.
+#[derive(Args)]
+pub struct ItermScriptArgs {
+    /// Which script
+    #[arg(value_enum)]
+    pub which: iterm_script::Which,
+    /// The tty device (`focus`, `close`) or the shell line (`viewer`)
+    #[arg(allow_hyphen_values = true)]
+    pub arg: String,
 }
 
 #[derive(Args)]
@@ -334,6 +393,11 @@ pub fn run() -> Result<()> {
         // Unreachable: `run` hands `hook` to `run_hook` before clap parses. The
         // arm exists so the subcommand shows in `--help`.
         Some(Command::Hook) => run_hook(),
+        Some(Command::Spawn(args)) => spawn::run(&paths, &config, args, SpawnPolicy::detect()),
+        Some(Command::ItermScript(args)) => {
+            print!("{}", iterm_script::script(args.which, &args.arg));
+            Ok(())
+        }
     }
 }
 

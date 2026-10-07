@@ -12,7 +12,7 @@
 mod autoqa;
 mod dialogs;
 mod extras;
-mod fixtures;
+pub(crate) mod fixtures;
 mod gates;
 mod health;
 mod launch;

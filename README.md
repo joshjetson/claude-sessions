@@ -246,6 +246,8 @@ One binary, one install. The original shipped seven executables; they are now su
 | `claude-sessions pipeline init <repo> [--pipeline <id>]` | Write the starter `.claude-sessions/pipeline.json` into a repository. Never clobbers an existing one |
 | `claude-sessions pipeline skills [FILTER] [--repo <path>]` | List the skills a pipeline step can name, including the repository's own |
 | `claude-sessions pipeline show [ID] [--repo <path>]` | Print one pipeline's steps as this project would actually run them |
+| `claude-sessions spawn --json --stdin` | Start a session for Opus the way the board would, and print one JSON line (`ok`, `driver`, `hint`, `promptFile`, `warnings`, ...). Kind `qa` sends the QA pipeline prompt (Opus's prompt is ignored), records the reviewer token and posts the pending link. It refuses when a live session already works the task (exit 3), when spawning is off (4), with no Odoo URL (5) and with no daemon (6). Kind `plain` launches Opus's prompt and flags as sent. Argv flags (`--cwd`, `--task`, `--kind`, `--title`, `--flags`, `--prompt-file`, `--force`, `--dry-run`) exist for trying it by hand. The token is never printed |
+| `claude-sessions iterm-script focus\|close\|viewer -- <arg>` | Print the AppleScript the dashboard uses to focus or close the iTerm2 tab on a tty, or to open a tab running a shell line. Runs nothing |
 
 ## Shortcuts
 

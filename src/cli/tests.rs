@@ -5,6 +5,8 @@
 //! "assigned to you" alert only exists because `fetch_assigned` polls for it.
 //! Both were left unwired once, which looked exactly like an empty board.
 
+mod spawn;
+
 use super::daemon_options;
 use crate::config::{ConfigHandle, EnvOverrides};
 use crate::paths::{PathEnv, Paths};

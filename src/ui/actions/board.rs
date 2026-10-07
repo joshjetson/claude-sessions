@@ -181,37 +181,125 @@ pub fn launch(
     policy: SpawnPolicy,
     results: &Sender<ActionResult>,
 ) {
-    if let Err(refused) = policy.check(&format!("launch a session for task {}", spec.task_id)) {
-        let _ = results.send(ActionResult::Flash(refused.message));
+    let message = match launch_core(
+        &LaunchCore::from(spec),
+        &services.paths,
+        driver.as_ref(),
+        policy,
+    ) {
+        Ok(_) => None,
+        Err(LaunchFailure::Refused(refused)) => Some(refused.message),
+        Err(LaunchFailure::Prompt(error)) => Some(format!(
+            "Could not write the prompt for #{}: {error}",
+            spec.task_id
+        )),
+        Err(LaunchFailure::Driver(reason)) => Some(format!(
+            "Couldn't open a terminal for task {}: {reason}",
+            spec.task_id
+        )),
+    };
+    if let Some(message) = message {
+        let _ = results.send(ActionResult::Flash(message));
         return;
     }
+    let _ = results.send(ActionResult::Launched);
+    if !spec.say.is_empty() {
+        let _ = results.send(ActionResult::Flash(spec.say.clone()));
+    }
+    move_stage(spec.stage_move.as_ref(), services, results);
+}
+
+/// What a launch needs once every decision is made.
+///
+/// Both the board's [`LaunchSpec`] and `claude-sessions spawn` reduce to this,
+/// so the order below — policy, prompt file, token row, terminal — is written
+/// once. A second copy is how the Node app came to guard three of its four
+/// launch paths.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct LaunchCore<'a> {
+    /// `None` exports no task id. Only a plain `spawn` with no task uses it.
+    pub task_id: Option<i64>,
+    pub cwd: &'a str,
+    pub flags: &'a str,
+    pub prompt: Option<&'a str>,
+    pub title: &'a str,
+    pub run_id: Option<&'a str>,
+    pub reviewer_token: Option<&'a str>,
+}
+
+impl<'a> From<&'a LaunchSpec> for LaunchCore<'a> {
+    fn from(spec: &'a LaunchSpec) -> Self {
+        LaunchCore {
+            task_id: Some(spec.task_id),
+            cwd: &spec.cwd,
+            flags: &spec.flags,
+            prompt: spec.prompt.as_deref(),
+            title: &spec.title,
+            // A COORDINATOR EXPORTS NO TASK ID — see `launch_core`.
+            run_id: spec.run_id.as_deref(),
+            reviewer_token: spec.reviewer_token.as_deref(),
+        }
+    }
+}
+
+/// Why [`launch_core`] opened nothing. Each caller words it for its own reader.
+#[derive(Debug)]
+pub(crate) enum LaunchFailure {
+    Refused(crate::term::SpawnRefused),
+    Prompt(std::io::Error),
+    Driver(String),
+}
+
+/// What [`launch_core`] opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Launched {
+    pub prompt_file: Option<String>,
+    pub hint: Option<String>,
+}
+
+/// The stem of a launch's prompt file: `task-<id>`, or `spawn` with no task.
+pub(crate) fn prompt_stem(task_id: Option<i64>) -> String {
+    task_id.map_or_else(|| "spawn".to_string(), |id| format!("task-{id}"))
+}
+
+/// Policy, prompt file, token row, terminal — in that order.
+pub(crate) fn launch_core(
+    core: &LaunchCore,
+    paths: &Paths,
+    driver: &dyn TerminalDriver,
+    policy: SpawnPolicy,
+) -> Result<Launched, LaunchFailure> {
+    let action = match core.task_id {
+        Some(task_id) => format!("launch a session for task {task_id}"),
+        None => "launch a session".to_string(),
+    };
+    policy.check(&action).map_err(LaunchFailure::Refused)?;
     // The agent is told to write its write-up here; a missing directory turns a
     // finished task into a silent one.
-    let _ = fs::create_dir_all(&services.paths.summaries_dir);
+    let _ = fs::create_dir_all(&paths.summaries_dir);
 
-    let command = match &spec.prompt {
-        None => format!("claude {}", spec.flags).trim_end().to_string(),
-        Some(prompt) => match write_prompt(&services.paths, spec.task_id, prompt) {
-            Err(error) => {
-                let _ = results.send(ActionResult::Flash(format!(
-                    "Could not write the prompt for #{}: {error}",
-                    spec.task_id
-                )));
-                return;
-            }
+    let (command, prompt_file) = match core.prompt {
+        None => (
+            format!("claude {}", core.flags).trim_end().to_string(),
+            None,
+        ),
+        Some(prompt) => {
+            let file = write_prompt(paths, &prompt_stem(core.task_id), prompt)
+                .map_err(LaunchFailure::Prompt)?;
             // Through a file: the prompt is far too long for a command line,
             // and embedding it would mean escaping it for both the shell and
             // the terminal driver.
-            Ok(file) => format!(
+            let command = format!(
                 "claude {} \"$(cat '{}')\"",
-                spec.flags,
+                core.flags,
                 file.replace('\'', "'\\''")
             )
-            .replace("  ", " "),
-        },
+            .replace("  ", " ");
+            (command, Some(file))
+        }
     };
 
-    let mut request = LaunchRequest::new(spec.cwd.clone(), command).title(spec.title.clone());
+    let mut request = LaunchRequest::new(core.cwd, command).title(core.title);
 
     // A COORDINATOR EXPORTS NO TASK ID. It works no task; it borrows one only to
     // resolve which folder to start in, and that is settled before this point.
@@ -232,33 +320,30 @@ pub fn launch(
     //
     // Only a coordinator carries a run id, so its presence is the answer to "is
     // this a coordinator".
-    match spec.run_id.as_deref() {
-        Some(run_id) => request = request.run_id(run_id),
-        None => request = request.task_id(spec.task_id),
+    match (core.run_id, core.task_id) {
+        (Some(run_id), _) => request = request.run_id(run_id),
+        (None, Some(task_id)) => request = request.task_id(task_id),
+        (None, None) => {}
     }
 
     // Exported to the session AND remembered here, so the dashboard can still
     // sign an instruction to it after a restart. Written before the terminal
     // opens: a session that starts without its token recorded can never be
     // answered, and nothing would say why.
-    if let Some(token) = spec.reviewer_token.as_deref() {
-        Db::open(&services.paths).put_reviewer_token(spec.task_id, token);
+    if let (Some(token), Some(task_id)) = (core.reviewer_token, core.task_id) {
+        Db::open(paths).put_reviewer_token(task_id, token);
         request = request.reviewer_token(token);
     }
     let result = driver.launch(&request);
     if !result.ok {
-        let reason = result.error.unwrap_or_else(|| "unknown reason".into());
-        let _ = results.send(ActionResult::Flash(format!(
-            "Couldn't open a terminal for task {}: {reason}",
-            spec.task_id
-        )));
-        return;
+        return Err(LaunchFailure::Driver(
+            result.error.unwrap_or_else(|| "unknown reason".into()),
+        ));
     }
-    let _ = results.send(ActionResult::Launched);
-    if !spec.say.is_empty() {
-        let _ = results.send(ActionResult::Flash(spec.say.clone()));
-    }
-    move_stage(spec.stage_move.as_ref(), services, results);
+    Ok(Launched {
+        prompt_file,
+        hint: result.hint,
+    })
 }
 
 /// Type a revision into a session that is already open, then go there so you
@@ -462,16 +547,19 @@ pub fn move_to_named_stage(
     }
 }
 
-/// Write the prompt to a file and return its path.
-fn write_prompt(paths: &Paths, task_id: i64, prompt: &str) -> std::io::Result<String> {
-    fs::create_dir_all(&paths.prompts_dir)?;
+/// Where a prompt with this stem would be written now.
+pub(crate) fn prompt_path(paths: &Paths, stem: &str) -> std::path::PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_millis())
         .unwrap_or_default();
-    let file = paths
-        .prompts_dir
-        .join(format!("task-{task_id}-{stamp}.txt"));
+    paths.prompts_dir.join(format!("{stem}-{stamp}.txt"))
+}
+
+/// Write the prompt to a file and return its path.
+pub(crate) fn write_prompt(paths: &Paths, stem: &str, prompt: &str) -> std::io::Result<String> {
+    fs::create_dir_all(&paths.prompts_dir)?;
+    let file = prompt_path(paths, stem);
     fs::write(&file, prompt)?;
     Ok(file.to_string_lossy().into_owned())
 }
