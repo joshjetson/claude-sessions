@@ -94,8 +94,8 @@ pub static QA_PIPELINE: PipelineDef = PipelineDef {
             .detail("A coordinator opened a relay with \"the reviewer wants this finished without waiting on them\" — an inference worded as a decision. The session refused it and was right to, and was also stuck, because the reviewer had decided and nothing could carry it. The dashboard now signs with a token only this session and the dashboard hold."),
         StepDef::new("may-seed", "What you may do to the app", "The environment is yours to exercise.", may_seed)
             .detail("Nineteen blocked checks in one run were variations of 'I cannot create the data this check needs'. Nothing forbade it — but this prompt opens with prohibitions and the pass runs in a read-only worktree, so the posture carries across to the application unless it is said otherwise."),
-        StepDef::new("park-verdict", "Park the verdict", "Prints the frame, notifies the board, waits. On the reviewer's approval: the QA tab, the note, /grab.", park_verdict)
-            .detail("Nothing reaches Odoo before the reviewer says approve: no note, no chatter line, no QA tab. The session prints the frame /qa produces (criteria table, outside-the-criteria list, verdict, needs-you list), notifies with --kind verdict so the answer key on the dashboard can relay the reviewer's words, and waits. On approve it records the QA tab with those words, writes the note to disk and arms /grab; a human pastes the note. The completion command is deliberately NOT run; it would post a comment and move a stage immediately, which is exactly what this pipeline exists to prevent. Set 2026-10-06, after every launched session on 10-05 and 10-06 had skipped the tab record and the reviewer typed the same request after each run."),
+        StepDef::new("park-verdict", "Park the verdict", "Prints the frame, notifies the board, waits. On the reviewer's approval: the QA tab, then the notes in the terminal (/grab for revisions only).", park_verdict)
+            .detail("Nothing reaches Odoo before the reviewer says approve: no note, no chatter line, no QA tab. The session prints the frame /qa produces (criteria table, outside-the-criteria list, verdict, needs-you list), notifies with --kind verdict so the answer key on the dashboard can relay the reviewer's words, and waits. On approve it records the QA tab with those words and writes the note to disk. A pass prints the pass note and the client note (when the project has one) in the terminal and stops; only a revisions hand-back arms /grab. A human posts every note. /grab is for revisions only since 2026-10-07: a pass has no screenshots to paste, and the reviewer copies the pass and client notes from the terminal. The completion command is deliberately NOT run; it would post a comment and move a stage immediately, which is exactly what this pipeline exists to prevent. Set 2026-10-06, after every launched session on 10-05 and 10-06 had skipped the tab record and the reviewer typed the same request after each run."),
     ],
 };
 
@@ -235,7 +235,8 @@ fn may_seed(_vars: &PromptVars) -> String {
 /// what fell outside, the verdict, what needs the reviewer) and stops. The
 /// reviewer's word arrives here as a `[reviewer <token>]` message from the
 /// dashboard's answer key, or typed into the terminal. Only then does the
-/// session record the QA tab, write the note and arm /grab.
+/// session record the QA tab and write the note. A pass prints the pass note and
+/// the client note in the terminal; only revisions arm /grab.
 ///
 /// Why the order: on 2026-10-05 and 10-06 every launched session read "post
 /// nothing, tag nobody" as covering the QA tab record, skipped it, and the
@@ -248,7 +249,7 @@ fn park_verdict(vars: &PromptVars) -> String {
         " When /qa reaches its end, print the frame it produces (`qa_tab.py report`: the acceptance-criteria table, the findings outside the criteria, the verdict, and what needs the reviewer) as your reply, whole. \
 Do NOT post anything to Odoo, do NOT move the task to another stage, do NOT tag anyone, and do NOT write to the QA tab or write a note yet — nothing reaches Odoo before the reviewer approves. \
 Then flag it for the reviewer by running: {bin} notify --kind verdict --title \"QA #{task_id}: PASS\" (or \"QA #{task_id}: REVISION REQUIRED\", or \"QA #{task_id}: CHECKPOINT\" when an item still holds the verdict) --message \"<how many criteria pass, which fail, which are blocked, how many fell outside the criteria; awaiting approval>\" --level success (use --level warn when revisions are required), then stop and wait. Do not end the session. \
-The reviewer's answer arrives in this terminal beginning `[reviewer <that exact token>]` or is typed here. \"approve\" means: record the QA tab (`qa_tab.py record --approved` with their words, verbatim), write the note with write_note.py and leave it in the task's QA directory, run /grab so they can paste it, print the note exactly as write_note.py emitted it, unfenced, and stop again. Any other answer is a redirect: act on it, print the frame again, and wait. \
+The reviewer's answer arrives in this terminal beginning `[reviewer <that exact token>]` or is typed here. \"approve\" means: record the QA tab (`qa_tab.py record --approved` with their words, verbatim), write the note with write_note.py and leave it in the task's QA directory, and print it exactly as write_note.py emitted it, unfenced. On a pass, also write and print the client note when the project has one (the /qa skill's client-note step), and do NOT run /grab. On revisions, run /grab so they can paste the note and its screenshots. Then stop again. Any other answer is a redirect: act on it, print the frame again, and wait. \
 A human posts the note. You never do.",
         bin = bin()
     )
