@@ -66,3 +66,82 @@ pub fn chunk_text(text: &str, size: usize) -> Vec<String> {
     }
     out
 }
+
+/// Split a shell-quoted string into words, the way `/bin/sh` would before it
+/// runs a command. The inverse of [`shell_quote`].
+///
+/// Only quoting is honoured: single quotes, double quotes, and a backslash.
+/// Nothing is expanded — no `$VAR`, no globs, no `~`. `claude-sessions spawn`
+/// uses this to read the flags Opus sends, and those carry a `--settings` JSON
+/// object that must come back byte for byte: the Opus hooks module reads its
+/// session name from inside it. Hand-written rather than a `shlex` crate for
+/// one function of thirty lines.
+///
+/// An unclosed quote, or a trailing backslash, is an error rather than a
+/// guess: a guess would launch with flags nobody wrote.
+pub fn split_words(line: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    // A word can be empty (`''`), so "inside a word" is tracked apart from
+    // whether any characters were collected.
+    let mut in_word = false;
+    let mut chars = line.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            c if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            '\'' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => word.push(c),
+                        None => return Err("unclosed single quote".to_string()),
+                    }
+                }
+            }
+            '"' => {
+                in_word = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        // Inside double quotes a backslash escapes only these
+                        // five; before anything else it is a literal backslash.
+                        Some('\\') => match chars.next() {
+                            Some(c @ ('$' | '`' | '"' | '\\')) => word.push(c),
+                            Some('\n') => {}
+                            Some(c) => {
+                                word.push('\\');
+                                word.push(c);
+                            }
+                            None => return Err("unclosed double quote".to_string()),
+                        },
+                        Some(c) => word.push(c),
+                        None => return Err("unclosed double quote".to_string()),
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                // A backslash-newline joins two lines and adds nothing.
+                Some('\n') => {}
+                Some(c) => {
+                    in_word = true;
+                    word.push(c);
+                }
+                None => return Err("trailing backslash".to_string()),
+            },
+            c => {
+                in_word = true;
+                word.push(c);
+            }
+        }
+    }
+    if in_word {
+        words.push(word);
+    }
+    Ok(words)
+}

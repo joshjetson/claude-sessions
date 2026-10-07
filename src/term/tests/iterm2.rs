@@ -190,3 +190,14 @@ fn empty_text_produces_no_quoted_writes_at_all() {
     // The Return is still sent, which is what submitting an empty line means.
     assert_eq!(script.matches("ASCII character 13").count(), 1);
 }
+
+/// `claude-sessions iterm-script` prints these builders' output and nothing
+/// else, so the Opus shim gets the dashboard's own script.
+#[test]
+fn the_iterm_script_subcommand_prints_the_builders_verbatim() {
+    use crate::cli::iterm_script::{script, Which};
+    assert_eq!(script(Which::Focus, TTY), build_focus_script(TTY));
+    assert_eq!(script(Which::Close, TTY), build_close_script(TTY));
+    let line = "tmux attach -t 'claude-sessions'";
+    assert_eq!(script(Which::Viewer, line), build_viewer_tab_script(line));
+}

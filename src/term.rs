@@ -38,7 +38,7 @@ pub use select::{
     choose_driver, driver_or_null, get_driver, make_driver, reset_driver_cache, DriverAvailability,
     DriverKind, Platform,
 };
-pub use shell::{build_shell_command, chunk_text, shell_quote, SEND_CHUNK_SIZE};
+pub use shell::{build_shell_command, chunk_text, shell_quote, split_words, SEND_CHUNK_SIZE};
 pub use spawn::{SpawnPolicy, SpawnRefused, NO_SPAWN_ENV};
 pub use tmux::{
     build_attach_shell_command, build_kill_pane_args, build_new_session_args,

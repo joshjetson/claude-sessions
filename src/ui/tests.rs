@@ -4,7 +4,7 @@
 //! every file here needs: a `TestBackend` render that returns the painted text,
 //! and a throwaway config on a temporary directory.
 
-mod board;
+pub(crate) mod board;
 mod conversation;
 mod deploy;
 mod dialogs;

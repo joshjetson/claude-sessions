@@ -43,4 +43,4 @@ pub mod tree;
 pub use run::run_dashboard;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

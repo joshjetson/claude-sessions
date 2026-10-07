@@ -1,8 +1,8 @@
 //! The pieces both drivers share: the shell line, the chunking, the tty.
 
 use crate::term::{
-    build_shell_command, chunk_text, normalize_tty, shell_quote, SessionRef, SEND_CHUNK_SIZE,
-    TASK_ID_ENV,
+    build_shell_command, chunk_text, normalize_tty, shell_quote, split_words, SessionRef,
+    SEND_CHUNK_SIZE, TASK_ID_ENV,
 };
 
 fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
@@ -124,4 +124,45 @@ fn a_session_ref_normalises_what_the_scanner_recorded() {
     );
     assert_eq!(SessionRef::from_tty("??").tty_device(), None);
     assert_eq!(SessionRef::default().tty_device(), None);
+}
+
+// --- split_words ------------------------------------------------------------
+
+/// The Opus hooks module reads its session name from inside this JSON, so it
+/// must come back byte for byte.
+#[test]
+fn split_words_keeps_a_settings_object_byte_for_byte() {
+    let json = r#"{"env":{"OPUS_SESSION":"qa-1-r1"}}"#;
+    let line = format!("--name qa-1-r1 --settings {}", shell_quote(json));
+    assert_eq!(
+        split_words(&line).unwrap(),
+        vec!["--name", "qa-1-r1", "--settings", json]
+    );
+}
+
+#[test]
+fn split_words_is_the_inverse_of_shell_quote() {
+    let words = ["it's", "a b", "", "$HOME", "\\x", "\"q\""];
+    let line = words
+        .iter()
+        .map(|w| shell_quote(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(split_words(&line).unwrap(), words);
+}
+
+#[test]
+fn split_words_reads_double_quotes_and_backslashes_as_sh_does() {
+    assert_eq!(
+        split_words(r#"a\ b "c \"d\" \$e \x" f"g"h"#).unwrap(),
+        vec!["a b", r#"c "d" $e \x"#, "fgh"]
+    );
+    assert_eq!(split_words("  ").unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn split_words_refuses_an_unclosed_quote_rather_than_guessing() {
+    assert!(split_words("--settings '{").is_err());
+    assert!(split_words("\"open").is_err());
+    assert!(split_words("trailing\\").is_err());
 }
