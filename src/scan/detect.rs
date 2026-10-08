@@ -235,6 +235,10 @@ pub fn session_id_flag(argv: &str) -> Option<String> {
 ///
 /// `/\s--bg-[\w-]+\b/`. That form is invisible to `ps -o comm`, so a PTY host
 /// showed up as a session and competed for a transcript with the real one.
+///
+/// Also `--chrome-native-host`, the bridge Chrome starts for the Claude in
+/// Chrome extension. It has no terminal and never writes a transcript, so it
+/// sat in the dashboard as a "starting…" row for as long as Chrome ran.
 pub fn is_helper_flag(argv: &str) -> bool {
     const MARKER: &str = "--bg-";
     let bytes = argv.as_bytes();
@@ -246,8 +250,13 @@ pub fn is_helper_flag(argv: &str) -> bool {
             return true;
         }
     }
-    false
+    argv.split_ascii_whitespace()
+        .skip(1)
+        .any(|word| HELPER_FLAGS.contains(&word))
 }
+
+/// Helper modes that only ever appear as a whole flag.
+const HELPER_FLAGS: [&str; 1] = ["--chrome-native-host"];
 
 /// The QA run a coordinator was launched for, exported into its environment by
 /// the spawn helpers.
