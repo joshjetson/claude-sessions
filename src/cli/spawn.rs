@@ -672,7 +672,7 @@ impl SpawnHost for SystemHost<'_> {
             &[
                 "list-windows".to_string(),
                 "-t".to_string(),
-                self.config.tmux_session().to_string(),
+                crate::term::session_target(self.config.tmux_session()),
                 "-F".to_string(),
                 "#{window_name} #{pane_dead}".to_string(),
             ],

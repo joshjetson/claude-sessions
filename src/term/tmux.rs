@@ -67,7 +67,32 @@ fn args(parts: &[&str]) -> Vec<String> {
 /// Scoping to the target session fixes the first and makes the output 47x
 /// smaller. `pane_dead` fixes the second.
 pub fn list_panes_args(target: &str) -> Vec<String> {
-    args(&["list-panes", "-s", "-t", target, "-F", LIST_PANES_FORMAT])
+    args(&[
+        "list-panes",
+        "-s",
+        "-t",
+        &session_target(target),
+        "-F",
+        LIST_PANES_FORMAT,
+    ])
+}
+
+/// The session, as tmux must read it in a `-t` that resolves windows.
+///
+/// A bare name is matched against window names too, and a window name wins:
+/// tmux names a window after its command, so any window running
+/// `claude-sessions` (the daemon in its own tmux session, or the dashboard) is
+/// called `claude-sessions`. Then `list-panes -s -t claude-sessions` listed that
+/// one window, the approve key found no pane for the session it meant, and said
+/// "No tmux pane is attached" (2026-10-08). A bare name also prefix-matches a
+/// viewer such as `claude-sessions-view3`. `=name:` is exactly that session.
+pub fn session_target(name: &str) -> String {
+    format!("={name}:")
+}
+
+/// The session alone, exactly, for `has-session` (which takes no window part).
+pub fn exact_session(name: &str) -> String {
+    format!("={name}")
 }
 
 pub fn list_clients_args() -> Vec<String> {
@@ -113,7 +138,7 @@ pub fn build_new_window_args(
 ) -> Vec<String> {
     // `-d`: create it in the background so the dashboard keeps focus, matching
     // the iTerm2 driver's "select prevTab" behaviour.
-    let target = format!("{session_name}:");
+    let target = session_target(session_name);
     let mut out = args(&["new-window", "-d", "-t", &target, "-c", cwd]);
     if let Some(title) = title {
         out.extend(args(&["-n", title]));
@@ -298,7 +323,11 @@ impl TmuxDriver {
 
     fn session_exists(&self) -> bool {
         self.exec
-            .run("tmux", &args(&["has-session", "-t", &self.target]), TIMEOUT)
+            .run(
+                "tmux",
+                &args(&["has-session", "-t", &exact_session(&self.target)]),
+                TIMEOUT,
+            )
             .ok
     }
 }

@@ -3,9 +3,9 @@
 use crate::term::{
     build_attach_shell_command, build_kill_pane_args, build_new_session_args,
     build_new_window_args, build_send_enter_args, build_send_text_args_chunked,
-    build_viewer_session_name, list_panes_args, parse_client_list, parse_pane_list,
-    parse_session_groups, pick_attached_group_session, Pane, DETACHED_HEIGHT, DETACHED_WIDTH,
-    SEND_CHUNK_SIZE,
+    build_viewer_session_name, exact_session, list_panes_args, parse_client_list, parse_pane_list,
+    parse_session_groups, pick_attached_group_session, session_target, Pane, DETACHED_HEIGHT,
+    DETACHED_WIDTH, SEND_CHUNK_SIZE,
 };
 
 #[test]
@@ -39,7 +39,7 @@ fn a_second_launch_adds_a_window_to_the_existing_session() {
     let args = build_new_window_args("cs", "/r", "run me", None);
     assert_eq!(args[0], "new-window");
     assert!(args.contains(&"-d".to_string()));
-    assert!(args.contains(&"cs:".to_string()));
+    assert!(args.contains(&"=cs:".to_string()));
     assert_eq!(args[args.len() - 3..], ["/bin/sh", "-lc", "run me"]);
 }
 
@@ -72,7 +72,7 @@ fn the_pane_format_asks_for_the_tty_first_because_that_is_the_join_key() {
     // Scoped to ONE session, not `-a`. Every viewer is a grouped session sharing
     // the target's windows, so `-a` returned a copy of every pane per viewer and
     // the map kept a viewer's name — which is what made viewer names nest.
-    assert_eq!(args[..4], ["list-panes", "-s", "-t", "claude-sessions"]);
+    assert_eq!(args[..4], ["list-panes", "-s", "-t", "=claude-sessions:"]);
     assert_eq!(args[4], "-F");
     assert!(args[5].starts_with("#{pane_tty}"));
     // And it asks whether the pane is dead: macOS reuses pty names, so one tty
@@ -292,4 +292,11 @@ fn real_tmux_output_resolves_a_reused_tty_to_the_live_pane() {
     // rather than opening the window the session ended in.
     assert!(map.get("/dev/ttys003").unwrap().dead);
     assert_eq!(map.len(), 5);
+}
+
+#[test]
+fn the_session_is_targeted_exactly_so_a_window_named_like_it_cannot_win() {
+    // A window running the daemon is named `claude-sessions`; a bare `-t` picked it.
+    assert_eq!(session_target("claude-sessions"), "=claude-sessions:");
+    assert_eq!(exact_session("claude-sessions"), "=claude-sessions");
 }
