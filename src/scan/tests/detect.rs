@@ -178,6 +178,22 @@ fn helpers_are_caught_in_their_flag_spelling_too() {
 }
 
 #[test]
+fn the_chrome_native_host_is_a_helper() {
+    // Chrome starts it for the extension; it never writes a transcript, so it
+    // sat in the dashboard as a "starting…" row for as long as Chrome ran.
+    assert!(is_helper_flag(
+        "/Users/x/.local/bin/claude --chrome-native-host"
+    ));
+    assert!(!argv_is_interactive_claude(
+        "node /usr/lib/node_modules/claude --chrome-native-host"
+    ));
+    // Only the whole flag, never a prefix or a glued spelling.
+    assert!(!is_helper_flag("claude --chrome-native-host-x"));
+    assert!(!is_helper_flag("claude--chrome-native-host"));
+    assert!(!is_helper_flag("claude --chrome"));
+}
+
+#[test]
 fn the_launch_task_is_read_out_of_the_environment() {
     assert_eq!(
         launch_task_id("claude PATH=/usr/bin CLAUDE_SESSIONS_TASK_ID=6137 TERM=xterm"),
