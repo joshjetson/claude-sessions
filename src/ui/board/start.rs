@@ -88,7 +88,16 @@ fn resolve_dir(state: &mut AppState, request: &StartRequest) -> Option<String> {
         return Some(dir);
     }
     let discovered = all_discovered_dirs(&state.discovered_dirs);
-    match resolve_task_dir(&state.config, &request.task.project_name, &discovered) {
+    let choice = resolve_task_dir(&state.config, &request.task.project_name, &discovered);
+    // A dialog already open is someone's work in progress: the folder picker a
+    // run's refill opened a moment ago, half scrolled, or any other dialog.
+    // Replacing it reset the picker to its first row on every refill, so a
+    // long folder list could not be scrolled to the right repo. Leave it. The
+    // launch is not recorded, so the run asks again at its next refill.
+    if !matches!(choice, DirChoice::Known(_)) && state.dialog.is_some() {
+        return None;
+    }
+    match choice {
         DirChoice::Known(dir) => Some(dir),
         DirChoice::ChooseSaved(saved) => {
             super::open(
