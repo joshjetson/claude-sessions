@@ -942,6 +942,46 @@ fn a_freed_lane_starts_the_next_task_without_a_keypress() {
 }
 
 #[test]
+fn a_refill_leaves_an_open_folder_picker_where_the_reviewer_scrolled_it() {
+    // The fixture maps the project to no folder, so the first refill opens the
+    // folder picker. Each later refill used to open a fresh one over it, back
+    // on the first row, so a long list could not be scrolled to the right repo.
+    let (_dir, mut state) = a_started_run();
+    state.last_run_launch = long_ago();
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+    let rows = match state.dialog.as_mut() {
+        Some(crate::ui::dialogs::Dialog::DirPicker(picker)) => {
+            picker
+                .list
+                .rows
+                .push(ratatui::text::Line::raw("  /a/second/repo"));
+            picker
+                .list
+                .rows
+                .push(ratatui::text::Line::raw("  /a/third/repo"));
+            picker.list.sel = 2;
+            picker.list.rows.len()
+        }
+        other => panic!("the refill opened no folder picker: {other:?}"),
+    };
+
+    state.last_run_launch = long_ago();
+    board::auto_refill(&mut state, std::time::SystemTime::now());
+
+    match &state.dialog {
+        Some(crate::ui::dialogs::Dialog::DirPicker(picker)) => {
+            assert_eq!(
+                picker.list.rows.len(),
+                rows,
+                "a new picker replaced the open one"
+            );
+            assert_eq!(picker.list.sel, 2, "the selection went back to the top");
+        }
+        other => panic!("the folder picker is gone: {other:?}"),
+    }
+}
+
+#[test]
 fn the_refill_waits_after_a_launch() {
     // A launched session is not in the live set until it appears in a scan, so
     // its lane still reads free. A refill that ran immediately would hand that
