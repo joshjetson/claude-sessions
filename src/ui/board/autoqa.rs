@@ -41,6 +41,17 @@ pub fn apply_auto_qa(state: &mut AppState, mut feed: AutoQaFeed) {
     // one over until it hears back, and a second join would nudge the
     // coordinator twice.
     let joined: Vec<String> = arrivals.iter().map(|arrival| arrival.key.clone()).collect();
+    // The daemon only hands over projects its copy of the config has on. When
+    // this copy disagrees, it is the stale one: a hand edit of the file, or
+    // another process switching a project on, reaches the daemon first. Read
+    // the file again before turning arrivals away, because a refusal is
+    // confirmed and the daemon never hands that task over again.
+    if arrivals
+        .iter()
+        .any(|arrival| !state.config.qa_auto(&arrival.project))
+    {
+        state.config.reload();
+    }
     let mut placed: Vec<(String, i64)> = Vec::new();
     for arrival in arrivals {
         if !state.auto_qa_handled.insert(arrival.key.clone()) {

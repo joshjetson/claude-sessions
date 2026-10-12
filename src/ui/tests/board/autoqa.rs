@@ -226,6 +226,38 @@ fn a_project_switched_off_confirms_and_starts_nothing() {
         .any(|action| matches!(action, Action::AutoQaJoined(keys) if keys.len() == 1)));
 }
 
+/// Switched on in the file by someone else (a hand edit, another process)
+/// after this dashboard read it: the daemon hands the arrival over first. The
+/// dashboard reads the file again instead of confirming the arrival unstarted,
+/// which would lose it for good.
+#[test]
+fn a_project_switched_on_in_the_file_since_the_last_read_still_starts() {
+    let (_dir, mut state) = auto_state();
+    state.config.set_auto_qa(PROJECT, false).unwrap();
+    let mut other = state.config.reloaded();
+    other.set_auto_qa(PROJECT, true).unwrap();
+    assert!(!state.config.qa_auto(PROJECT), "this copy is the stale one");
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7001)],
+            arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
+        },
+    );
+    let run = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id())
+        .expect("the stage's run");
+    assert_eq!(run.spawned, vec![7001]);
+    assert_eq!(
+        launches(&actions(&mut state)),
+        vec![(7001, true), (7001, false)]
+    );
+}
+
 // --- the A key ----------------------------------------------------------------
 
 fn on_the_project_row(state: &mut AppState) {
