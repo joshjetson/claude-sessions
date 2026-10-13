@@ -423,12 +423,16 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
             let arrow = if *expanded { "▼" } else { "▶" };
             // The coordinator's own state, because a run whose coordinator has
             // died still shows its QA sessions working and looks healthy.
+            // `qa.coordinator: false`: a run has no coordinator by design, so the
+            // row names none and does not report one missing.
+            let coordinated = config.qa_coordinator() || coordinator.is_some();
             let (dot, state) = match coordinator {
                 Some(session) => (
                     Style::default().fg(color_of(session.status.color())),
                     session.status.label().to_string(),
                 ),
-                None => (gray(), "no coordinator".to_string()),
+                None if coordinated => (gray(), "no coordinator".to_string()),
+                None => (gray(), String::new()),
             };
             let agents = if *agents == 1 {
                 "1 agent".to_string()
@@ -454,10 +458,20 @@ pub fn format_tree_item(item: &TreeItem<'_>, config: &ConfigHandle) -> Line<'sta
                     format!(" {}", truncate(project, 24)),
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("  coordinator".to_string(), gray()),
+                Span::styled(
+                    if coordinated { "  coordinator" } else { "" }.to_string(),
+                    gray(),
+                ),
                 Span::styled(format!("  {agents}"), gray()),
                 waiting,
-                Span::styled(format!("  {state}"), gray()),
+                Span::styled(
+                    if state.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {state}")
+                    },
+                    gray(),
+                ),
             ])
         }
         TreeItem::RunAgent {
