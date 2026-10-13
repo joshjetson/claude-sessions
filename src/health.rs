@@ -13,7 +13,7 @@
 //! |-------------------------------|------------|------------|
 //! | 5-minute load per CPU core    | above 1.0  | above 2.0  |
 //! | Memory free (`memory_pressure`) | below 20% | below 10%  |
-//! | Swap used and free            | over 2 GB used and under 35% free | over 8 GB used and under 20% free |
+//! | Swap used and free            | over 2 GB used and under 35% free | over 8 GB used and under 20% free, while memory is under 20% free |
 //! | CPU speed limit (thermal)     | below 100  | below 70   |
 //!
 //! Only red holds the queue. Amber is shown, because it explains a slow
@@ -126,8 +126,13 @@ pub fn classify(vitals: &mut Vitals) {
         };
         found.push((level, format!("memory {free}% free")));
     }
+    // macOS rarely gives swap back, so a big swap file can outlive the pressure
+    // that made it by days. Swap holds the queue only while memory is also
+    // tight; with memory free it is shown as amber. Unknown memory keeps the
+    // old rule.
+    let memory_tight = vitals.mem_free_pct.is_none_or(|free| free < 20);
     if let (Some(used), Some(free)) = (vitals.swap_used_mb, vitals.swap_free_pct) {
-        let level = if used > 8.0 * 1024.0 && free < 20.0 {
+        let level = if used > 8.0 * 1024.0 && free < 20.0 && memory_tight {
             HealthLevel::Red
         } else if used > 2.0 * 1024.0 && free < 35.0 {
             HealthLevel::Amber

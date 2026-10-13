@@ -114,6 +114,28 @@ fn each_vital_turns_red_at_its_own_threshold() {
 }
 
 #[test]
+fn a_big_swap_file_holds_the_queue_only_while_memory_is_tight() {
+    // This Mac on 2026-10-12: swap 8.2 GB used and 9% free, memory 42% free.
+    // The swap was left over from earlier pressure, and every QA start waited.
+    let leftover = rated(Vitals {
+        mem_free_pct: Some(42),
+        swap_used_mb: Some(8400.0),
+        swap_free_pct: Some(9.0),
+        ..Vitals::default()
+    });
+    assert_eq!(leftover.level, HealthLevel::Amber);
+    assert_eq!(leftover.reasons, ["swap 8.2 GB used, 9% free"]);
+
+    let tight = rated(Vitals {
+        mem_free_pct: Some(15),
+        swap_used_mb: Some(8400.0),
+        swap_free_pct: Some(9.0),
+        ..Vitals::default()
+    });
+    assert_eq!(tight.level, HealthLevel::Red);
+}
+
+#[test]
 fn nothing_read_is_unknown() {
     assert_eq!(rated(Vitals::default()).level, HealthLevel::Unknown);
 }
