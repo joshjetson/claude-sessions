@@ -238,6 +238,12 @@ fn trace(message: &str) {
 /// Start the run's coordinator unless one is running, or was launched a
 /// moment ago and has not shown up in a scan yet.
 fn ensure_coordinator(state: &mut AppState, run_id: &str) {
+    // Off by config: the run is marked started and nothing launches, so say
+    // nothing. The trace below claimed a coordinator was started.
+    if !state.config.qa_coordinator() {
+        start_coordinator(state, run_id, "");
+        return;
+    }
     if crate::qarun::coordinator_of(run_id, state.sessions()).is_some() {
         return;
     }

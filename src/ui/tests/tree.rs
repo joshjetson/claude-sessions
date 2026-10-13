@@ -822,6 +822,42 @@ fn a_run_row_says_when_it_has_no_coordinator() {
 }
 
 #[test]
+fn with_coordinators_off_a_run_row_names_no_coordinator() {
+    // `qa.coordinator: false`: the run has none by design. "coordinator ... no
+    // coordinator" read as a coordinator run that had lost its coordinator.
+    let sessions: SessionsByProject = BTreeMap::new();
+    let dirs = no_dirs();
+    let run = run_section("p::QA", "Quality Assurance", "x/alpha", None, Vec::new());
+    let items = build_grouped_tree_with(
+        &sessions,
+        &HashSet::new(),
+        &[],
+        &dirs,
+        false,
+        std::slice::from_ref(&run),
+    );
+    let row = items
+        .iter()
+        .find(|item| matches!(item, TreeItem::Run { .. }))
+        .expect("run row");
+    let (_cfg_dir, config) = temp_config();
+    let path = config.path().to_path_buf();
+    let mut raw: serde_json::Value = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    raw["qa"]["coordinator"] = serde_json::Value::Bool(false);
+    std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    let config = config.reloaded();
+    let text = line_text(row, &config);
+    assert!(!text.contains("coordinator"), "{text:?}");
+    assert!(
+        text.contains("x/alpha") && text.contains("0 agents"),
+        "{text:?}"
+    );
+}
+
+#[test]
 fn a_run_row_counts_the_agents_that_are_asking() {
     let sessions: SessionsByProject = BTreeMap::new();
     let dirs = no_dirs();
