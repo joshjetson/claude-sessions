@@ -279,6 +279,15 @@ impl ConfigHandle {
         }
     }
 
+    /// Whether a run starts a coordinating session. On unless set to false.
+    pub fn qa_coordinator(&self) -> bool {
+        self.config
+            .qa
+            .as_ref()
+            .and_then(|qa| qa.coordinator)
+            .unwrap_or(true)
+    }
+
     /// The mode every new coordinator starts in.
     ///
     /// Anything other than `"shadow"` — including an absent block and a typo —

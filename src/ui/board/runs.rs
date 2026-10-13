@@ -269,6 +269,15 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
 /// It watches. It does not spawn — admission lives outside any model — and in
 /// shadow mode it answers nothing.
 pub(super) fn start_coordinator(state: &mut AppState, run_id: &str, extra_context: &str) {
+    // `qa.coordinator: false`: the run starts without one. It still counts as
+    // started, because the refill only fills lanes for started runs.
+    if !state.config.qa_coordinator() {
+        if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
+            run.coordinator_started = true;
+        }
+        state.save_runs();
+        return;
+    }
     let Some(run) = state
         .board
         .runs

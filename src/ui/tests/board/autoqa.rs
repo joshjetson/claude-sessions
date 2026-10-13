@@ -92,6 +92,42 @@ fn an_arrival_joins_its_run_gets_a_coordinator_and_starts() {
     );
 }
 
+/// `qa.coordinator: false`: the run starts its QA session and no coordinator.
+/// A coordinator is a full session per run, so this halves a one-task run.
+#[test]
+fn with_coordinators_off_an_arrival_starts_only_its_qa_session() {
+    let (_dir, mut state) = auto_state();
+    let path = state.config.path().to_path_buf();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    raw["qa"]["coordinator"] = serde_json::Value::Bool(false);
+    std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
+    state.config.reload();
+    assert!(!state.config.qa_coordinator());
+
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7001)],
+            arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
+        },
+    );
+
+    let run = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id())
+        .expect("the stage's run");
+    assert!(
+        run.coordinator_started,
+        "the run must count as started for the refill"
+    );
+    assert_eq!(run.spawned, vec![7001]);
+    assert_eq!(launches(&actions(&mut state)), vec![(7001, false)]);
+}
+
 /// No notification: a session starting is not news.
 #[test]
 fn an_arrival_raises_no_notification() {

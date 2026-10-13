@@ -504,6 +504,14 @@ pub struct QaBlock {
     /// run would produce an agreement number mixed from both.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coordinator_mode: Option<String>,
+    /// Start a coordinating session for each run. On unless set to false.
+    ///
+    /// Off, a run (and Auto QA) starts its QA sessions without one: each
+    /// session's questions go to the reviewer on the board, as they did before
+    /// runs had coordinators. A coordinator is a full `claude` session per run,
+    /// so turning it off roughly halves what a one-task Auto QA run costs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coordinator: Option<bool>,
     /// Start the next task in a run when a lane frees. On unless set to false.
     ///
     /// Without it a lane limit means pressing "Start run" once per freed lane,

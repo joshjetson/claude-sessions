@@ -421,11 +421,12 @@ on the machine:
 |---|---|---|
 | 5-minute load per core | above 1.0 | above 2.0 |
 | Free memory (`memory_pressure`) | below 20% | below 10% |
-| Swap | over 2 GB used and under 35% free | over 8 GB used and under 20% free |
+| Swap | over 2 GB used and under 35% free | over 8 GB used and under 20% free, while free memory is below 20% |
 | CPU speed limit (thermal) | below 100 | below 70 |
 
 Only red holds the queue. A laptop doing ordinary work is often amber, and holding on
-amber would stop QA for most of the day.
+amber would stop QA for most of the day. macOS rarely gives swap back, so a large swap
+file with plenty of free memory is amber, not red.
 
 #### How long a pass takes
 
@@ -571,6 +572,7 @@ A wrongly-typed value costs only the block it is in, never the rest of the file.
 | `qa.peerListen` | your Tailscale IPv4 | The address the peer listener binds, when `tailscale ip -4` cannot find it. Read at daemon start |
 | `qa.notifyNewInQa` | `false` | QA role only: announce a task that lands in a QA stage (`🧪 New in QA`). Off because the QA board already lists those tasks. Switched on, the first run records what is already there silently |
 | `qa.newTaskStages[]` | `["QA", "Quality Assurance", "Tech Debt Work"]` | The stages `qa.notifyNewInQa` and Auto QA watch. Revision stages never count |
+| `qa.coordinator` | `true` | Start a coordinating session for each QA run, Auto QA included. `false` starts the QA sessions alone, and their questions go to you on the board |
 | `qa.healthGate` | `false` | Hold QA starts while the machine is red, and start one per health reading. See [The QA queue and machine health](#the-qa-queue-and-machine-health) |
 | `qa.projects[]` | the `odooProjectDirs` projects, or every project when none are mapped | QA role only: which projects' arrivals are announced. `[]` means every project. `board.ignore` still applies |
 | `qa.otherQaUserIds[]` | `[]` | QA role only: Odoo user ids of the other reviewers. A task one of them has is not announced unless you are assigned too |
