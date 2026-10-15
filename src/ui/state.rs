@@ -732,6 +732,27 @@ impl AppState {
         self.runs_db.save_qa_runs(&self.board.runs);
     }
 
+    /// The runs as the sessions tree draws them.
+    ///
+    /// With `qa.coordinator: false` a run is only a queue: a task whose session
+    /// is running shows in its own project like every other session, and the
+    /// Runs section keeps the tasks still waiting, with why. A run with nothing
+    /// waiting is not drawn. A run that has a coordinator after all keeps its
+    /// whole section.
+    pub fn tree_runs(&self) -> Vec<crate::ui::tree::RunSection<'_>> {
+        let mut runs = self.run_sections();
+        if self.config.qa_coordinator() {
+            return runs;
+        }
+        for run in &mut runs {
+            if run.coordinator.is_none() {
+                run.agents.retain(|agent| agent.session.is_none());
+            }
+        }
+        runs.retain(|run| run.coordinator.is_some() || !run.agents.is_empty());
+        runs
+    }
+
     /// The runs, prepared for the sessions tree.
     ///
     /// Built here rather than in the tree module, which knows about sessions

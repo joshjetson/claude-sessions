@@ -102,7 +102,7 @@ fn draw_sessions(frame: &mut Frame, state: &mut AppState, area: Rect) {
     // The block's inner height is the content budget; borders are two rows.
     let content_h = area.height.saturating_sub(2) as usize;
     let groups = state.config.groups();
-    let runs = state.run_sections();
+    let runs = state.tree_runs();
     let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,

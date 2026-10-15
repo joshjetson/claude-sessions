@@ -47,7 +47,7 @@ pub struct TreeSnapshot {
 
 pub fn tree_snapshot(state: &AppState) -> TreeSnapshot {
     let groups = state.config.groups();
-    let runs = state.run_sections();
+    let runs = state.tree_runs();
     let items: Vec<TreeItem<'_>> = build_grouped_tree_with(
         &state.by_project,
         &state.expanded_projects,
