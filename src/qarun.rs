@@ -207,7 +207,26 @@ impl QaRun {
     pub fn id_for(project_name: &str, stage_name: &str) -> String {
         format!("{project_name}::{stage_name}")
     }
+
+    /// The id of the run Auto QA keeps for a stage when the reviewer has not
+    /// started one there. The prefix is how a run says it was not started by
+    /// a person, kept in the id because the id is already stored and the runs
+    /// table is shared with the Node app's migrations.
+    pub fn auto_id_for(project_name: &str, stage_name: &str) -> String {
+        format!(
+            "{AUTO_RUN_PREFIX}{}",
+            QaRun::id_for(project_name, stage_name)
+        )
+    }
+
+    /// Whether Auto QA made this run, rather than a reviewer pressing `R`.
+    pub fn is_auto(&self) -> bool {
+        self.id.starts_with(AUTO_RUN_PREFIX)
+    }
 }
+
+/// See [`QaRun::auto_id_for`].
+pub const AUTO_RUN_PREFIX: &str = "auto:";
 
 /// The task ids in their first-seen order, each once. A run draws one row per
 /// id, so an id listed twice drew one task twice.

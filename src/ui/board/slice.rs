@@ -249,7 +249,15 @@ impl BoardSlice {
     /// A task already in the run is a task back for another round: it comes
     /// out of `spawned`, so the run may start it again.
     pub fn join_run(&mut self, project: &str, stage: &str, task_id: i64) -> String {
-        let id = QaRun::id_for(project, stage);
+        // A run the reviewer started on this stage takes the task. Otherwise
+        // Auto QA keeps its own run, which the sessions tree does not draw:
+        // a task Auto QA starts is a single session, not a Run.
+        let manual = QaRun::id_for(project, stage);
+        let id = if self.runs.iter().any(|run| run.id == manual) {
+            manual
+        } else {
+            QaRun::auto_id_for(project, stage)
+        };
         match self.runs.iter_mut().find(|run| run.id == id) {
             Some(run) => {
                 if !run.task_ids.contains(&task_id) {
@@ -408,6 +416,12 @@ impl BoardSlice {
             .iter_mut()
             .find(|run| run.project_name == project && run.stage_name == stage)
         {
+            // Auto QA's run for this stage becomes the reviewer's Run: drawn,
+            // and free to start its own coordinator when coordinators are on.
+            if run.is_auto() {
+                run.id = QaRun::id_for(project, stage);
+                run.coordinator_started = false;
+            }
             for id in task_ids {
                 if !run.task_ids.contains(&id) {
                     run.task_ids.push(id);
