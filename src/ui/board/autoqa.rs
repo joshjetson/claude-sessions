@@ -54,6 +54,8 @@ pub fn apply_auto_qa(state: &mut AppState, mut feed: AutoQaFeed) {
     }
     let mut placed: Vec<(String, i64)> = Vec::new();
     for arrival in arrivals {
+        // An arrival is a fresh entry into QA: see `AppState::admission_states`.
+        state.auto_qa_returned.insert(arrival.task_id);
         if !state.auto_qa_handled.insert(arrival.key.clone()) {
             continue;
         }
