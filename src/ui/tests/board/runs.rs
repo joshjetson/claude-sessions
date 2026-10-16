@@ -82,6 +82,31 @@ fn watching_the_same_stage_twice_does_not_make_two_runs() {
 }
 
 #[test]
+fn r_on_a_stage_auto_qa_keeps_makes_it_the_reviewers_run() {
+    // Auto QA's run is not drawn. Pressing R on its stage is the reviewer
+    // asking for an actual Run, so that run becomes theirs and is drawn.
+    let (_dir, mut state) = on_a_stage();
+    let (project, stage) = {
+        let task = state.board.task(4101).expect("task").clone();
+        (task.project_name, task.stage_name)
+    };
+    let auto = state.board.join_run(&project, &stage, 4101);
+    assert!(auto.starts_with(crate::qarun::AUTO_RUN_PREFIX));
+    state.board.runs[0].coordinator_started = true;
+
+    state.board.watch_stage(&project, &stage);
+
+    assert_eq!(state.board.runs.len(), 1, "a second run was made");
+    let run = &state.board.runs[0];
+    assert_eq!(run.id, crate::qarun::QaRun::id_for(&project, &stage));
+    assert!(
+        !run.coordinator_started,
+        "it could not start a coordinator of its own"
+    );
+    assert_eq!(run.task_ids.len(), 3);
+}
+
+#[test]
 fn a_run_keeps_a_task_the_stage_has_lost() {
     // The reason a run is a record and not a view over the stage.
     let (_dir, mut state) = on_a_stage();

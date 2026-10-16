@@ -732,24 +732,23 @@ impl AppState {
         self.runs_db.save_qa_runs(&self.board.runs);
     }
 
-    /// The runs as the sessions tree draws them.
+    /// The runs as the sessions tree draws them: the ones a reviewer started.
     ///
-    /// With `qa.coordinator: false` a run is only a queue: a task whose session
-    /// is running shows in its own project like every other session, and the
-    /// Runs section keeps the tasks still waiting, with why. A run with nothing
-    /// waiting is not drawn. A run that has a coordinator after all keeps its
-    /// whole section.
+    /// Auto QA's runs are not drawn. A task it starts is a single session and
+    /// shows in its project, the same as a task started by hand; only a Run the
+    /// reviewer started (`R`) gets the Runs section.
     pub fn tree_runs(&self) -> Vec<crate::ui::tree::RunSection<'_>> {
+        let auto: std::collections::HashSet<&str> = self
+            .board
+            .runs
+            .iter()
+            .filter(|run| run.is_auto())
+            .map(|run| run.id.as_str())
+            .collect();
         let mut runs = self.run_sections();
-        if self.config.qa_coordinator() {
-            return runs;
-        }
-        for run in &mut runs {
-            if run.coordinator.is_none() {
-                run.agents.retain(|agent| agent.session.is_none());
-            }
-        }
-        runs.retain(|run| run.coordinator.is_some() || !run.agents.is_empty());
+        // A run with a live coordinator is drawn whatever made it: hiding it
+        // would hide the session answering the agents' questions.
+        runs.retain(|run| run.coordinator.is_some() || !auto.contains(run.run_id));
         runs
     }
 

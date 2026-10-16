@@ -56,7 +56,7 @@ fn launches(queued: &[Action]) -> Vec<(i64, bool)> {
 }
 
 fn run_id() -> String {
-    crate::qarun::QaRun::id_for(PROJECT, STAGE)
+    crate::qarun::QaRun::auto_id_for(PROJECT, STAGE)
 }
 
 #[test]
@@ -128,51 +128,65 @@ fn with_coordinators_off_an_arrival_starts_only_its_qa_session() {
     assert_eq!(launches(&actions(&mut state)), vec![(7001, false)]);
 }
 
-/// `qa.coordinator: false`: the Runs section is only a queue. A running QA
-/// session shows in its project like any other; a waiting task stays under
-/// the run with its reason; a run with nothing waiting is not drawn.
+/// Auto QA starts single sessions, not a Run: its run is not drawn, so the
+/// session shows in its project like a task started by hand.
 #[test]
-fn with_coordinators_off_the_tree_shows_only_waiting_run_tasks() {
+fn an_auto_qa_start_is_not_drawn_under_runs() {
     let (_dir, mut state) = auto_state();
     apply_auto_qa(
         &mut state,
         AutoQaFeed {
-            tasks: vec![qa_task(7001), qa_task(7002)],
-            arrivals: vec![arrival(7001), arrival(7002)],
+            tasks: vec![qa_task(7001)],
+            arrivals: vec![arrival(7001)],
             ..AutoQaFeed::default()
         },
     );
+    assert!(
+        state.board.runs.iter().any(|run| run.is_auto()),
+        "Auto QA kept no run"
+    );
     with_sessions(&mut state, vec![live_session("s7001", Some(7001), 1000)]);
-    // On: the run draws both tasks, the running one included.
-    assert_eq!(state.tree_runs()[0].agents.len(), 2);
-
-    let path = state.config.path().to_path_buf();
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    raw["qa"]["coordinator"] = serde_json::Value::Bool(false);
-    std::fs::write(&path, serde_json::to_string_pretty(&raw).unwrap()).unwrap();
-    state.config.reload();
-
-    let runs = state.tree_runs();
-    assert_eq!(runs.len(), 1);
-    let waiting: Vec<i64> = runs[0].agents.iter().map(|agent| agent.task_id).collect();
-    assert_eq!(
-        waiting,
-        vec![7002],
-        "the running session should leave the run"
-    );
-
-    with_sessions(
-        &mut state,
-        vec![
-            live_session("s7001", Some(7001), 1000),
-            live_session("s7002", Some(7002), 1000),
-        ],
-    );
     assert!(
         state.tree_runs().is_empty(),
-        "a run with nothing waiting is drawn"
+        "an Auto QA start was drawn under Runs"
     );
+}
+
+/// A Run the reviewer started on the stage takes the arrival, and stays
+/// drawn: that is an actual Run.
+#[test]
+fn an_arrival_joins_a_run_the_reviewer_started_and_that_run_is_drawn() {
+    let (_dir, mut state) = auto_state();
+    let manual = crate::qarun::QaRun::id_for(PROJECT, STAGE);
+    state.board.runs.push(crate::qarun::QaRun {
+        id: manual.clone(),
+        project_name: PROJECT.to_string(),
+        stage_name: STAGE.to_string(),
+        task_ids: Vec::new(),
+        started_at: String::new(),
+        lane_limit: None,
+        spawned: Vec::new(),
+        mode: crate::qarun::RunMode::default(),
+        coordinator_started: true,
+    });
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![qa_task(7001)],
+            arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
+        },
+    );
+    assert!(
+        !state.board.runs.iter().any(|run| run.is_auto()),
+        "a second, auto run was made"
+    );
+    let drawn: Vec<String> = state
+        .tree_runs()
+        .iter()
+        .map(|run| run.run_id.to_string())
+        .collect();
+    assert_eq!(drawn, vec![manual]);
 }
 
 /// No notification: a session starting is not news.
