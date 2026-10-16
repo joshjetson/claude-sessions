@@ -135,7 +135,7 @@ fn judge<R>(state: &AppState, run: &QaRun, judge: impl FnOnce(&AdmitCtx<'_>) -> 
     let live = live_task_ids(state, run);
     let paths = state.paths.clone();
     let state_of = move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
-    let odoo_states = state.board.odoo_states(&run.task_ids);
+    let odoo_states = state.admission_states(&run.task_ids);
     let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
     let hold = queue_hold(state);
     let ctx = AdmitCtx {

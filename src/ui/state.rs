@@ -235,6 +235,10 @@ pub struct AppState {
     /// daemon hands an arrival over until it hears back, so a feed can carry
     /// one twice. See [`crate::ui::board::apply_auto_qa`].
     pub auto_qa_handled: std::collections::HashSet<String>,
+    /// Tasks Auto QA saw arrive in a QA stage. An arrival is a fresh entry, so
+    /// an Odoo "Changes Requested" left over from the last round no longer
+    /// means sent back. See [`AppState::admission_states`].
+    pub auto_qa_returned: std::collections::HashSet<i64>,
     /// Tasks the board shows in QA for an Auto QA project that the daemon's
     /// feed did not have, as of the last board. A task new to this set makes
     /// the dashboard ask the daemon to check now.
@@ -320,6 +324,7 @@ impl AppState {
             last_run_launch: None,
             auto_coordinator_at: HashMap::new(),
             auto_qa_handled: Default::default(),
+            auto_qa_returned: Default::default(),
             auto_qa_unseen: Default::default(),
             health: None,
             deploy: DeploySlice::default(),
@@ -732,6 +737,31 @@ impl AppState {
         self.runs_db.save_qa_runs(&self.board.runs);
     }
 
+    /// The Odoo states run admission judges these tasks by.
+    ///
+    /// The board's states, except that "Changes Requested" reads as In Progress
+    /// for a task that came back: it arrived in QA since this dashboard started
+    /// (an Auto QA arrival is a fresh entry), or its QA verdict is stale (the
+    /// developer pushed since). Odoo keeps the state from the last round when a
+    /// developer moves a task back to QA, and the run then refused the very
+    /// work it was meant to check (2026-10-15/16, #6619, #6505, #6980). A task
+    /// a reviewer has just sent back still has a current verdict and stays
+    /// refused. The board keeps showing Odoo's own state.
+    pub fn admission_states(&self, task_ids: &[i64]) -> HashMap<i64, String> {
+        let mut states = self.board.odoo_states(task_ids);
+        for (task_id, state) in states.iter_mut() {
+            if state != crate::odoo::task_state::CHANGES_REQUESTED {
+                continue;
+            }
+            let returned = self.auto_qa_returned.contains(task_id)
+                || crate::qaden::qa_run_state(&self.paths, *task_id, |_| None).stale;
+            if returned {
+                *state = crate::odoo::task_state::IN_PROGRESS.to_string();
+            }
+        }
+        states
+    }
+
     /// The runs as the sessions tree draws them: the ones a reviewer started.
     ///
     /// Auto QA's runs are not drawn. A task it starts is a single session and
@@ -777,7 +807,7 @@ impl AppState {
                 let state_of =
                     move |task_id: i64| crate::qaden::qa_run_state(&paths, task_id, |_| None);
                 let hold = crate::ui::board::runs::queue_hold(self);
-                let odoo_states = self.board.odoo_states(&run.task_ids);
+                let odoo_states = self.admission_states(&run.task_ids);
                 let odoo_state_of = |task_id: i64| odoo_states.get(&task_id).cloned();
                 let ctx = crate::qarun::AdmitCtx {
                     live_task_ids: &live,

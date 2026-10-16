@@ -189,6 +189,63 @@ fn an_arrival_joins_a_run_the_reviewer_started_and_that_run_is_drawn() {
     assert_eq!(drawn, vec![manual]);
 }
 
+/// A developer moves a task back to QA and Odoo keeps "Changes Requested"
+/// from the last round. The arrival is a fresh entry, so the run starts it
+/// (2026-10-15/16, #6619, #6505, #6980 waited instead).
+#[test]
+fn an_arrival_still_marked_changes_requested_starts() {
+    let (_dir, mut state) = auto_state();
+    let mut returned = qa_task(7001);
+    returned.state = Some(crate::odoo::task_state::CHANGES_REQUESTED.to_string());
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![returned],
+            arrivals: vec![arrival(7001)],
+            ..AutoQaFeed::default()
+        },
+    );
+    let run = state
+        .board
+        .runs
+        .iter()
+        .find(|run| run.id == run_id())
+        .expect("the stage's run");
+    assert_eq!(run.spawned, vec![7001], "the returned task was refused");
+}
+
+/// Without a fresh arrival or a stale verdict, "Changes Requested" in QA can
+/// mean a reviewer just sent it back, so the run still refuses it.
+#[test]
+fn changes_requested_without_an_arrival_is_still_refused() {
+    let (_dir, mut state) = auto_state();
+    let mut sent_back = qa_task(7002);
+    sent_back.state = Some(crate::odoo::task_state::CHANGES_REQUESTED.to_string());
+    apply_auto_qa(
+        &mut state,
+        AutoQaFeed {
+            tasks: vec![sent_back],
+            ..AutoQaFeed::default()
+        },
+    );
+    let id = state.board.join_run(PROJECT, STAGE, 7002);
+    assert_eq!(
+        state
+            .admission_states(&[7002])
+            .get(&7002)
+            .map(String::as_str),
+        Some(crate::odoo::task_state::CHANGES_REQUESTED)
+    );
+    let sections = state.run_sections();
+    let why = sections
+        .iter()
+        .find(|run| run.run_id == id)
+        .and_then(|run| run.agents.iter().find(|agent| agent.task_id == 7002))
+        .and_then(|agent| agent.idle_reason.clone())
+        .expect("a refusal on the row");
+    assert!(why.contains("Changes Requested"), "{why}");
+}
+
 /// No notification: a session starting is not news.
 #[test]
 fn an_arrival_raises_no_notification() {
@@ -277,13 +334,14 @@ fn a_task_back_in_qa_can_start_again() {
     assert_eq!(state.board.runs[0].task_ids, vec![7001]);
 }
 
-/// The run's own admission still decides. A task Odoo sent back joins the run
-/// and says why it does not start.
+/// The run's own admission still decides. A task Odoo marks Complete joins the
+/// run and says why it does not start. ("Changes Requested" on an arrival is a
+/// task coming back, which starts: see the test above.)
 #[test]
-fn a_task_odoo_sent_back_joins_but_does_not_start() {
+fn a_task_odoo_marks_complete_joins_but_does_not_start() {
     let (_dir, mut state) = auto_state();
     let mut sent_back = qa_task(7003);
-    sent_back.state = Some(crate::odoo::task_state::CHANGES_REQUESTED.to_string());
+    sent_back.state = Some(crate::odoo::task_state::COMPLETE.to_string());
     apply_auto_qa(
         &mut state,
         AutoQaFeed {
@@ -298,7 +356,7 @@ fn a_task_odoo_sent_back_joins_but_does_not_start() {
         .idle_reason
         .clone()
         .unwrap_or_default();
-    assert!(reason.contains("Changes Requested"), "{reason}");
+    assert!(reason.contains("Complete"), "{reason}");
 }
 
 /// Switched off on this machine: the arrival is confirmed, so it is not handed
