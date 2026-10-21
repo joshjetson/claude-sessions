@@ -1141,3 +1141,31 @@ fn a_row_with_no_reason_falls_back_to_not_running() {
     let (_cfg, config) = temp_config();
     assert!(line_text(row, &config).contains("not running"));
 }
+
+#[test]
+fn a_smoke_test_row_shows_its_task_number_and_says_smoke_test() {
+    let (_dir, config) = temp_config();
+    let mut s = session("abcd1234", "/Users/x/dev/alpha", SessionStatus::Idle);
+    s.task_id = Some(6685);
+    s.launch_kind = Some("smoke".to_string());
+    let item = TreeItem::Session {
+        project_name: "x/alpha",
+        session: &s,
+    };
+    let rendered = line_text(&item, &config);
+    assert!(rendered.contains("#6685"), "{rendered}");
+    assert!(rendered.contains("smoke test · idle"), "{rendered}");
+    assert!(!rendered.contains("QA"), "{rendered}");
+
+    // An ordinary task session is unchanged.
+    s.launch_kind = None;
+    let rendered = line_text(
+        &TreeItem::Session {
+            project_name: "x/alpha",
+            session: &s,
+        },
+        &config,
+    );
+    assert!(rendered.contains("#6685"), "{rendered}");
+    assert!(!rendered.contains("smoke"), "{rendered}");
+}

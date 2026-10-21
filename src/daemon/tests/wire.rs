@@ -435,6 +435,7 @@ fn fully_populated() -> Session {
         }],
         task_id: Some(5238),
         run_id: None,
+        launch_kind: None,
     }
 }
 

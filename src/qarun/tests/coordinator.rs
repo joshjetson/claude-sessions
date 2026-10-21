@@ -41,6 +41,7 @@ fn session(id: &str, cwd: &str) -> Session {
         prompts: Vec::new(),
         task_id: None,
         run_id: None,
+        launch_kind: None,
     }
 }
 

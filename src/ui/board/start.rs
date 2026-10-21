@@ -141,7 +141,12 @@ fn open_gate(state: &mut AppState, gate: Gate, request: StartRequest) {
 fn resume(state: &mut AppState, request: StartRequest) {
     let task = request.task.clone();
     let revision = matches!(request.kind, LaunchKind::Revision { .. });
-    let live = task_sessions(state.sessions(), task.id);
+    // A smoke test is not the task's working session: a revision typed into
+    // it would reach an agent that never wrote the code.
+    let live = task_sessions(
+        state.sessions().filter(|session| !session.is_smoke()),
+        task.id,
+    );
 
     if let Some(session) = live.first() {
         if !revision {
@@ -253,7 +258,7 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
         cwd: dir.to_string(),
         flags: request.kind.flags(),
         prompt,
-        title: format!("task-{}", task.id),
+        title: request.kind.window_title(task.id),
         stage_move: working_stage_move(&state.config, task, &request.kind, Some(dir)),
         known_session_ids: state.sessions().map(|s| s.session_id.clone()).collect(),
         say: format!("Started #{} in {dir}.", task.id),
@@ -271,6 +276,7 @@ fn launch_in(state: &mut AppState, request: &StartRequest, dir: &str) {
             crate::ui::board::LaunchKind::Qa => Some(reviewer_token(task.id)),
             _ => None,
         },
+        launch_kind: request.kind.launch_kind_env().map(str::to_string),
     };
     // A fresh attempt clears any prior needs-info flag; the gate raises it
     // again if it still applies.

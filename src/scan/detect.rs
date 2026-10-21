@@ -278,16 +278,29 @@ const HELPER_FLAGS: [&str; 1] = ["--chrome-native-host"];
 /// construction only insofar as project and stage names do not; a value that
 /// does contain a space is truncated here rather than mis-parsed.
 pub fn launch_run_id(env_line: &str) -> Option<String> {
-    const KEY: &str = "CLAUDE_SESSIONS_RUN_ID=";
+    env_word(env_line, "CLAUDE_SESSIONS_RUN_ID=")
+}
+
+/// What kind of launch a session is, from `CLAUDE_SESSIONS_LAUNCH_KIND`.
+///
+/// Read from the same `ps -E` line as [`launch_task_id`]. Only a smoke test
+/// sets it today; every other session reads `None`.
+pub fn launch_kind(env_line: &str) -> Option<String> {
+    env_word(env_line, "CLAUDE_SESSIONS_LAUNCH_KIND=")
+}
+
+/// The whitespace-free value after `KEY` in an environment line, when the key
+/// starts a variable rather than ending a longer name.
+fn env_word(env_line: &str, key: &str) -> Option<String> {
     let bytes = env_line.as_bytes();
-    for (i, _) in env_line.match_indices(KEY) {
+    for (i, _) in env_line.match_indices(key) {
         if !boundary_before(bytes, i) {
             continue;
         }
-        let rest = &env_line[i + KEY.len()..];
+        let rest = &env_line[i + key.len()..];
         // `split`, not `split_whitespace`: the latter skips leading separators,
         // so an EMPTY value (`...RUN_ID= PATH=/usr/bin`) returned the next
-        // variable in the line as though it were the run id.
+        // variable in the line as though it were the value.
         let value = rest.split(char::is_whitespace).next().unwrap_or_default();
         if !value.is_empty() {
             return Some(value.to_string());

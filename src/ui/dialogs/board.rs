@@ -89,6 +89,11 @@ impl TaskMenu {
             "🧪  QA (dry run — report only, no note)".into(),
             TaskAction::Start(LaunchKind::QaDry),
         ));
+        // Offered wherever QA is: to every role, like the QA entries above.
+        entries.push((
+            "💨  Smoke test (main path, no verdict)".into(),
+            TaskAction::Start(LaunchKind::Smoke),
+        ));
         entries.push((
             "🔎  Pre-work brief (Optics)".into(),
             TaskAction::Start(LaunchKind::PreOptics),

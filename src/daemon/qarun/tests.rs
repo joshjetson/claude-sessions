@@ -51,6 +51,7 @@ fn session(tty: Option<&str>) -> Session {
         prompts: Vec::new(),
         task_id: Some(4101),
         run_id: None,
+        launch_kind: None,
     }
 }
 

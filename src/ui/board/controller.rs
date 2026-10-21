@@ -79,11 +79,16 @@ fn linked(session: &Session, task_id: i64, link: &TaskLink) -> bool {
 /// drawn on one row is never drawn on another. Sessions whose transcript names
 /// their task are placed first, and the launch links fill in after, so a link
 /// can never take a session from the task it really belongs to.
+///
+/// A smoke test is never a run's session either. It names its task, but it is
+/// not the QA pass: drawn on the row, it read as "testing" and admission
+/// refused to start the real pass while it ran.
 pub fn run_task_sessions<'a, 'l>(
     sessions: impl Iterator<Item = &'a Session> + Clone,
     task_ids: &[i64],
     link: impl Fn(i64) -> Option<&'l TaskLink>,
 ) -> HashMap<i64, &'a Session> {
+    let sessions = sessions.filter(|session| !session.is_smoke());
     let mut out: HashMap<i64, &'a Session> = HashMap::new();
     let mut used: HashSet<&str> = HashSet::new();
     for &task_id in task_ids {

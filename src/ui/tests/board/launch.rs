@@ -34,6 +34,7 @@ fn spec_for(dir: &tempfile::TempDir, prompt: Option<&str>) -> LaunchSpec {
         say: String::new(),
         run_id: None,
         reviewer_token: None,
+        launch_kind: None,
     }
 }
 

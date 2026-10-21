@@ -89,6 +89,7 @@ fn the_declared_skills_are_the_ones_the_pipelines_invoke() {
             "problem-reasoning-journal",
             "qa",
             "resolve-merge-conflict",
+            "smoke-test",
             "task-readiness-gate",
         ]
     );
@@ -155,7 +156,7 @@ fn stage_moves_are_dashboard_steps_that_contribute_nothing_to_the_prompt() {
 fn qa_never_moves_a_stage_at_all() {
     // The QA stage IS the working stage; a move would encode the same fact
     // twice and go stale if the session died.
-    for id in ["qa", "qa-dry", "pre-optics"] {
+    for id in ["qa", "qa-dry", "smoke", "pre-optics"] {
         let resolved = resolve_pipeline(id, None).unwrap();
         assert!(
             resolved

@@ -146,6 +146,13 @@ const GOLDEN_QA_DRY: &[&str] = &[
     " This is a dry run by the developer, not a hand-back. Do NOT write a pass note or a revision note, do NOT run write_note.py, do NOT notify the dashboard, and do NOT touch Odoo in any way. Report the per-criterion results and the challenge findings in the terminal, then stop and wait for the user. Do not end the session.",
 ];
 
+const GOLDEN_SMOKE: &[&str] = &[
+    "You are smoke testing this task: a fast check that each acceptance criterion works on its main path. This is not a QA pass. It gives no verdict, and it does not replace one.",
+    " The task is https://odoo/web#id=5944&model=project.task&view_type=form.",
+    " Run /smoke-test 5944 and follow that skill exactly.",
+    " Do NOT post anything to Odoo, do NOT move the task to another stage, do NOT tag anyone, and do NOT write to the QA tab. Write no run.json, no pass note and no revision note, and do not notify the dashboard. Print the smoke note in the terminal, unfenced, then stop and wait for the user. Do not end the session.",
+];
+
 const GOLDEN_PRE_OPTICS: &[&str] = &[
     "You are writing a pre-work brief for a task nobody has started yet. Your job is to work out what is actually being asked and what the task does not say — not to design the fix. A confident brief that is wrong costs a developer a day, so say plainly where you are uncertain rather than smoothing it over.",
     " The task is https://odoo/web#id=5944&model=project.task&view_type=form.",
@@ -311,6 +318,16 @@ fn only_a_recorded_verdict_makes_the_next_launch_a_repeat_round() {
 }
 
 #[test]
+fn the_smoke_test_carries_the_task_url_and_parks_nothing() {
+    let out = prompt("smoke", &vars());
+    assert_eq!(out, GOLDEN_SMOKE.concat());
+    // The URL is what links the session to its task.
+    assert_eq!(crate::transcript::task_ref_in(&out), Some(5944));
+    assert!(!out.contains(" notify --"), "a smoke test notifies nothing");
+    assert!(!out.contains("/qa "), "a smoke test is not QA");
+}
+
+#[test]
 fn the_pre_work_brief_prints_and_notifies_but_never_writes_to_odoo() {
     let out = prompt("pre-optics", &vars());
     assert_eq!(out, GOLDEN_PRE_OPTICS.concat());
@@ -373,7 +390,15 @@ fn the_prompts_name_the_binary_not_a_script_path() {
     // The single-binary decision: prompts bake `claude-sessions <subcommand>`,
     // never an absolute path to a helper script that exists only on the machine
     // that wrote the prompt.
-    for pipeline_id in ["task", "revision", "qa", "qa-dry", "pre-optics", "conflict"] {
+    for pipeline_id in [
+        "task",
+        "revision",
+        "qa",
+        "qa-dry",
+        "smoke",
+        "pre-optics",
+        "conflict",
+    ] {
         let out = prompt(pipeline_id, &conflict_vars(true));
         assert!(
             !out.contains("node /"),

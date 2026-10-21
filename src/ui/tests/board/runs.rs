@@ -559,6 +559,7 @@ fn coordinator_session(id: &str, cwd: &str, run: Option<&str>) -> crate::types::
         prompts: Vec::new(),
         task_id: None,
         run_id: run.map(str::to_string),
+        launch_kind: None,
     }
 }
 
@@ -824,6 +825,7 @@ fn pending_for(run_id: Option<&str>) -> crate::daemon::PendingRequest {
         say: String::new(),
         run_id: run_id.map(str::to_string),
         reviewer_token: None,
+        launch_kind: None,
     };
     let feed = Recording::default();
     crate::ui::board::note_launch(&feed, &crate::ui::state::Action::Launch(Box::new(spec)));

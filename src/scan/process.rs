@@ -54,6 +54,9 @@ pub struct ClaudeProcess {
     /// `CLAUDE_SESSIONS_RUN_ID` from the process environment. Set only on a QA
     /// run's coordinator, which is what makes it the way to recognise one.
     pub launch_run_id: Option<String>,
+    /// `CLAUDE_SESSIONS_LAUNCH_KIND` from the process environment. Set only on
+    /// a smoke test.
+    pub launch_kind: Option<String>,
     /// `CLAUDE_SESSIONS_TASK_ID` from the process environment.
     pub launch_task_id: Option<i64>,
 }

@@ -29,6 +29,7 @@ mod pre_optics;
 mod qa;
 mod qa_run;
 mod revision;
+mod smoke;
 mod task;
 
 pub use conflict::CONFLICT_PIPELINE;
@@ -41,6 +42,7 @@ pub use qa_run::{
     QA_ROOT_VAR, QA_RUN_PIPELINE, RUN_ID_VAR, RUN_STARTED_VAR, TASK_IDS_VAR, TRIAGE_VAR,
 };
 pub use revision::REVISION_PIPELINE;
+pub use smoke::SMOKE_PIPELINE;
 pub use task::TASK_PIPELINE;
 
 use super::PromptVars;
@@ -137,6 +139,7 @@ pub static BUILT_IN: &[&PipelineDef] = &[
     &REVISION_PIPELINE,
     &QA_PIPELINE,
     &QA_DRYRUN_PIPELINE,
+    &SMOKE_PIPELINE,
     &QA_RUN_PIPELINE,
     &PRE_OPTICS_PIPELINE,
     &CONFLICT_PIPELINE,

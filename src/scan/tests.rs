@@ -49,6 +49,7 @@ pub(crate) fn a_proc(pid: u32, start_ms: u64) -> ClaudeProcess {
         session_id: None,
         launch_task_id: None,
         launch_run_id: None,
+        launch_kind: None,
     }
 }
 
@@ -261,4 +262,26 @@ fn an_environment_without_a_run_id_yields_none() {
 fn an_empty_run_id_value_is_not_a_run_id() {
     let line = "CLAUDE_SESSIONS_RUN_ID= PATH=/usr/bin";
     assert_eq!(crate::scan::detect::launch_run_id(line), None);
+}
+
+#[test]
+fn a_launch_kind_is_read_from_the_environment() {
+    let line =
+        "PATH=/usr/bin CLAUDE_SESSIONS_TASK_ID=6688 CLAUDE_SESSIONS_LAUNCH_KIND=smoke HOME=/x";
+    assert_eq!(
+        crate::scan::detect::launch_kind(line).as_deref(),
+        Some("smoke")
+    );
+    assert_eq!(crate::scan::detect::launch_task_id(line), Some(6688));
+}
+
+#[test]
+fn a_launch_kind_needs_its_own_whole_key_and_a_value() {
+    for line in [
+        "MY_CLAUDE_SESSIONS_LAUNCH_KIND=smoke",
+        "CLAUDE_SESSIONS_LAUNCH_KIND= PATH=/usr/bin",
+        "PATH=/usr/bin",
+    ] {
+        assert_eq!(crate::scan::detect::launch_kind(line), None, "{line}");
+    }
 }

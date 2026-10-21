@@ -13,9 +13,9 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 
 use crate::cli::spawn::{
-    live_task_windows, qa_flags, spawn, Outcome, SpawnContext, SpawnHost, SpawnInput,
-    EXIT_BAD_INPUT, EXIT_CONFIG, EXIT_DRIVER, EXIT_FORBIDDEN, EXIT_NO_DAEMON, EXIT_OK,
-    EXIT_RUNNING,
+    ancestors_of, live_smoke_windows, live_task_windows, qa_flags, spawn, with_task_url,
+    LiveSession, Outcome, SpawnContext, SpawnHost, SpawnInput, EXIT_BAD_INPUT, EXIT_CONFIG,
+    EXIT_DRIVER, EXIT_FORBIDDEN, EXIT_NO_DAEMON, EXIT_OK, EXIT_RUNNING,
 };
 use crate::config::{ConfigHandle, EnvOverrides};
 use crate::daemon::{PendingRequest, Snapshot};
@@ -23,7 +23,7 @@ use crate::db::Db;
 use crate::paths::Paths;
 use crate::term::{
     DriverKind, DriverResult, LaunchRequest, SessionRef, SpawnPolicy, TerminalDriver,
-    REVIEWER_TOKEN_ENV, TASK_ID_ENV,
+    LAUNCH_KIND_ENV, REVIEWER_TOKEN_ENV, TASK_ID_ENV,
 };
 use crate::types::Task;
 use crate::ui::tests::board::fixtures::{live_session, RecordingDriver};
@@ -77,6 +77,17 @@ impl World {
         }
     }
 
+    fn smoke(&self) -> SpawnInput {
+        SpawnInput {
+            kind: Some("smoke".into()),
+            cwd: Some(self.cwd()),
+            task_id: Some(TASK),
+            prompt: Some(format!("/smoke-test {TASK}")),
+            claude_flags: Some("--dangerously-skip-permissions".into()),
+            ..SpawnInput::default()
+        }
+    }
+
     fn token(&self) -> Option<String> {
         Db::open(&self.paths).reviewer_token(TASK)
     }
@@ -122,6 +133,12 @@ impl TerminalDriver for ProbeDriver {
 struct FakeHost {
     daemon: Option<Snapshot>,
     outside: Vec<String>,
+    /// What `outside_sessions` answers when it is asked for smoke tests.
+    outside_smoke: Vec<String>,
+    /// Live sessions outside the daemon that carry pids (QA side).
+    outside_live: Vec<LiveSession>,
+    /// What `caller_ancestors` answers: the pids above the spawn process.
+    ancestors: Vec<u32>,
     driver: Arc<ProbeDriver>,
     pending: Mutex<Vec<PendingRequest>>,
     asked_daemon: Mutex<u32>,
@@ -137,6 +154,9 @@ impl FakeHost {
         FakeHost {
             daemon: Some(Snapshot::default()),
             outside: Vec::new(),
+            outside_smoke: Vec::new(),
+            outside_live: Vec::new(),
+            ancestors: Vec::new(),
             driver: Arc::new(ProbeDriver {
                 recorder,
                 paths: world.paths.clone(),
@@ -162,8 +182,23 @@ impl SpawnHost for FakeHost {
         self.pending.lock().unwrap().push(pending.clone());
         true
     }
-    fn outside_sessions(&self, _task_id: i64) -> Vec<String> {
-        self.outside.clone()
+    fn outside_sessions(&self, _task_id: i64, smoke: bool) -> Vec<LiveSession> {
+        let labels = if smoke {
+            &self.outside_smoke
+        } else {
+            &self.outside
+        };
+        let mut found: Vec<LiveSession> = labels
+            .iter()
+            .map(|label| LiveSession::new(label.clone(), Vec::new()))
+            .collect();
+        if !smoke {
+            found.extend(self.outside_live.iter().cloned());
+        }
+        found
+    }
+    fn caller_ancestors(&self) -> Vec<u32> {
+        self.ancestors.clone()
     }
     fn driver(&self, _requested: Option<DriverKind>) -> Option<Arc<dyn TerminalDriver>> {
         Some(self.driver.clone())
@@ -743,14 +778,364 @@ fn a_task_odoo_cannot_describe_still_launches_with_a_warning() {
 #[test]
 fn a_dead_pane_does_not_count_as_a_live_session() {
     let listing = "task-7821 1\nqa-7821-r1 1\ntask-9 0\n";
-    assert!(live_task_windows(listing, 7821).is_empty());
+    assert!(names(live_task_windows(listing, 7821)).is_empty());
 }
 
 #[test]
 fn a_running_pane_named_for_the_task_counts() {
     let listing = "task-7821 0\nqa-7821-r2 0\nqa-78210-r1 0\ntask-78 0\n";
     assert_eq!(
-        live_task_windows(listing, 7821),
+        names(live_task_windows(listing, 7821)),
         vec!["task-7821".to_string(), "qa-7821-r2".to_string()]
+    );
+}
+
+// --- the smoke launch --------------------------------------------------------
+
+fn smoke_session(id: &str) -> crate::types::Session {
+    crate::types::Session {
+        launch_kind: Some("smoke".into()),
+        ..live_session(id, Some(TASK), 10)
+    }
+}
+
+fn snapshot_with(sessions: Vec<crate::types::Session>) -> Snapshot {
+    let mut snapshot = Snapshot::default();
+    snapshot.sessions.by_project.insert("p".into(), sessions);
+    snapshot
+}
+
+#[test]
+fn a_smoke_launch_runs_the_skill_with_the_task_url_and_no_qa_state() {
+    let world = world();
+    // A recorded QA round must not leak into a smoke test.
+    let qa_dir = world.paths.qa_task_dir(TASK);
+    std::fs::create_dir_all(&qa_dir).unwrap();
+    std::fs::write(
+        qa_dir.join("run.json"),
+        r#"{"round":2,"verdict":"revisions","cells":{}}"#,
+    )
+    .unwrap();
+    let host = FakeHost::new(&world);
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+
+    let prompt = the_prompt(&world);
+    assert!(
+        prompt.contains(&format!("{ODOO}/web#id={TASK}&model=project.task")),
+        "no task URL: {prompt}"
+    );
+    assert!(
+        prompt.contains(&format!("Run /smoke-test {TASK}")),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("/qa "), "{prompt}");
+    assert!(!prompt.contains(REVIEWER_TOKEN_ENV), "{prompt}");
+    assert!(!prompt.contains("VERIFICATION"), "{prompt}");
+
+    let launches = host.launched();
+    assert_eq!(
+        launches[0].env,
+        vec![
+            (TASK_ID_ENV.to_string(), TASK.to_string()),
+            (LAUNCH_KIND_ENV.to_string(), "smoke".to_string()),
+        ]
+    );
+    assert_eq!(
+        launches[0].title.as_deref(),
+        Some(format!("smoke-{TASK}").as_str())
+    );
+    assert!(
+        world.token().is_none(),
+        "a smoke test recorded a reviewer token"
+    );
+    assert_eq!(outcome.body["kind"], json!("smoke"));
+    assert_eq!(outcome.body["title"], json!(format!("smoke-{TASK}")));
+    assert_eq!(outcome.body["round"], Value::Null);
+    assert_eq!(outcome.body["priorRound"], Value::Null);
+    assert_eq!(outcome.body["tokenRecorded"], json!(false));
+    assert_eq!(outcome.body["promptIgnored"], json!(true));
+}
+
+#[test]
+fn a_live_qa_session_does_not_refuse_a_smoke_test() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.daemon = Some(snapshot_with(vec![live_session("qa-pass", Some(TASK), 10)]));
+    host.outside = vec![format!("tmux window qa-{TASK}-r1")];
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+}
+
+#[test]
+fn a_live_smoke_test_does_not_refuse_qa() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.daemon = Some(snapshot_with(vec![smoke_session("smoking")]));
+    host.outside_smoke = vec![format!("tmux window smoke-{TASK}")];
+    let outcome = run(&world, &host, world.qa());
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+    assert!(world.token().is_some());
+}
+
+#[test]
+fn a_second_smoke_test_is_refused_unless_forced() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.daemon = Some(snapshot_with(vec![smoke_session("smoking")]));
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_RUNNING, "{}", outcome.line());
+    assert!(outcome.body["error"].as_str().unwrap().contains("smoking"));
+    assert!(world.prompt_files().is_empty());
+    assert!(host.launched().is_empty());
+
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            force: true,
+            ..world.smoke()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+}
+
+#[test]
+fn a_smoke_window_or_process_outside_the_daemon_refuses_a_second_smoke_test() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.outside_smoke = vec![format!("tmux window smoke-{TASK}")];
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_RUNNING, "{}", outcome.line());
+}
+
+#[test]
+fn a_smoke_test_needs_a_task_and_a_matching_title() {
+    let world = world();
+    let host = FakeHost::new(&world);
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            task_id: None,
+            ..world.smoke()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_BAD_INPUT);
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            title: Some("smoke-9999".into()),
+            ..world.smoke()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_BAD_INPUT, "{}", outcome.line());
+    assert!(host.launched().is_empty());
+}
+
+#[test]
+fn a_smoke_test_with_no_daemon_warns_and_still_launches() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.daemon = None;
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+    assert!(outcome.body["warnings"]
+        .to_string()
+        .contains("no claude-sessions daemon"));
+}
+
+#[test]
+fn a_smoke_test_with_no_odoo_url_is_a_config_gap() {
+    let world = world_with(json!({ "groups": [] }));
+    let host = FakeHost::new(&world);
+    let outcome = run(&world, &host, world.smoke());
+    assert_eq!(outcome.code, EXIT_CONFIG);
+    assert!(outcome.body["error"]
+        .as_str()
+        .unwrap()
+        .contains("smoke test"));
+}
+
+#[test]
+fn the_unknown_kind_error_names_smoke() {
+    let world = world();
+    let host = FakeHost::new(&world);
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            kind: Some("smok".into()),
+            ..world.smoke()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_BAD_INPUT);
+    assert!(outcome.body["error"].as_str().unwrap().contains("smoke"));
+}
+
+#[test]
+fn only_a_running_smoke_window_for_the_task_counts_as_a_smoke_test() {
+    let listing = "smoke-7821 0\nsmoke-78210 0\nsmoke-7821 1\ntask-7821 0\nqa-7821-r1 0\n";
+    assert_eq!(
+        names(live_smoke_windows(listing, 7821)),
+        vec!["smoke-7821".to_string()]
+    );
+    // And the QA side does not see it.
+    assert_eq!(
+        names(live_task_windows(listing, 7821)),
+        vec!["task-7821".to_string(), "qa-7821-r1".to_string()]
+    );
+}
+
+// --- a plain launch with a task links to it ----------------------------------
+
+#[test]
+fn a_plain_launch_with_a_task_adds_the_task_url_after_the_prompt() {
+    let world = world();
+    let host = FakeHost::new(&world);
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            kind: Some("plain".into()),
+            cwd: Some(world.cwd()),
+            task_id: Some(TASK),
+            prompt: Some(format!("/smoke-test {TASK}")),
+            ..SpawnInput::default()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+    let prompt = the_prompt(&world);
+    assert!(
+        prompt.starts_with(&format!("/smoke-test {TASK}")),
+        "the slash command is no longer first: {prompt}"
+    );
+    assert_eq!(
+        crate::transcript::task_ref_in(&prompt),
+        Some(TASK),
+        "the prompt does not link to its task: {prompt}"
+    );
+    assert_eq!(outcome.body["taskUrlAdded"], json!(true));
+}
+
+#[test]
+fn the_task_url_is_added_only_when_the_prompt_names_no_task_and_odoo_is_known() {
+    let url = format!("{ODOO}/web#id={TASK}&model=project.task&view_type=form");
+    assert_eq!(
+        with_task_url("go".into(), &url),
+        (format!("go\n\nOdoo task: {url}"), true)
+    );
+    let named = "see https://odoo/web#id=1&model=project.task".to_string();
+    assert_eq!(with_task_url(named.clone(), &url), (named, false));
+    assert_eq!(with_task_url("go".into(), ""), ("go".to_string(), false));
+}
+
+fn names(windows: Vec<(String, Option<u32>)>) -> Vec<String> {
+    windows.into_iter().map(|(name, _)| name).collect()
+}
+
+// --- the calling session is not a duplicate ----------------------------------
+
+/// A session on the task whose `claude` process has this pid.
+fn session_with_pid(id: &str, pid: u32) -> crate::types::Session {
+    crate::types::Session {
+        pids: vec![pid],
+        ..live_session(id, Some(TASK), 10)
+    }
+}
+
+/// The verified case: a session runs `spawn --kind qa --dry-run` for its own
+/// task (QAden's /smoke-test handing off), and found only itself.
+#[test]
+fn the_calling_session_does_not_refuse_its_own_qa_handoff() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.outside_live = vec![LiveSession::new("claude pid 96139", vec![96139])];
+    host.ancestors = vec![96200, 96139, 500];
+    let outcome = run(
+        &world,
+        &host,
+        SpawnInput {
+            dry_run: true,
+            ..world.qa()
+        },
+    );
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+    assert_eq!(outcome.body["callerExcluded"], json!(["claude pid 96139"]));
+
+    // Its daemon session and its window are the caller too.
+    let mut host = FakeHost::new(&world);
+    host.daemon = Some(snapshot_with(vec![session_with_pid("me", 96139)]));
+    host.outside_live = vec![LiveSession::new(
+        format!("tmux window task-{TASK}"),
+        vec![500],
+    )];
+    host.ancestors = vec![96200, 96139, 500];
+    let outcome = run(&world, &host, world.qa());
+    assert_eq!(outcome.code, EXIT_OK, "{}", outcome.line());
+}
+
+#[test]
+fn another_live_session_still_refuses() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    host.outside_live = vec![LiveSession::new("claude pid 4242", vec![4242])];
+    host.ancestors = vec![96200, 96139];
+    let outcome = run(&world, &host, world.qa());
+    assert_eq!(outcome.code, EXIT_RUNNING, "{}", outcome.line());
+    assert!(outcome.body.get("callerExcluded").is_none());
+}
+
+#[test]
+fn the_caller_is_dropped_but_a_second_live_session_still_refuses() {
+    let world = world();
+    let mut host = FakeHost::new(&world);
+    // Newest first: the caller hides nothing behind it.
+    host.daemon = Some(snapshot_with(vec![
+        session_with_pid("me", 96139),
+        crate::types::Session {
+            pids: vec![4242],
+            ..live_session("other", Some(TASK), 5)
+        },
+    ]));
+    host.outside_live = vec![
+        LiveSession::new("claude pid 96139", vec![96139]),
+        LiveSession::new("claude pid 4242", vec![4242]),
+    ];
+    host.ancestors = vec![96200, 96139];
+    let outcome = run(&world, &host, world.qa());
+    assert_eq!(outcome.code, EXIT_RUNNING, "{}", outcome.line());
+    let error = outcome.body["error"].as_str().unwrap();
+    assert!(
+        error.contains("session other") && error.contains("claude pid 4242"),
+        "{error}"
+    );
+    assert!(
+        !error.contains("96139") && !error.contains("session me"),
+        "{error}"
+    );
+    assert!(world.token().is_none());
+}
+
+#[test]
+fn the_ancestor_chain_walks_up_and_stops_at_init_or_a_loop() {
+    let parents: std::collections::HashMap<u32, u32> =
+        [(300, 200), (200, 100), (100, 1), (7, 8), (8, 7)].into();
+    assert_eq!(ancestors_of(Some(300), &parents), vec![300, 200, 100]);
+    assert_eq!(ancestors_of(Some(7), &parents), vec![7, 8]);
+    assert!(ancestors_of(None, &parents).is_empty());
+}
+
+#[test]
+fn a_window_listing_carries_each_pane_pid() {
+    let listing = format!("500\ttask-{TASK} 0\n501\tqa-{TASK}-r1 1\n502\tsmoke-{TASK} 0\n");
+    assert_eq!(
+        live_task_windows(&listing, TASK),
+        vec![(format!("task-{TASK}"), Some(500))]
+    );
+    assert_eq!(
+        live_smoke_windows(&listing, TASK),
+        vec![(format!("smoke-{TASK}"), Some(502))]
     );
 }

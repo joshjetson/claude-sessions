@@ -118,6 +118,9 @@ pub struct LaunchSpec {
     /// held one could sign in the reviewer's name, which is exactly what this
     /// exists to stop.
     pub reviewer_token: Option<String>,
+    /// Exported as `CLAUDE_SESSIONS_LAUNCH_KIND`. Set only for a smoke test,
+    /// so the scanner can tell it from the task's QA session.
+    pub launch_kind: Option<String>,
 }
 
 /// Handing a revision to a session that is already open.
@@ -251,6 +254,8 @@ impl ResumeRequest {
             run_id: None,
             // A resume rejoins a session that already has its token.
             reviewer_token: None,
+            // A resume is never a smoke test.
+            launch_kind: None,
             say: match self.purpose {
                 ResumePurpose::Revision => format!(
                     "Resumed #{task_id} ({}) with revision notes.",

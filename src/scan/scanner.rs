@@ -17,7 +17,7 @@ use crate::util::{cwd_to_project_dir, start_time_instant};
 
 use super::detect::{
     argv_is_interactive_claude, is_daemon_scratch_cwd, is_helper_flag, is_interactive_claude,
-    is_script_runtime, launch_run_id, launch_task_id, session_id_flag,
+    is_script_runtime, launch_kind, launch_run_id, launch_task_id, session_id_flag,
 };
 use super::files::{current_stat, SessionFilesCache};
 use super::pairing::pair_processes_to_sessions;
@@ -98,6 +98,8 @@ pub struct Scanner<S: ProcessSource = PlatformProcessSource> {
     launch_tasks: HashMap<u32, Option<i64>>,
     /// The run a coordinator was launched for, cached per pid alongside it.
     launch_runs: HashMap<u32, Option<String>>,
+    /// The launch kind (a smoke test), cached per pid alongside it.
+    launch_kinds: HashMap<u32, Option<String>>,
     files: SessionFilesCache,
     task_refs: TaskRefCache,
     /// Where each transcript says it was started. Only [`Discovery::Transcripts`]
@@ -138,6 +140,7 @@ impl<S: ProcessSource> Scanner<S> {
             argv: HashMap::new(),
             launch_tasks: HashMap::new(),
             launch_runs: HashMap::new(),
+            launch_kinds: HashMap::new(),
             files: SessionFilesCache::new(),
             task_refs: TaskRefCache::new(),
             session_cwds: SessionCwdCache::new(),
@@ -218,6 +221,7 @@ impl<S: ProcessSource> Scanner<S> {
         self.argv.retain(|pid, _| alive.contains(pid));
         self.launch_tasks.retain(|pid, _| alive.contains(pid));
         self.launch_runs.retain(|pid, _| alive.contains(pid));
+        self.launch_kinds.retain(|pid, _| alive.contains(pid));
         self.tool_shells.retain(|pid, _| alive.contains(pid));
 
         // Two ways a row can be a session. Its own name settles it — a native
@@ -288,6 +292,7 @@ impl<S: ProcessSource> Scanner<S> {
                 // Same line, same call. A second `ps -E` per tick to read one
                 // more variable would double the cost of the scan.
                 self.launch_runs.insert(*pid, launch_run_id(line));
+                self.launch_kinds.insert(*pid, launch_kind(line));
             }
         }
 
@@ -315,6 +320,7 @@ impl<S: ProcessSource> Scanner<S> {
                     session_id: argv.session_id,
                     launch_task_id: self.launch_tasks.get(&row.pid).copied().flatten(),
                     launch_run_id: self.launch_runs.get(&row.pid).cloned().flatten(),
+                    launch_kind: self.launch_kinds.get(&row.pid).cloned().flatten(),
                 })
             })
             .collect()
@@ -442,6 +448,7 @@ impl<S: ProcessSource> Scanner<S> {
                         .launch_run_id
                         .as_deref()
                         .map(crate::qarun::decode_run_id),
+                    launch_kind: proc.launch_kind.clone(),
                     session_file: Some(file.path.clone()),
                     session_mtime: mtime,
                     session_size: Some(size),
@@ -476,6 +483,7 @@ impl<S: ProcessSource> Scanner<S> {
                         .launch_run_id
                         .as_deref()
                         .map(crate::qarun::decode_run_id),
+                    launch_kind: proc.launch_kind.clone(),
                     session_file: None,
                     session_mtime: now,
                     session_size: None,
