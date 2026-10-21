@@ -58,6 +58,7 @@ fn session_silent_for(silence: Duration) -> Session {
         prompts: Vec::new(),
         task_id: None,
         run_id: None,
+        launch_kind: None,
     }
 }
 

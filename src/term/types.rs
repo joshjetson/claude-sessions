@@ -16,6 +16,19 @@ pub const TASK_ID_ENV: &str = "CLAUDE_SESSIONS_TASK_ID";
 /// from its folder — see `scan::detect::launch_run_id`.
 pub const RUN_ID_ENV: &str = "CLAUDE_SESSIONS_RUN_ID";
 
+/// Environment variable naming what kind of launch a session is, when that
+/// kind must be told apart from an ordinary task session.
+///
+/// Exported on a smoke test and on nothing else today. A smoke test links to
+/// its task like any session, so the board shows its number, but it is not a
+/// QA pass: the QA guards, QA runs and reviewer answers must not take it for
+/// one. The scanner reads it back from `ps -E` — see
+/// `scan::detect::launch_kind`.
+pub const LAUNCH_KIND_ENV: &str = "CLAUDE_SESSIONS_LAUNCH_KIND";
+
+/// The [`LAUNCH_KIND_ENV`] value of a smoke test.
+pub const SMOKE_LAUNCH_KIND: &str = "smoke";
+
 /// Proof that an instruction came from the REVIEWER rather than from another
 /// agent.
 ///
@@ -72,6 +85,10 @@ impl LaunchRequest {
 
     pub fn reviewer_token(self, token: impl Into<String>) -> Self {
         self.env(REVIEWER_TOKEN_ENV, token)
+    }
+
+    pub fn launch_kind(self, kind: impl Into<String>) -> Self {
+        self.env(LAUNCH_KIND_ENV, kind)
     }
 
     pub fn title(mut self, title: impl Into<String>) -> Self {

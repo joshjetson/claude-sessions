@@ -380,6 +380,8 @@ impl<S: ProcessSource> Engine<S> {
             .sessions
             .iter()
             .filter(|session| session.task_id == Some(task_id))
+            // A smoke test asks the coordinator nothing and gives no verdict.
+            .filter(|session| !session.is_smoke())
             .collect();
 
         // Newest first, so an answer reaches the session actually working the

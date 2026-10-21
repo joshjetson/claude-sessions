@@ -8,7 +8,7 @@
 //! the token the dashboard's approve key refuses the session, and without the
 //! pending link the board never shows it.
 //!
-//! Three kinds:
+//! Four kinds:
 //!
 //! * `qa` — the board's QA launch. Opus's prompt is ignored and the pipeline
 //!   prompt is sent instead: the pipeline wraps extra context as "honor this
@@ -17,8 +17,16 @@
 //!   approve key both go through it.
 //! * `qa-dry` — the developer-facing variant. No token and no duplicate guard,
 //!   the same as on the board.
+//! * `smoke` — QAden's `/smoke-test`, through the smoke pipeline prompt the
+//!   board sends. The prompt carries the task URL, so the session shows its
+//!   task number. No token, no round, no `run.json`. The launch exports
+//!   `CLAUDE_SESSIONS_LAUNCH_KIND=smoke`, so a live smoke test does not stop a
+//!   QA launch on the same task, and a second smoke test is refused unless
+//!   forced. The window is `smoke-<task>`.
 //! * `plain` — Opus's prompt and flags, verbatim. The master's own launch goes
 //!   through here, so this path must keep working with no daemon and no task.
+//!   With a task, the task URL is added to the end of a prompt that does not
+//!   already name a task, so the session links to its task.
 //!
 //! The answer is one JSON line on stdout, always last. `ok`, `driver`, `hint`
 //! and `promptFile` keep the meaning Node gave them, so Opus reads it
@@ -38,7 +46,9 @@ use crate::config::ConfigHandle;
 use crate::daemon::{PendingRequest, Snapshot};
 use crate::paths::Paths;
 use crate::pipeline::definitions::{QA_PRIOR_ROUND_VAR, QA_PRIOR_VERDICT_VAR};
-use crate::term::{shell_quote, split_words, DriverKind, SpawnPolicy, TerminalDriver};
+use crate::term::{
+    shell_quote, split_words, DriverKind, SpawnPolicy, TerminalDriver, SMOKE_LAUNCH_KIND,
+};
 use crate::types::Task;
 use crate::ui::actions::board::{launch_core, prompt_path, prompt_stem, LaunchCore, LaunchFailure};
 use crate::ui::board::launch::{prompt_context, LaunchKind};
@@ -86,6 +96,7 @@ pub struct SpawnInput {
 pub enum SpawnKind {
     Qa,
     QaDry,
+    Smoke,
     Plain,
 }
 
@@ -94,6 +105,7 @@ impl SpawnKind {
         match raw.unwrap_or("plain") {
             "qa" => Some(SpawnKind::Qa),
             "qa-dry" => Some(SpawnKind::QaDry),
+            "smoke" => Some(SpawnKind::Smoke),
             "plain" | "" => Some(SpawnKind::Plain),
             _ => None,
         }
@@ -103,17 +115,24 @@ impl SpawnKind {
         match self {
             SpawnKind::Qa => "qa",
             SpawnKind::QaDry => "qa-dry",
+            SpawnKind::Smoke => "smoke",
             SpawnKind::Plain => "plain",
         }
     }
 
-    /// The board's kind for the two QA launches; `None` for `plain`.
+    /// The board's kind for the pipeline launches; `None` for `plain`.
     fn launch_kind(self) -> Option<LaunchKind> {
         match self {
             SpawnKind::Qa => Some(LaunchKind::Qa),
             SpawnKind::QaDry => Some(LaunchKind::QaDry),
+            SpawnKind::Smoke => Some(LaunchKind::Smoke),
             SpawnKind::Plain => None,
         }
+    }
+
+    /// The two QA kinds: they read QAden's `run.json` for the round.
+    fn is_qa(self) -> bool {
+        matches!(self, SpawnKind::Qa | SpawnKind::QaDry)
     }
 }
 
@@ -129,13 +148,46 @@ pub trait SpawnHost {
     /// Live sessions on the task that the daemon may not know about: `claude`
     /// processes carrying its task id, and tmux windows named for it. Each is
     /// a short description for the error line.
-    fn outside_sessions(&self, task_id: i64) -> Vec<String>;
+    ///
+    /// `smoke` picks the side: `true` finds only smoke tests (a `smoke-<id>`
+    /// window, a process with `CLAUDE_SESSIONS_LAUNCH_KIND=smoke`), `false`
+    /// finds everything else. See [`LaunchKind::counts_as_running`].
+    fn outside_sessions(&self, task_id: i64, smoke: bool) -> Vec<LiveSession>;
+    /// The pids above this process: its parent, that one's parent, and so on.
+    ///
+    /// A session that runs `claude-sessions spawn` for its own task (QAden's
+    /// `/smoke-test` handing off to a full QA) is one of these, and so is the
+    /// shell of the tmux pane it runs in. Asked only when the duplicate guard
+    /// found something.
+    fn caller_ancestors(&self) -> Vec<u32>;
     /// The driver to launch with: the one asked for, or the configured one.
     fn driver(&self, requested: Option<DriverKind>) -> Option<Arc<dyn TerminalDriver>>;
     /// The task's name, project and stage from Odoo, when it answers.
     fn task(&self, task_id: i64) -> Option<Task>;
     /// The commit a QAden worktree is on. See [`crate::qaden::HeadCache`].
     fn head_of(&self, dir: &Path) -> Option<String>;
+}
+
+/// A live session the duplicate guard found: what the error line calls it,
+/// and the pids that identify it (a `claude` pid, or a tmux pane's shell).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveSession {
+    pub label: String,
+    pub pids: Vec<u32>,
+}
+
+impl LiveSession {
+    pub fn new(label: impl Into<String>, pids: Vec<u32>) -> Self {
+        LiveSession {
+            label: label.into(),
+            pids,
+        }
+    }
+
+    /// Whether this is the session that called `spawn`.
+    fn is_caller(&self, ancestors: &[u32]) -> bool {
+        self.pids.iter().any(|pid| ancestors.contains(pid))
+    }
 }
 
 /// What one spawn decided: the exit code and the JSON line.
@@ -238,6 +290,15 @@ fn refuse(code: i32, error: impl Into<String>, mut body: Map<String, Value>) -> 
     Outcome { code, body }
 }
 
+/// `smoke-<task>`, the title a smoke test gets, as its task number.
+fn smoke_title(title: &str) -> Option<i64> {
+    let task = title.strip_prefix("smoke-")?;
+    if task.is_empty() || !task.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    task.parse().ok()
+}
+
 /// `qa-<task>-r<round>`, the title qa-feed passes, as its two numbers.
 fn qa_title(title: &str) -> Option<(i64, u32)> {
     let rest = title.strip_prefix("qa-")?;
@@ -250,18 +311,40 @@ fn qa_title(title: &str) -> Option<(i64, u32)> {
 }
 
 /// Windows in a `#{window_name} #{pane_dead}` listing that hold a running
-/// session for the task: the board's `task-<id>` or a `qa-<id>-r<round>`.
-pub(crate) fn live_task_windows(listing: &str, task_id: i64) -> Vec<String> {
+/// session for the task: the board's `task-<id>` or a `qa-<id>-r<round>`,
+/// each with its pane pid when the listing has one.
+pub(crate) fn live_task_windows(listing: &str, task_id: i64) -> Vec<(String, Option<u32>)> {
     let board_name = format!("task-{task_id}");
+    live_windows(listing, |name| {
+        name == board_name || qa_title(name).is_some_and(|(named, _)| named == task_id)
+    })
+}
+
+/// Windows in the same listing that hold a running smoke test for the task:
+/// `smoke-<id>`, each with its pane pid when the listing has one.
+pub(crate) fn live_smoke_windows(listing: &str, task_id: i64) -> Vec<(String, Option<u32>)> {
+    live_windows(listing, |name| smoke_title(name) == Some(task_id))
+}
+
+/// The tmux listing format the real host asks for: the pane's pid, a tab, then
+/// the window name and whether its pane is dead. The pid is what tells the
+/// calling session's own window apart from another one.
+pub(crate) const WINDOW_LISTING_FORMAT: &str = "#{pane_pid}\t#{window_name} #{pane_dead}";
+
+/// Live windows in a listing, each with its pane pid. A line is
+/// `<pid>\t<name> <dead>`, or `<name> <dead>` with no pid.
+fn live_windows(listing: &str, wanted: impl Fn(&str) -> bool) -> Vec<(String, Option<u32>)> {
     listing
         .lines()
-        .filter_map(|line| line.trim().rsplit_once(' '))
-        .filter(|(_, dead)| *dead == "0")
-        .map(|(name, _)| name)
-        .filter(|name| {
-            *name == board_name || qa_title(name).is_some_and(|(named, _)| named == task_id)
+        .map(str::trim)
+        .map(|line| match line.split_once('\t') {
+            Some((pid, rest)) => (pid.trim().parse::<u32>().ok(), rest),
+            None => (None, line),
         })
-        .map(str::to_string)
+        .filter_map(|(pid, rest)| rest.rsplit_once(' ').map(|(name, dead)| (name, dead, pid)))
+        .filter(|(_, dead, _)| *dead == "0")
+        .filter(|(name, _, _)| wanted(name))
+        .map(|(name, _, pid)| (name.to_string(), pid))
         .collect()
 }
 
@@ -314,13 +397,34 @@ fn task_for(task_id: i64, snapshot: Option<&Snapshot>, host: &dyn SpawnHost) -> 
 }
 
 /// Sessions the daemon says work the task: by the transcript's task id, then
-/// by the launch link.
-fn daemon_sessions(snapshot: &Snapshot, task_id: i64) -> Vec<String> {
-    let sessions = snapshot.sessions.by_project.values().flatten();
-    let link = snapshot.task_sessions.get(&task_id);
-    crate::ui::board::controller::task_session(sessions, task_id, link)
-        .map(|session| vec![format!("session {}", session.session_id)])
-        .unwrap_or_default()
+/// by the launch link. Only the sessions that count against `kind` — a smoke
+/// test and a QA pass do not see each other.
+///
+/// Every one of them, not only the newest: the caller is dropped later, and a
+/// second session behind it must still be found.
+fn daemon_sessions(snapshot: &Snapshot, task_id: i64, kind: &LaunchKind) -> Vec<LiveSession> {
+    let sessions = snapshot
+        .sessions
+        .by_project
+        .values()
+        .flatten()
+        .filter(|session| kind.counts_as_running(session));
+    let mut found = crate::ui::board::controller::task_sessions(sessions.clone(), task_id);
+    if found.is_empty() {
+        let link = snapshot.task_sessions.get(&task_id);
+        found.extend(crate::ui::board::controller::task_session(
+            sessions, task_id, link,
+        ));
+    }
+    found
+        .into_iter()
+        .map(|session| {
+            LiveSession::new(
+                format!("session {}", session.session_id),
+                session.pids.clone(),
+            )
+        })
+        .collect()
 }
 
 /// One spawn, decided and (unless refused or dry) carried out.
@@ -333,7 +437,7 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
         return refuse(
             EXIT_BAD_INPUT,
             format!(
-                "unknown kind {:?}: use qa, qa-dry or plain",
+                "unknown kind {:?}: use qa, qa-dry, smoke or plain",
                 input.kind.unwrap_or_default()
             ),
             body,
@@ -357,7 +461,10 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
         );
     }
     if let (Some(title), Some(task_id)) = (input.title.as_deref(), task_id) {
-        if let Some((named, _)) = qa_title(title).filter(|(named, _)| *named != task_id) {
+        let named = qa_title(title)
+            .map(|(named, _)| named)
+            .or_else(|| smoke_title(title));
+        if let Some(named) = named.filter(|named| *named != task_id) {
             return refuse(
                 EXIT_BAD_INPUT,
                 format!("title {title} names task {named}, not taskId {task_id}"),
@@ -382,9 +489,13 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
     // A QA launch cannot pair without the task URL: the board finds the
     // session by that URL in the transcript head.
     if kind != SpawnKind::Plain && cx.config.odoo_creds().url.is_empty() {
+        let who = match kind {
+            SpawnKind::Smoke => "a smoke test",
+            _ => "a QA session",
+        };
         return refuse(
             EXIT_CONFIG,
-            "no Odoo URL configured: a QA session cannot pair without its task URL",
+            format!("no Odoo URL configured: {who} cannot pair without its task URL"),
             body,
         );
     }
@@ -406,7 +517,7 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
                     body,
                 )
             }
-            SpawnKind::QaDry => warnings.push(format!(
+            SpawnKind::QaDry | SpawnKind::Smoke => warnings.push(format!(
                 "no claude-sessions daemon on :{}: the board pairs this session only once a dashboard sees it",
                 cx.port
             )),
@@ -421,10 +532,31 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
         if launch_kind.guards_duplicates() && !input.force {
             let mut running = snapshot
                 .as_ref()
-                .map(|snapshot| daemon_sessions(snapshot, task_id))
+                .map(|snapshot| daemon_sessions(snapshot, task_id, &launch_kind))
                 .unwrap_or_default();
-            running.extend(cx.host.outside_sessions(task_id));
+            running.extend(cx.host.outside_sessions(task_id, kind == SpawnKind::Smoke));
+            // The CALLING session is not a duplicate. A session that asks for a
+            // QA pass on its own task (QAden's /smoke-test handing off) is
+            // handing over, and it found itself here: its `claude` pid, or the
+            // pane its window runs in. Only the caller is dropped; any other
+            // live session on the task still refuses.
             if !running.is_empty() {
+                let ancestors = cx.host.caller_ancestors();
+                let (caller, others): (Vec<LiveSession>, Vec<LiveSession>) = running
+                    .into_iter()
+                    .partition(|live| live.is_caller(&ancestors));
+                if !caller.is_empty() {
+                    let labels: Vec<&str> = caller.iter().map(|live| live.label.as_str()).collect();
+                    body.insert("callerExcluded".into(), json!(labels));
+                    warnings.push(format!(
+                        "not counted as a duplicate: {} is the session that called spawn",
+                        labels.join(", ")
+                    ));
+                }
+                running = others;
+            }
+            if !running.is_empty() {
+                let running: Vec<String> = running.into_iter().map(|live| live.label).collect();
                 body.insert("running".into(), json!(running));
                 return refuse(
                     EXIT_RUNNING,
@@ -451,7 +583,12 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
                     ..Task::default()
                 }
             });
-            let extras = qa_extras(cx.paths, task_id, |dir| cx.host.head_of(dir));
+            // A smoke test reads no run.json: it has no round and no verdict.
+            let extras = if kind.is_qa() {
+                qa_extras(cx.paths, task_id, |dir| cx.host.head_of(dir))
+            } else {
+                Default::default()
+            };
             let prior_round = extras
                 .get(QA_PRIOR_ROUND_VAR)
                 .and_then(|round| round.parse::<u32>().ok());
@@ -462,11 +599,17 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
             );
             // A cross-check only: the round is what run.json recorded. A
             // mismatch is said, never refused.
-            let expected = prior_round.map_or(1, |round| round + 1);
-            if let Some(asked) = input.round.filter(|asked| *asked != expected) {
-                warnings.push(format!(
+            let expected = kind
+                .is_qa()
+                .then(|| prior_round.map_or(1, |round| round + 1));
+            match (input.round, expected) {
+                (Some(asked), Some(expected)) if asked != expected => warnings.push(format!(
                     "round {asked} asked for, but run.json makes this round {expected}"
-                ));
+                )),
+                (Some(asked), None) => {
+                    warnings.push(format!("round {asked} ignored: a smoke test has no round"))
+                }
+                _ => {}
             }
             let context = prompt_context(
                 cx.config,
@@ -489,11 +632,19 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
             warnings.extend(dropped);
             // A QA session gets one; a dry run does not, the same as the board.
             let token = (kind == SpawnKind::Qa).then(|| reviewer_token(task_id));
-            (prompt, flags, token, Some(expected))
+            (prompt, flags, token, expected)
         }
         _ => {
             body.insert("promptIgnored".into(), json!(false));
-            (input.prompt.clone(), raw_flags, None, input.round)
+            let prompt = match (input.prompt.clone(), task_id) {
+                (Some(prompt), Some(task_id)) => {
+                    let (prompt, added) = with_task_url(prompt, &task_url_for(cx.config, task_id));
+                    body.insert("taskUrlAdded".into(), json!(added));
+                    Some(prompt)
+                }
+                (prompt, _) => prompt,
+            };
+            (prompt, raw_flags, None, input.round)
         }
     };
     body.insert("round".into(), json!(round));
@@ -501,6 +652,7 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
     // Verbatim: Opus's ledger finds the tmux window by this name.
     let title = match (input.title.as_deref().map(str::trim), task_id) {
         (Some(title), _) if !title.is_empty() => title.to_string(),
+        (_, Some(task_id)) if kind == SpawnKind::Smoke => format!("smoke-{task_id}"),
         (_, Some(task_id)) if kind != SpawnKind::Plain => {
             format!("qa-{task_id}-r{}", round.unwrap_or(1))
         }
@@ -583,6 +735,7 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
         title: &title,
         run_id: None,
         reviewer_token: token.as_deref(),
+        launch_kind: (kind == SpawnKind::Smoke).then_some(SMOKE_LAUNCH_KIND),
     };
     let result = launch_core(&core, cx.paths, driver.as_ref(), cx.policy);
     body.insert("driver".into(), json!(driver.name()));
@@ -617,6 +770,56 @@ pub fn spawn(input: SpawnInput, cx: &SpawnContext) -> Outcome {
     }
 }
 
+/// This process's parent pid, or `None` where the platform does not say.
+fn caller_parent() -> Option<u32> {
+    #[cfg(unix)]
+    {
+        Some(std::os::unix::process::parent_id())
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// `start` and every pid above it in `parents` (pid -> ppid), stopping at pid
+/// 1, at a pid with no known parent, or at a loop.
+pub(crate) fn ancestors_of(
+    start: Option<u32>,
+    parents: &std::collections::HashMap<u32, u32>,
+) -> Vec<u32> {
+    let mut chain = Vec::new();
+    let mut next = start;
+    while let Some(pid) = next {
+        if pid <= 1 || chain.contains(&pid) || chain.len() >= 64 {
+            break;
+        }
+        chain.push(pid);
+        next = parents.get(&pid).copied();
+    }
+    chain
+}
+
+/// A `plain` prompt with the task URL added at its end, and whether it was.
+///
+/// A session links to its task only by an Odoo task URL in its opening prompt
+/// (see [`crate::transcript::task_ref_in`]). `CLAUDE_SESSIONS_TASK_ID` alone
+/// never reaches the transcript, so a plain launch with a task and no URL
+/// showed no task number in the Sessions tab. The URL goes at the END, so a
+/// prompt that opens with a slash command (`/smoke-test 6685`) still opens with
+/// it. A prompt that already names a task is left alone, and so is every
+/// prompt when no Odoo URL is configured.
+pub(crate) fn with_task_url(prompt: String, url: &str) -> (String, bool) {
+    if url.is_empty() || crate::transcript::task_ref_in(&prompt).is_some() {
+        return (prompt, false);
+    }
+    let separator = if prompt.trim().is_empty() { "" } else { "\n\n" };
+    (
+        format!("{}{separator}Odoo task: {url}", prompt.trim_end()),
+        true,
+    )
+}
+
 // --- the real host -----------------------------------------------------------
 
 /// The daemon on the configured port, `ps`, tmux, and Odoo.
@@ -639,9 +842,10 @@ impl SpawnHost for SystemHost<'_> {
         crate::daemon::client::DaemonClient::new(self.port).set_pending(pending)
     }
 
-    fn outside_sessions(&self, task_id: i64) -> Vec<String> {
+    fn outside_sessions(&self, task_id: i64, smoke: bool) -> Vec<LiveSession> {
         use crate::scan::{
-            is_interactive_claude, launch_task_id, PlatformProcessSource, ProcessSource,
+            is_interactive_claude, launch_kind, launch_task_id, PlatformProcessSource,
+            ProcessSource,
         };
         let mut found = Vec::new();
         // Only `claude` itself counts. The shell a launch runs in exports the
@@ -659,10 +863,16 @@ impl SpawnHost for SystemHost<'_> {
                 .environ(&pids)
                 .into_iter()
                 .filter(|(_, line)| launch_task_id(line) == Some(task_id))
+                .filter(|(_, line)| {
+                    (launch_kind(line).as_deref() == Some(SMOKE_LAUNCH_KIND)) == smoke
+                })
                 .map(|(pid, _)| pid)
                 .collect();
             hits.sort_unstable();
-            found.extend(hits.into_iter().map(|pid| format!("claude pid {pid}")));
+            found.extend(
+                hits.into_iter()
+                    .map(|pid| LiveSession::new(format!("claude pid {pid}"), vec![pid])),
+            );
         }
         // The session keeps a window open after its command exits (its pane is
         // dead), so only a window whose pane still runs counts.
@@ -674,16 +884,29 @@ impl SpawnHost for SystemHost<'_> {
                 "-t".to_string(),
                 crate::term::session_target(self.config.tmux_session()),
                 "-F".to_string(),
-                "#{window_name} #{pane_dead}".to_string(),
+                WINDOW_LISTING_FORMAT.to_string(),
             ],
             std::time::Duration::from_secs(3),
         );
-        found.extend(
+        let windows = if smoke {
+            live_smoke_windows(&output.stdout, task_id)
+        } else {
             live_task_windows(&output.stdout, task_id)
-                .into_iter()
-                .map(|name| format!("tmux window {name}")),
-        );
+        };
+        found.extend(windows.into_iter().map(|(name, pid)| {
+            LiveSession::new(format!("tmux window {name}"), pid.into_iter().collect())
+        }));
         found
+    }
+
+    fn caller_ancestors(&self) -> Vec<u32> {
+        use crate::scan::{PlatformProcessSource, ProcessSource};
+        let parents: std::collections::HashMap<u32, u32> = PlatformProcessSource::default()
+            .list()
+            .into_iter()
+            .filter_map(|row| Some((row.pid, row.ppid?)))
+            .collect();
+        ancestors_of(caller_parent(), &parents)
     }
 
     fn driver(&self, requested: Option<DriverKind>) -> Option<Arc<dyn TerminalDriver>> {

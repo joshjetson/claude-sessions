@@ -535,6 +535,14 @@ fn format_session_row(session: &Session, config: &ConfigHandle) -> Line<'static>
         (_, _, Some(error)) => format!("stopped: {}", error.short()),
         _ => status.label().to_string(),
     };
+    // A smoke test shows its task number like any session, and says what it is
+    // at the head of the status, the one column whose width is free to change.
+    // Not "QA": it gives no verdict and nothing waits on it.
+    let label = if session.is_smoke() {
+        format!("smoke test · {label}")
+    } else {
+        label
+    };
 
     // The LAST message's usage: what the session is holding now, not the sum of
     // every turn it has ever run.

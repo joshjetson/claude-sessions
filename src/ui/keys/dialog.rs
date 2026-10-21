@@ -28,9 +28,13 @@ use crate::ui::state::{Action, AppState, Pane, View};
 fn answer_as_reviewer(state: &mut AppState, decision: crate::ui::dialogs::ReviewerDecision) {
     let task_id = decision.task_id;
 
-    let Some(session) =
-        crate::ui::board::task_session(state.sessions(), task_id, state.board.link(task_id))
-    else {
+    // Never a smoke test: it holds no reviewer token, and typing the QA
+    // session's token into it would hand that token to another agent.
+    let Some(session) = crate::ui::board::task_session(
+        state.sessions().filter(|session| !session.is_smoke()),
+        task_id,
+        state.board.link(task_id),
+    ) else {
         state.flash(format!("No live session is working #{task_id}."));
         return;
     };

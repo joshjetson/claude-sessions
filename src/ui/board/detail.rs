@@ -62,6 +62,8 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
     }
     if state.done {
         rows.push(line("✓ done", Role::Ok));
+    } else if state.running && state.smoke {
+        rows.push(line("⟳ smoke test running", Role::Ok));
     } else if state.running {
         rows.push(line("⟳ session running", Role::Ok));
     }
@@ -70,7 +72,7 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
         // The QA role has no `s`, `v` or `C`. Pointing at them would send a
         // reviewer to a key that only explains it is not theirs.
         rows.push(line(
-            "Enter → action menu (QA / QA dry run / brief)",
+            "Enter → action menu (QA / QA dry run / smoke test / brief)",
             Role::Dim,
         ));
         if state.archived {
@@ -207,6 +209,9 @@ pub fn task_header(task: &Task, state: TaskState<'_>) -> Vec<Row> {
 pub struct TaskState<'a> {
     pub done: bool,
     pub running: bool,
+    /// Every live session on the task is a smoke test, so the pane says so
+    /// rather than "session running", which reads as the task being worked.
+    pub smoke: bool,
     pub archived: bool,
     pub questions: &'a [String],
     /// How many Optics processes are recorded, from the map the board fetch
@@ -260,8 +265,10 @@ impl Default for TaskKeys {
 
 /// What the board knows about a task right now.
 pub fn state_of<'a>(state: &'a AppState, task_id: i64) -> TaskState<'a> {
+    let live = task_sessions(state.sessions(), task_id);
     TaskState {
         done: state.board.done_tasks.contains(&task_id),
+        smoke: !live.is_empty() && live.iter().all(|session| session.is_smoke()),
         running: !task_sessions(state.sessions(), task_id).is_empty()
             || state
                 .board

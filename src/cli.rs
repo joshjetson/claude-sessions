@@ -167,7 +167,7 @@ pub struct SpawnArgs {
     pub cwd: Option<String>,
     #[arg(long)]
     pub task: Option<i64>,
-    /// `qa`, `qa-dry` or `plain` (default)
+    /// `qa`, `qa-dry`, `smoke` or `plain` (default)
     #[arg(long)]
     pub kind: Option<String>,
     /// The tmux window name, verbatim

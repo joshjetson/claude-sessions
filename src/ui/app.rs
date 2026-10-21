@@ -77,7 +77,7 @@ pub(crate) fn board_hints(keymap: &Keymap) -> Vec<String> {
         String::new(),
     ];
     if !keymap.role().shows_dev_actions() {
-        lines.push("Enter → QA / QA dry run / brief".to_string());
+        lines.push("Enter → QA / QA dry run / smoke test / brief".to_string());
     }
     lines.extend(crate::ui::keymap::key_lines(keymap, Scope::Board, 5));
     lines.push(format!(

@@ -47,6 +47,9 @@ pub struct RawSession {
     /// the run's own QA sessions, which start in the same folder moments later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// `CLAUDE_SESSIONS_LAUNCH_KIND`, present only on a smoke test.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_kind: Option<String>,
     /// `None` for a `starting-<pid>` placeholder that has no transcript yet.
     /// (Node used an empty string; the pairing rules hang off this being unset.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,6 +126,27 @@ pub struct Session {
     /// than the transcript, so it is known before a single line is written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
+    /// What kind of launch this is, from `CLAUDE_SESSIONS_LAUNCH_KIND`. Only a
+    /// smoke test carries one; see [`Session::is_smoke`].
+    ///
+    /// Carried from the process environment, like `run_id`, so a session that
+    /// has ended (no process) reads `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_kind: Option<String>,
+}
+
+impl Session {
+    /// Whether this is a smoke test (`/smoke-test`), not a task's working or QA
+    /// session.
+    ///
+    /// A smoke test names its task like any session, so the board and the
+    /// Sessions tab show its number. The QA guards, QA runs and reviewer
+    /// answers skip it: a smoke test holds no reviewer token, keeps no
+    /// `run.json` and gives no verdict, so it must not stop a QA pass from
+    /// starting or receive the reviewer's words.
+    pub fn is_smoke(&self) -> bool {
+        self.launch_kind.as_deref() == Some(crate::term::SMOKE_LAUNCH_KIND)
+    }
 }
 
 /// One `*.jsonl` in a project's transcript directory.

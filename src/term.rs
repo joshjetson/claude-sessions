@@ -50,7 +50,7 @@ pub use tmux::{
 };
 pub use types::{
     normalize_tty, DriverResult, LaunchRequest, NullDriver, SessionRef, TerminalDriver,
-    REVIEWER_TOKEN_ENV, RUN_ID_ENV, TASK_ID_ENV,
+    LAUNCH_KIND_ENV, REVIEWER_TOKEN_ENV, RUN_ID_ENV, SMOKE_LAUNCH_KIND, TASK_ID_ENV,
 };
 
 #[cfg(test)]

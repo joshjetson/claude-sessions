@@ -19,7 +19,8 @@ mod vars;
 
 pub use definitions::{
     built_in, pipeline_skills, PipelineDef, StepDef, StepKind, BUILT_IN, CONFLICT_PIPELINE,
-    PRE_OPTICS_PIPELINE, QA_DRYRUN_PIPELINE, QA_PIPELINE, REVISION_PIPELINE, TASK_PIPELINE,
+    PRE_OPTICS_PIPELINE, QA_DRYRUN_PIPELINE, QA_PIPELINE, REVISION_PIPELINE, SMOKE_PIPELINE,
+    TASK_PIPELINE,
 };
 pub use html::{render_html, sample_vars, ProjectRepo};
 pub use project::{read_project_override, PipelineSource, ProjectOverride};

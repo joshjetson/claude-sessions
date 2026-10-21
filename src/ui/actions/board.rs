@@ -225,6 +225,8 @@ pub(crate) struct LaunchCore<'a> {
     pub title: &'a str,
     pub run_id: Option<&'a str>,
     pub reviewer_token: Option<&'a str>,
+    /// `CLAUDE_SESSIONS_LAUNCH_KIND`. Only a smoke test sets it.
+    pub launch_kind: Option<&'a str>,
 }
 
 impl<'a> From<&'a LaunchSpec> for LaunchCore<'a> {
@@ -238,6 +240,7 @@ impl<'a> From<&'a LaunchSpec> for LaunchCore<'a> {
             // A COORDINATOR EXPORTS NO TASK ID — see `launch_core`.
             run_id: spec.run_id.as_deref(),
             reviewer_token: spec.reviewer_token.as_deref(),
+            launch_kind: spec.launch_kind.as_deref(),
         }
     }
 }
@@ -333,6 +336,11 @@ pub(crate) fn launch_core(
     if let (Some(token), Some(task_id)) = (core.reviewer_token, core.task_id) {
         Db::open(paths).put_reviewer_token(task_id, token);
         request = request.reviewer_token(token);
+    }
+    // After the task id: a smoke test is still a task's session, and the order
+    // of the exported variables is part of the line the tests pin.
+    if let Some(kind) = core.launch_kind {
+        request = request.launch_kind(kind);
     }
     let result = driver.launch(&request);
     if !result.ok {

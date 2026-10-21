@@ -21,6 +21,7 @@ mod pickers;
 mod revision;
 mod roles;
 mod runs;
+mod smoke;
 mod view;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};

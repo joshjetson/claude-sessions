@@ -43,6 +43,10 @@ pub enum LaunchKind {
     /// The developer-facing QA variant: reports in the terminal, writes no
     /// hand-back note.
     QaDry,
+    /// QAden's `/smoke-test`: one main-path check per acceptance criterion. No
+    /// verdict, no round, no reviewer token, and not the task's QA session —
+    /// see [`crate::types::Session::is_smoke`].
+    Smoke,
     /// The coordinating session for a QA run. It watches several passes; it runs
     /// none of them itself, and it spawns nothing — admission lives outside any
     /// model.
@@ -64,6 +68,7 @@ impl LaunchKind {
             LaunchKind::Revision { .. } => Some("revision"),
             LaunchKind::Qa => Some("qa"),
             LaunchKind::QaDry => Some("qa-dry"),
+            LaunchKind::Smoke => Some("smoke"),
             LaunchKind::QaRun => Some("qa-run"),
             LaunchKind::PreOptics => Some("pre-optics"),
             LaunchKind::Conflict { .. } => Some("conflict"),
@@ -88,9 +93,11 @@ impl LaunchKind {
             // See the note on the Qa variant: these answer prompts rather than
             // skipping them. The coordinator holds no permission of its own —
             // it never opens the application and never edits anything.
-            LaunchKind::Qa | LaunchKind::QaDry | LaunchKind::PreOptics | LaunchKind::QaRun => {
-                String::new()
-            }
+            LaunchKind::Qa
+            | LaunchKind::QaDry
+            | LaunchKind::Smoke
+            | LaunchKind::PreOptics
+            | LaunchKind::QaRun => String::new(),
         }
     }
 
@@ -118,8 +125,43 @@ impl LaunchKind {
     /// A dry run and a pre-work brief skip the guard on purpose: a developer
     /// testing their own work legitimately has their own session open, which is
     /// the exact condition the guard exists to stop.
+    ///
+    /// A smoke test guards against a second smoke test only: see
+    /// [`LaunchKind::counts_as_running`].
     pub fn guards_duplicates(&self) -> bool {
-        matches!(self, LaunchKind::Task | LaunchKind::Qa)
+        matches!(self, LaunchKind::Task | LaunchKind::Qa | LaunchKind::Smoke)
+    }
+
+    /// Whether a live session on the task counts against this launch in the
+    /// duplicate guard.
+    ///
+    /// A smoke test and the other kinds do not see each other. A smoke test
+    /// gives no verdict and holds no reviewer token, so a live one must not
+    /// stop QA (or development) from starting on the task. A second smoke test
+    /// on the same task is refused like a second QA pass.
+    pub fn counts_as_running(&self, session: &Session) -> bool {
+        match self {
+            LaunchKind::Smoke => session.is_smoke(),
+            _ => !session.is_smoke(),
+        }
+    }
+
+    /// The window title a launch gets: `smoke-<id>` for a smoke test, so it is
+    /// never taken for the task's own `task-<id>` window, else `task-<id>`.
+    pub fn window_title(&self, task_id: i64) -> String {
+        match self {
+            LaunchKind::Smoke => format!("smoke-{task_id}"),
+            _ => format!("task-{task_id}"),
+        }
+    }
+
+    /// The launch kind exported as `CLAUDE_SESSIONS_LAUNCH_KIND`, when this
+    /// kind has one.
+    pub fn launch_kind_env(&self) -> Option<&'static str> {
+        match self {
+            LaunchKind::Smoke => Some(crate::term::SMOKE_LAUNCH_KIND),
+            _ => None,
+        }
     }
 
     /// Only the task pipeline refuses to start against unlanded work. A blocked
@@ -186,7 +228,10 @@ pub fn gate_start<'a>(
         });
     }
     if kind.guards_duplicates() {
-        let running = task_sessions(sessions, task.id);
+        let running = task_sessions(
+            sessions.filter(|session| kind.counts_as_running(session)),
+            task.id,
+        );
         if !running.is_empty() {
             return Some(Gate::AlreadyRunning {
                 running: running.into_iter().map(RacingSession::of).collect(),
