@@ -250,6 +250,9 @@ pub struct AppState {
     /// on screen, because a list that is quietly out of date is worse than one
     /// that says so.
     pub feed_went_quiet: bool,
+    /// The last scan read every process it depends on. Only then does a run
+    /// task with no session read as gone. See [`crate::qarun::QaStatus::Gone`].
+    pub sessions_complete: bool,
     /// The same for the Deploy tab.
     pub deploy: DeploySlice,
     pub dialog: Option<Dialog>,
@@ -321,6 +324,7 @@ impl AppState {
             },
             runs_db: db,
             feed_went_quiet: false,
+            sessions_complete: false,
             last_run_launch: None,
             auto_coordinator_at: HashMap::new(),
             auto_qa_handled: Default::default(),
@@ -402,6 +406,7 @@ impl AppState {
     /// `scan_complete` says whether the scan behind the list read everything it
     /// depends on. See [`crate::scan::Scanner::last_scan_complete`].
     pub fn apply_sessions(&mut self, by_project: SessionsByProject, scan_complete: bool) {
+        self.sessions_complete = scan_complete;
         // An EMPTY list from an incomplete scan never replaces a populated one.
         //
         // A scan that reads nothing is not evidence that nothing is running. On

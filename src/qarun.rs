@@ -32,6 +32,12 @@ use crate::types::{Notification, Session};
 /// stall alert, so the board and the alert cannot disagree about one session.
 pub const STALL: Duration = Duration::from_secs(15 * 60);
 
+/// How long a task this dashboard just launched may go without a session in
+/// the scan before its row reads [`QaStatus::Gone`]. A launch takes seconds to
+/// appear in a scan and to be matched to its task. Until then the task has no
+/// session, and a live session must never read as gone.
+pub const LAUNCH_GRACE: Duration = Duration::from_secs(3 * 60);
+
 /// What one task in a run is doing.
 ///
 /// The ordering of the variants is the escalation order, and [`QaStatus::rank`]
@@ -45,6 +51,10 @@ pub enum QaStatus {
     /// resume on its own, so it needs the reviewer.
     Stopped,
     Stalled,
+    /// The run started this task, and no live session works it now. The
+    /// session died without a verdict, for example when the machine restarted.
+    /// The run does not start a task twice by itself, so it needs the reviewer.
+    Gone,
     Revisions,
     Pass,
     Testing,
@@ -62,6 +72,7 @@ impl QaStatus {
             QaStatus::Asks => "⏸",
             QaStatus::Stopped => "■",
             QaStatus::Stalled => "⚠",
+            QaStatus::Gone => "⊘",
             QaStatus::Revisions => "✗",
             QaStatus::Pass => "✓",
             QaStatus::Testing => "⠿",
@@ -74,6 +85,7 @@ impl QaStatus {
             QaStatus::Asks => "asks you",
             QaStatus::Stopped => "stopped",
             QaStatus::Stalled => "stalled",
+            QaStatus::Gone => "session gone",
             QaStatus::Revisions => "REVISION",
             QaStatus::Pass => "PASS",
             QaStatus::Testing => "testing",
@@ -83,7 +95,10 @@ impl QaStatus {
 
     /// Whether this is a row the reviewer has to do something about.
     pub fn wants_attention(self) -> bool {
-        matches!(self, QaStatus::Asks | QaStatus::Stopped | QaStatus::Stalled)
+        matches!(
+            self,
+            QaStatus::Asks | QaStatus::Stopped | QaStatus::Stalled | QaStatus::Gone
+        )
     }
 }
 
@@ -257,6 +272,36 @@ pub struct RunCtx<'a> {
     pub now: Option<SystemTime>,
     /// What a pass usually takes, per project. See [`outcomes`].
     pub estimates: HashMap<String, outcomes::Estimate>,
+    /// Whether `sessions` comes from a complete scan. Only then does a missing
+    /// session mean a session that is gone. `false` for a caller that passes no
+    /// sessions at all, and for a scan that could not read every process.
+    pub sessions_known: bool,
+    /// Task id -> when this dashboard launched it. See [`LAUNCH_GRACE`].
+    pub launched_at: HashMap<i64, SystemTime>,
+}
+
+impl RunCtx<'_> {
+    /// Whether the run started this task and its session is gone.
+    ///
+    /// Every condition has to hold. The scan must be complete, because a scan
+    /// that dropped a process says nothing about that process. The task must
+    /// have no session, and no launch inside [`LAUNCH_GRACE`], because a fresh
+    /// launch is not in the scan yet.
+    fn session_gone(&self, run: &QaRun, task_id: i64) -> bool {
+        if !self.sessions_known || !run.spawned.contains(&task_id) {
+            return false;
+        }
+        if self.sessions.contains_key(&task_id) {
+            return false;
+        }
+        let Some(now) = self.now else {
+            return false;
+        };
+        match self.launched_at.get(&task_id) {
+            Some(at) => now.duration_since(*at).unwrap_or(Duration::ZERO) >= LAUNCH_GRACE,
+            None => true,
+        }
+    }
 }
 
 /// What a single task in a run is doing.
@@ -338,9 +383,17 @@ pub fn build_run_entries<'a>(run: &QaRun, ctx: &'a RunCtx<'a>) -> Vec<RunEntry<'
             let state = ctx.run_states.get(&task_id);
             let session = ctx.sessions.get(&task_id).copied();
             let ask = ctx.asks.get(&task_id).copied();
+            let mut status = qa_task_status(state, session, ask.is_some(), ctx.now);
+            // Only a row that would otherwise read as work in progress. A
+            // verdict or a question says more than the missing session does.
+            if matches!(status, QaStatus::Queued | QaStatus::Testing)
+                && ctx.session_gone(run, task_id)
+            {
+                status = QaStatus::Gone;
+            }
             RunEntry {
                 task_id,
-                status: qa_task_status(state, session, ask.is_some(), ctx.now),
+                status,
                 run: state,
                 session,
                 ask,
@@ -365,6 +418,7 @@ pub struct RunSummary {
     pub asking: usize,
     pub stopped: usize,
     pub stalled: usize,
+    pub gone: usize,
     pub testing: usize,
     pub queued: usize,
 }
@@ -378,7 +432,7 @@ impl RunSummary {
 
     /// Whether anything in this run is waiting on the reviewer.
     pub fn wants_attention(&self) -> bool {
-        self.asking > 0 || self.stopped > 0 || self.stalled > 0
+        self.asking > 0 || self.stopped > 0 || self.stalled > 0 || self.gone > 0
     }
 }
 
@@ -391,6 +445,7 @@ pub fn run_summary(entries: &[RunEntry<'_>]) -> RunSummary {
         asking: count(QaStatus::Asks),
         stopped: count(QaStatus::Stopped),
         stalled: count(QaStatus::Stalled),
+        gone: count(QaStatus::Gone),
         testing: count(QaStatus::Testing),
         queued: count(QaStatus::Queued),
     }
@@ -522,6 +577,9 @@ pub fn run_header_text(
     }
     if summary.stalled > 0 {
         parts.push(format!("{} stalled", summary.stalled));
+    }
+    if summary.gone > 0 {
+        parts.push(format!("{} gone", summary.gone));
     }
     // Only while something is left to run: once every task has a verdict, how
     // long the next pass takes is not a question anyone is asking.

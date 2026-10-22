@@ -359,11 +359,12 @@ fn pending_asks(state: &AppState) -> usize {
     if state.board.runs.is_empty() {
         return 0;
     }
-    let sessions = std::collections::HashMap::new();
+    let sessions = crate::ui::board::view::run_sessions(state);
     let ctx = state.board.run_ctx(
         &state.paths,
         &state.notifications,
         &sessions,
+        state.sessions_complete,
         std::time::SystemTime::now(),
     );
     crate::qarun::pending_asks(&state.board.runs, &ctx).len()

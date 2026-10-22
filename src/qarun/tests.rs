@@ -242,6 +242,7 @@ fn rows_sort_by_what_needs_you_most() {
         asks: HashMap::from([(13, &ask)]),
         now: Some(now()),
         estimates: HashMap::new(),
+        ..RunCtx::default()
     };
 
     let order: Vec<_> = build_run_entries(&run(vec![10, 11, 12, 13]), &ctx)
@@ -541,4 +542,130 @@ fn the_header_shows_what_a_pass_usually_takes_while_work_is_left() {
         ..RunSummary::default()
     };
     assert!(!run_header_text(&run(vec![1, 2, 3]), &finished, true, Some(&estimate)).contains('≈'));
+}
+
+// ---------------------------------------------------------- gone session ----
+//
+// The run started a task, and its session died without a verdict: the laptop
+// slept and restarted, and the tmux server went with it. The row read "queued"
+// with an empty circle, and admission refused the task forever as already
+// spawned. It now reads "session gone", and only when the scan is trustworthy.
+
+fn spawned_run(task_ids: Vec<i64>) -> QaRun {
+    let mut run = run(task_ids.clone());
+    run.spawned = task_ids;
+    run
+}
+
+fn status_of(run: &QaRun, ctx: &RunCtx<'_>, task_id: i64) -> QaStatus {
+    build_run_entries(run, ctx)
+        .into_iter()
+        .find(|entry| entry.task_id == task_id)
+        .map(|entry| entry.status)
+        .expect("the run has no row for that task")
+}
+
+#[test]
+fn a_started_task_whose_session_died_reads_gone() {
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        ..RunCtx::default()
+    };
+    let run = spawned_run(vec![7266]);
+
+    assert_eq!(status_of(&run, &ctx, 7266), QaStatus::Gone);
+    let summary = run_summary(&build_run_entries(&run, &ctx));
+    assert_eq!(summary.gone, 1);
+    assert!(summary.wants_attention());
+    assert!(run_header_text(&run, &summary, true, None).contains("1 gone"));
+    assert_eq!(pending_asks(&[run], &ctx).len(), 1);
+}
+
+#[test]
+fn a_session_that_died_mid_pass_reads_gone_not_testing() {
+    // Gaps on disk from the dead session used to keep the row on "testing".
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        run_states: HashMap::from([(7266, state(3, 2))]),
+        ..RunCtx::default()
+    };
+    assert_eq!(
+        status_of(&spawned_run(vec![7266]), &ctx, 7266),
+        QaStatus::Gone
+    );
+}
+
+#[test]
+fn a_live_session_never_reads_gone() {
+    let live = session_silent_for(Duration::ZERO);
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        sessions: HashMap::from([(7266, &live)]),
+        ..RunCtx::default()
+    };
+    assert_eq!(
+        status_of(&spawned_run(vec![7266]), &ctx, 7266),
+        QaStatus::Testing
+    );
+}
+
+#[test]
+fn an_incomplete_scan_never_calls_a_session_gone() {
+    // A scan that could not read a process drops it. That is not evidence the
+    // process is gone.
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: false,
+        ..RunCtx::default()
+    };
+    assert_eq!(
+        status_of(&spawned_run(vec![7266]), &ctx, 7266),
+        QaStatus::Queued
+    );
+}
+
+#[test]
+fn a_fresh_launch_is_not_gone_until_its_grace_ends() {
+    let mut ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        launched_at: HashMap::from([(7266, now() - Duration::from_secs(5))]),
+        ..RunCtx::default()
+    };
+    let run = spawned_run(vec![7266]);
+    assert_eq!(status_of(&run, &ctx, 7266), QaStatus::Queued);
+
+    ctx.launched_at
+        .insert(7266, now() - LAUNCH_GRACE - Duration::from_secs(1));
+    assert_eq!(status_of(&run, &ctx, 7266), QaStatus::Gone);
+}
+
+#[test]
+fn a_verdict_outranks_a_gone_session() {
+    // `/qa` parks its verdict and may then end. That pass is finished.
+    let mut passed = state(0, 4);
+    passed.verdict = Some(QaVerdict::Pass);
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        run_states: HashMap::from([(7266, passed)]),
+        ..RunCtx::default()
+    };
+    assert_eq!(
+        status_of(&spawned_run(vec![7266]), &ctx, 7266),
+        QaStatus::Pass
+    );
+}
+
+#[test]
+fn a_task_the_run_never_started_is_queued_not_gone() {
+    let ctx = RunCtx {
+        now: Some(now()),
+        sessions_known: true,
+        ..RunCtx::default()
+    };
+    assert_eq!(status_of(&run(vec![7266]), &ctx, 7266), QaStatus::Queued);
 }

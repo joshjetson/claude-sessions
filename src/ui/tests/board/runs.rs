@@ -1217,3 +1217,107 @@ fn a_task_marked_complete_in_odoo_says_why_and_is_skipped() {
     };
     assert_eq!(started, Some(4102), "the run started the Complete task");
 }
+
+// --- a run task whose session is gone ------------------------------------------
+//
+// The reported case: Auto QA started #7266, the laptop slept and restarted, and
+// the session and its tmux server died with it. The run kept the task in
+// `spawned`, so the row read "queued" and admission refused it forever.
+
+/// A started run that launched every task, after a complete scan that found
+/// `sessions`. Every task is spawned, so the refill has nothing to start.
+fn a_run_after_a_restart(
+    sessions: Vec<crate::types::Session>,
+) -> (tempfile::TempDir, crate::ui::state::AppState) {
+    let (dir, mut state) = a_started_run();
+    let tasks = state.board.runs[0].task_ids.clone();
+    state.board.runs[0].spawned = tasks;
+    super::fixtures::with_sessions(&mut state, sessions);
+    state.dialog = None;
+    state.flash = None;
+    (dir, state)
+}
+
+fn status_of(state: &crate::ui::state::AppState, task_id: i64) -> crate::qarun::QaStatus {
+    let sessions = crate::ui::board::view::run_sessions(state);
+    let ctx = state.board.run_ctx(
+        &state.paths,
+        &state.notifications,
+        &sessions,
+        state.sessions_complete,
+        std::time::SystemTime::now(),
+    );
+    crate::qarun::build_run_entries(&state.board.runs[0], &ctx)
+        .into_iter()
+        .find(|entry| entry.task_id == task_id)
+        .map(|entry| entry.status)
+        .expect("the run has no row for that task")
+}
+
+fn select_run_task(state: &mut crate::ui::state::AppState, task_id: i64) {
+    let key = crate::qarun::run_task_key(&state.board.runs[0].id, task_id);
+    let keys = board::snapshot(state).keys;
+    assert!(state.board_sel.select_key(&keys, &key), "no row {key}");
+}
+
+#[test]
+fn a_run_task_whose_session_died_reads_gone_and_e_starts_it_again() {
+    let (_dir, mut state) = a_run_after_a_restart(Vec::new());
+
+    assert_eq!(status_of(&state, 4101), crate::qarun::QaStatus::Gone);
+    let run_id = state.board.runs[0].id.clone();
+    assert!(
+        board::runs::refusal_for(&state, &run_id, 4101)
+            .is_some_and(|why| why.contains("has ended")),
+        "admission does not refuse the spawned task, so this test proves nothing"
+    );
+
+    select_run_task(&mut state, 4101);
+    press(&mut state, 'e');
+
+    assert!(
+        !state.board.runs[0].spawned.contains(&4101),
+        "the gone task is still spawned, so the run never starts it again"
+    );
+    // The fixture maps the project to no folder, so a start opens the folder
+    // picker. The picker is the proof that a launch was tried.
+    assert!(
+        matches!(state.dialog, Some(crate::ui::dialogs::Dialog::DirPicker(_))),
+        "e started nothing: {:?}",
+        state.flash
+    );
+    // The other tasks keep their state.
+    assert!(state.board.runs[0].spawned.contains(&4102));
+}
+
+#[test]
+fn a_run_task_with_a_live_session_never_reads_gone_and_e_leaves_it_alone() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let live = super::fixtures::live_session("live", Some(4101), now);
+    let (_dir, mut state) = a_run_after_a_restart(vec![live]);
+
+    assert_eq!(status_of(&state, 4101), crate::qarun::QaStatus::Testing);
+
+    select_run_task(&mut state, 4101);
+    press(&mut state, 'e');
+
+    assert!(state.board.runs[0].spawned.contains(&4101));
+    assert!(state.dialog.is_none(), "e started a second session");
+    assert!(state
+        .flash
+        .as_deref()
+        .is_some_and(|flash| flash.contains("no gone session")));
+}
+
+#[test]
+fn an_incomplete_scan_never_calls_a_run_task_gone() {
+    let (_dir, mut state) = a_started_run();
+    let tasks = state.board.runs[0].task_ids.clone();
+    state.board.runs[0].spawned = tasks;
+    state.apply_sessions(Default::default(), false);
+
+    assert_ne!(status_of(&state, 4101), crate::qarun::QaStatus::Gone);
+}

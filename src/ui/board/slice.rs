@@ -132,6 +132,10 @@ pub struct BoardSlice {
     /// What a QA pass usually takes, per project, from the outcome log. Read
     /// again only when the file changes. See [`crate::qarun::outcomes`].
     pub pass_estimates: HashMap<String, crate::qarun::outcomes::Estimate>,
+    /// Task id -> when this dashboard last launched it for a run. A launch is
+    /// not in the scan for a few seconds, and its row must not read as gone
+    /// in that time. See [`crate::qarun::LAUNCH_GRACE`].
+    pub launched_at: HashMap<i64, SystemTime>,
     pass_estimates_read: Option<SystemTime>,
     /// Derived when an update lands, because the row formatter wants a plain
     /// status per task and a set of gated ids — rebuilding either per row would
@@ -492,6 +496,7 @@ impl BoardSlice {
         paths: &Paths,
         notifications: &'a VecDeque<Notification>,
         sessions: &'a HashMap<i64, &'a Session>,
+        sessions_known: bool,
         now: SystemTime,
     ) -> RunCtx<'a> {
         let mut run_states = HashMap::new();
@@ -528,6 +533,8 @@ impl BoardSlice {
             asks,
             now: Some(now),
             estimates: self.pass_estimates.clone(),
+            sessions_known,
+            launched_at: self.launched_at.clone(),
         }
     }
 }
