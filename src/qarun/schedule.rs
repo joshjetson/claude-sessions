@@ -51,7 +51,10 @@ impl Refusal {
             Refusal::NotInRun(id) => format!("Task {id} is not part of this run."),
             Refusal::AlreadyRunning(id) => format!("Task {id} already has a live session."),
             Refusal::AlreadySpawned(id) => {
-                format!("This run started task {id}, and its session has ended.")
+                format!(
+                    "This run started task {id}, and its session has ended. \
+                     Use restart on its row to start it again."
+                )
             }
             Refusal::ClosedInOdoo(id, state) => format!(
                 "Task {id} is marked {state} in Odoo, so the run does not start it. \

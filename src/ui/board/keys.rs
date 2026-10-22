@@ -122,6 +122,19 @@ fn on_char(state: &mut AppState, ch: char, snapshot: &BoardSnapshot) {
             };
             toggle_auto_qa(state, &project);
         }
+        // e starts a run task again after its session is gone.
+        'e' => match &snapshot.row {
+            BoardRow::QaRunTask {
+                run_id, task_id, ..
+            } => {
+                let (run_id, task_id) = (run_id.clone(), *task_id);
+                crate::ui::board::runs::restart_gone(state, &run_id, task_id);
+            }
+            _ => {
+                state.flash("Select a QA run task whose session is gone.".to_string());
+                state.dirty = true;
+            }
+        },
         // ] walks to the next agent waiting on a decision, across every run.
         ']' => crate::ui::board::jump_to_next_ask(state, &snapshot.keys),
         'P' => pipeline_view(state, snapshot),

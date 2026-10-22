@@ -149,7 +149,7 @@ fn judge<R>(state: &AppState, run: &QaRun, judge: impl FnOnce(&AdmitCtx<'_>) -> 
 }
 
 /// Why the run does not start this task now. `None` when it would.
-pub(super) fn refusal_for(state: &AppState, run_id: &str, task_id: i64) -> Option<String> {
+pub(crate) fn refusal_for(state: &AppState, run_id: &str, task_id: i64) -> Option<String> {
     let run = state.board.runs.iter().find(|run| run.id == run_id)?;
     judge(state, run, |ctx| {
         crate::qarun::admit(run, task_id, ctx)
@@ -215,36 +215,14 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     let mut started = Vec::new();
     let mut failed = Vec::new();
     for task_id in plan {
-        let Some(task) = state.board.run_task(task_id).cloned() else {
-            // The board no longer knows this task, so nothing was launched.
-            failed.push(task_id);
-            continue;
-        };
-
-        // A start does not always launch: it can open a folder picker or a
-        // confirmation instead, and both can be cancelled. Only a launch that
-        // actually reached the queue may be recorded as spawned — recording the
-        // others would make a cancelled picker permanently unstartable, which
-        // is the fault this whole change exists to remove.
-        let before = state.queued_launches();
-        crate::ui::board::start(
-            state,
-            crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::Qa),
-        );
-        if state.queued_launches() > before {
+        if launch_qa(state, task_id) {
             started.push(task_id);
         } else {
             failed.push(task_id);
         }
     }
 
-    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
-        run.spawned.extend(started.iter().copied());
-    }
-    if !started.is_empty() {
-        state.last_run_launch = Some(std::time::SystemTime::now());
-    }
-    state.save_runs();
+    record_started(state, run_id, &started);
 
     // Said out loud. A run that starts eleven of fourteen and reports "Starting
     // 14…" is how thirteen tasks went missing without a line anywhere.
@@ -262,6 +240,98 @@ fn fill_lanes_inner(state: &mut AppState, run_id: &str, announce: bool) {
     }
 
     state.dirty = true;
+}
+
+/// Launch one QA pass for a run task. `true` only when the launch reached the
+/// queue.
+fn launch_qa(state: &mut AppState, task_id: i64) -> bool {
+    let Some(task) = state.board.run_task(task_id).cloned() else {
+        // The board no longer knows this task, so nothing was launched.
+        return false;
+    };
+
+    // A start does not always launch: it can open a folder picker or a
+    // confirmation instead, and both can be cancelled. Only a launch that
+    // actually reached the queue may be recorded as spawned — recording the
+    // others would make a cancelled picker permanently unstartable, which
+    // is the fault this whole change exists to remove.
+    let before = state.queued_launches();
+    crate::ui::board::start(
+        state,
+        crate::ui::board::StartRequest::new(&task, crate::ui::board::LaunchKind::Qa),
+    );
+    state.queued_launches() > before
+}
+
+/// Record launched tasks as spawned, and when they launched.
+fn record_started(state: &mut AppState, run_id: &str, started: &[i64]) {
+    let now = std::time::SystemTime::now();
+    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
+        run.spawned.extend(started.iter().copied());
+    }
+    for &task_id in started {
+        state.board.launched_at.insert(task_id, now);
+    }
+    if !started.is_empty() {
+        state.last_run_launch = Some(now);
+    }
+    state.save_runs();
+}
+
+/// Start a run task again after its session is gone.
+///
+/// Only on a row that reads [`crate::qarun::QaStatus::Gone`], so this never
+/// starts a second session next to a live one. The task leaves `spawned`, and
+/// admission then decides as for any other task. When admission holds it,
+/// for example on a full lane, the run starts it later on its own.
+pub fn restart_gone(state: &mut AppState, run_id: &str, task_id: i64) {
+    if !is_gone(state, run_id, task_id) {
+        state.flash(format!(
+            "Task {task_id} has no gone session to restart. Only a row reading \"session gone\" restarts."
+        ));
+        state.dirty = true;
+        return;
+    }
+    if let Some(run) = state.board.runs.iter_mut().find(|run| run.id == run_id) {
+        run.spawned.retain(|id| *id != task_id);
+    }
+    state.board.launched_at.remove(&task_id);
+    state.save_runs();
+
+    if let Some(why) = refusal_for(state, run_id, task_id) {
+        state.flash(format!(
+            "Task {task_id} waits: {why} The run starts it when it can."
+        ));
+        state.dirty = true;
+        return;
+    }
+    if launch_qa(state, task_id) {
+        record_started(state, run_id, &[task_id]);
+        state.flash(format!("Starting a new QA session for task {task_id}…"));
+    } else {
+        state.flash(format!(
+            "Task {task_id} could not be launched. It stays startable."
+        ));
+    }
+    state.dirty = true;
+}
+
+/// Whether the run task's row reads "session gone" now.
+fn is_gone(state: &AppState, run_id: &str, task_id: i64) -> bool {
+    let Some(run) = state.board.runs.iter().find(|run| run.id == run_id) else {
+        return false;
+    };
+    let sessions = super::view::run_sessions(state);
+    let ctx = state.board.run_ctx(
+        &state.paths,
+        &state.notifications,
+        &sessions,
+        state.sessions_complete,
+        std::time::SystemTime::now(),
+    );
+    crate::qarun::build_run_entries(run, &ctx)
+        .iter()
+        .any(|entry| entry.task_id == task_id && entry.status == crate::qarun::QaStatus::Gone)
 }
 
 /// Start the coordinating session for a run.
@@ -404,12 +474,16 @@ pub fn auto_refill(state: &mut AppState, now: std::time::SystemTime) {
 /// sticking on the first one. With seven rows open, scrolling to find the
 /// flashing one is the thing this key exists to replace.
 pub fn jump_to_next_ask(state: &mut AppState, keys: &[String]) {
-    let sessions = std::collections::HashMap::new();
+    let sessions = super::view::run_sessions(state);
     let now = std::time::SystemTime::now();
     let next = {
-        let ctx = state
-            .board
-            .run_ctx(&state.paths, &state.notifications, &sessions, now);
+        let ctx = state.board.run_ctx(
+            &state.paths,
+            &state.notifications,
+            &sessions,
+            state.sessions_complete,
+            now,
+        );
         crate::qarun::next_ask_key(&state.board.runs, &ctx, state.board_sel.key())
     };
 

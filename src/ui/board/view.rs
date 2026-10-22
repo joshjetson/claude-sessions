@@ -255,6 +255,7 @@ pub fn snapshot(state: &AppState) -> BoardSnapshot {
         &state.paths,
         &state.notifications,
         &sessions,
+        state.sessions_complete,
         std::time::SystemTime::now(),
     );
     let items = build_items_for(&state.board, &state.notifications, &run_ctx);
@@ -289,6 +290,7 @@ pub fn window(state: &AppState, scroll_top: usize, height: usize, width: u16) ->
         &state.paths,
         &state.notifications,
         &sessions,
+        state.sessions_complete,
         std::time::SystemTime::now(),
     );
     let items = build_items_for(&state.board, &state.notifications, &run_ctx);
@@ -339,7 +341,9 @@ pub fn label(board: &BoardSlice) -> String {
 ///
 /// Newest first, so an answer or a status reaches the session actually working
 /// the task rather than a stale one that outlived a restart.
-fn run_sessions(state: &AppState) -> std::collections::HashMap<i64, &crate::types::Session> {
+pub(crate) fn run_sessions(
+    state: &AppState,
+) -> std::collections::HashMap<i64, &crate::types::Session> {
     let mut out = std::collections::HashMap::new();
     for run in &state.board.runs {
         out.extend(crate::ui::board::run_task_sessions(

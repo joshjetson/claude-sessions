@@ -335,6 +335,7 @@ one would work is refused, and the page says which. Navigation keys, `Enter`, `T
 | `x` | Dismiss the selected notification. On the `🔔 Notifications` header, clear the whole feed (every row is marked resolved) |
 | `a` | Answer the selected question or verdict as yourself |
 | `]` | Jump to the next agent waiting on a decision. Not dev |
+| `e` | On a QA run task that reads `⊘ session gone`, start a new QA session for it. Not dev |
 | `R` | Watch the selected stage as a QA run. Not dev |
 | `A` | Switch Auto QA on or off for the selected row's project, on this machine. Not dev |
 

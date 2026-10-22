@@ -515,7 +515,9 @@ fn status_role(status: crate::qarun::QaStatus) -> Role {
     use crate::qarun::QaStatus;
     match status {
         QaStatus::Asks => Role::Warn,
-        QaStatus::Stopped | QaStatus::Stalled | QaStatus::Revisions => Role::Danger,
+        QaStatus::Stopped | QaStatus::Stalled | QaStatus::Gone | QaStatus::Revisions => {
+            Role::Danger
+        }
         QaStatus::Pass => Role::Ok,
         QaStatus::Testing => Role::Accent,
         QaStatus::Queued => Role::Dim,

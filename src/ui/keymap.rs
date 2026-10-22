@@ -436,6 +436,15 @@ pub const BINDINGS: &[Binding] = &[
     )
     .only(NOT_DEV),
     bind(
+        "board.restart",
+        Scope::Board,
+        'e',
+        "restart",
+        "Start a QA run task again after its session is gone",
+        3,
+    )
+    .only(NOT_DEV),
+    bind(
         "board.answer",
         Scope::Board,
         'a',
